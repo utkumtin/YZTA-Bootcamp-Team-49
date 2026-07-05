@@ -1,0 +1,52 @@
+state,state_fips,status,implementation_date,ballot_initiative,trigger_law
+Alabama,01,Not Adopted,,N/A,
+Alaska,02,Adopted,2015-09-01,No,No
+Arizona,04,Adopted,2014-01-01,No,Yes
+Arkansas,05,Adopted,2014-01-01,No,Yes
+California,06,Adopted,2014-01-01,No,No
+Colorado,08,Adopted,2014-01-01,No,No
+Connecticut,09,Adopted,2014-01-01,No,No
+Delaware,10,Adopted,2014-01-01,No,No
+District of Columbia,11,Adopted,2014-01-01,No,No
+Florida,12,Not Adopted,,N/A,
+Georgia,13,Not Adopted,,N/A,
+Hawaii,15,Adopted,2014-01-01,No,No
+Idaho,16,Adopted,2020-01-01,Yes (November 2018),Yes
+Illinois,17,Adopted,2014-01-01,No,Yes
+Indiana,18,Adopted,2015-02-01,No,Yes
+Iowa,19,Adopted,2014-01-01,No,Yes
+Kansas,20,Not Adopted,,N/A,
+Kentucky,21,Adopted,2014-01-01,No,No
+Louisiana,22,Adopted,2016-07-01,No,No
+Maine,23,Adopted,2019-01-10,Yes (November 2017),No
+Maryland,24,Adopted,2014-01-01,No,No
+Massachusetts,25,Adopted,2014-01-01,No,No
+Michigan,26,Adopted,2014-04-01,No,No
+Minnesota,27,Adopted,2014-01-01,No,No
+Mississippi,28,Not Adopted,,N/A,
+Missouri,29,Adopted,2021-10-01,Yes (August 2020),No
+Montana,30,Adopted,2016-01-01,No,Yes
+Nebraska,31,Adopted,2020-10-01,Yes (November 2018),No
+Nevada,32,Adopted,2014-01-01,No,No
+New Hampshire,33,Adopted,2014-08-15,No,Yes
+New Jersey,34,Adopted,2014-01-01,No,No
+New Mexico,35,Adopted,2014-01-01,No,Yes
+New York,36,Adopted,2014-01-01,No,No
+North Carolina,37,Adopted,2023-12-01,No,Yes
+North Dakota,38,Adopted,2014-01-01,No,No
+Ohio,39,Adopted,2014-01-01,No,Yes
+Oklahoma,40,Adopted,2021-07-01,Yes (June 2020),No
+Oregon,41,Adopted,2014-01-01,No,No
+Pennsylvania,42,Adopted,2015-01-01,No,No
+Rhode Island,44,Adopted,2014-01-01,No,No
+South Carolina,45,Not Adopted,,N/A,
+South Dakota,46,Adopted,2023-07-01,Yes (November 2022),No
+Tennessee,47,Not Adopted,,N/A,
+Texas,48,Not Adopted,,N/A,
+Utah,49,Adopted,2020-01-01,Yes (November 2018),Yes
+Vermont,50,Adopted,2014-01-01,No,No
+Virginia,51,Adopted,2019-01-01,No,Yes
+Washington,53,Adopted,2014-01-01,No,No
+West Virginia,54,Adopted,2014-01-01,No,No
+Wisconsin,55,Not Adopted,,N/A,
+Wyoming,56,Not Adopted,,N/A,
