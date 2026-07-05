@@ -1,0 +1,57 @@
+"""Model Router — PydanticAI tabanlı, tipli I/O, test edilebilir.
+
+review sorun #3'ün çözümü. Mekanik iş ucuz modele, yargı pinli güçlü modele
+(providers.py zincirleri). Tipli çıktı: `output_type` bir Pydantic modeli olduğunda
+PydanticAI şema-zorlaması + retry yapar → prototipteki regex-JSON ayıklama gitti.
+
+Test: `use_test_model(...)` ile PydanticAI `TestModel`/`FunctionModel` enjekte edilir —
+API yakmadan (test stratejisinin tamamı buna dayanıyor). Reprodüksiyon
+dondurmadan gelir (menu.freeze), model stabilitesinden değil.
+"""
+
+from __future__ import annotations
+
+from contextlib import contextmanager
+from typing import Any
+
+from ..config import SETTINGS, ModelRole
+from .providers import chain_for
+
+_TEST_MODEL: Any | None = None  # test enjeksiyonu (TestModel/FunctionModel)
+
+
+@contextmanager
+def use_test_model(model: Any):
+    """Test kapsamı: gerçek sağlayıcı yerine PydanticAI test modelini kullan."""
+    global _TEST_MODEL
+    previous = _TEST_MODEL
+    _TEST_MODEL = model
+    try:
+        yield
+    finally:
+        _TEST_MODEL = previous
+
+
+def _resolve_model(role: ModelRole) -> Any:
+    """Test modeli varsa onu; yoksa zincirin ilk (birincil) modelini döndürür."""
+    if _TEST_MODEL is not None:
+        return _TEST_MODEL
+    primary = chain_for(role, SETTINGS.privacy_mode)[0]
+    # PydanticAI model string biçimi: "<provider>:<model_id>"
+    return f"{primary.provider}:{primary.model_id}"
+
+
+def build_agent(role: ModelRole, *, system_prompt: str, output_type: Any | None = None):
+    """Rol için tipli bir PydanticAI Agent kurar. output_type verilirse şema zorlanır."""
+    try:
+        from pydantic_ai import Agent
+    except ImportError as exc:  # fail-loud, sessiz düşme yok
+        raise RuntimeError(
+            "pydantic-ai kurulu değil. `uv sync` / `pip install pydantic-ai` gerekli."
+        ) from exc
+
+    model = _resolve_model(role)
+    kwargs: dict[str, Any] = {"system_prompt": system_prompt}
+    if output_type is not None:
+        kwargs["output_type"] = output_type
+    return Agent(model, **kwargs)

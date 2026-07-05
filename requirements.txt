@@ -1,0 +1,15 @@
+# NOT: Bu dosya normalde `uv export --no-hashes -o requirements.txt` ile üretilir
+# (Streamlit Community Cloud uv.lock okumaz → pyproject'i Poetry sanar). pre-commit'te
+# pyproject ile senkron tutulur; drift fail-loud. Tek kaynak = pyproject.toml.
+pandas>=2.0
+numpy>=1.24
+pyfixest>=0.18
+streamlit>=1.32
+plotly>=5.20
+pydantic>=2.6
+pydantic-ai>=0.0.14
+pyreadstat>=1.2
+openpyxl>=3.1
+charset-normalizer>=3.3
+pyyaml>=6.0
+python-dotenv>=1.0
