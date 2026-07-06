@@ -19,6 +19,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from ..config import SETTINGS, ModelRole
+from ..llm.guardrails import prompt_json
 from ..llm.router import build_agent
 from ..spec import SUPPORTED_ESTIMATORS, Specification
 from .hypothesis import FrozenEstimand
@@ -204,9 +205,9 @@ def generate_spec_menu(
     estimand = frozen.estimand
     prompt = (
         "Frozen estimand:\n"
-        f"{estimand.model_dump()}\n\n"
+        f"{prompt_json(estimand.model_dump())}\n\n"
         "Available columns:\n"
-        f"{available_columns}\n\n"
+        f"{prompt_json(available_columns)}\n\n"
         "Supported estimators: OLS, TWFE.\n\n"
         "Create a SpecMenuProposal with exactly these 7 axes:\n"
         "control_set, sample, pre_period, clustering, never_treated, estimator, weighting.\n\n"

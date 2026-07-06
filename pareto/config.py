@@ -58,15 +58,110 @@ class ParetoSettings:
 SETTINGS = ParetoSettings()
 
 
-def get_api_key(provider_env: str) -> str:
-    """BYOK: sağlayıcı anahtarını env'den okur (örn. 'GEMINI_API_KEY').
+def _load_dotenv() -> None:
+    """Repo kökündeki `.env` dosyasını yükle (Streamlit cwd'den bağımsız)."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    load_dotenv(os.path.join(root, ".env"))
 
-    Anahtar sadece env / `st.secrets` üzerinden gelir; repo'ya asla girmez.
-    """
-    key = os.environ.get(provider_env)
-    if not key:
-        raise OSError(
-            f"{provider_env} tanımlı değil. `export {provider_env}=...` ile ayarlayın "
-            "(veya Streamlit'te BYOK alanına girin)."
-        )
-    return key
+
+_load_dotenv()
+
+_API_KEY_ALIASES: dict[str, tuple[str, ...]] = {
+    "GEMINI_API_KEY": ("GOOGLE_API_KEY",),
+}
+
+BYOK_GEMINI_WIDGET_KEY = "byok_gemini_input"
+
+
+def store_byok_key(env_name: str, value: str) -> None:
+    """Sidebar BYOK anahtarını session_state'e yazar."""
+    try:
+        import streamlit as st
+    except ImportError:
+        return
+    st.session_state.setdefault("byok_keys", {})[env_name] = value.strip()
+
+
+def _from_streamlit_session(candidates: tuple[str, ...]) -> str:
+    """BYOK oturum anahtarı (widget + byok_keys)."""
+    try:
+        import streamlit as st
+    except ImportError:
+        return ""
+
+    byok = st.session_state.get("byok_keys")
+    if isinstance(byok, dict):
+        for name in candidates:
+            key = str(byok.get(name, "")).strip()
+            if key:
+                return key
+
+    widget_val = str(st.session_state.get(BYOK_GEMINI_WIDGET_KEY, "")).strip()
+    if widget_val and "GEMINI_API_KEY" in candidates:
+        return widget_val
+
+    return ""
+
+
+def _from_env(candidates: tuple[str, ...]) -> str:
+    for name in candidates:
+        key = os.environ.get(name, "").strip()
+        if key:
+            return key
+    return ""
+
+
+def _from_secrets(candidates: tuple[str, ...]) -> str:
+    try:
+        import streamlit as st
+    except ImportError:
+        return ""
+    try:
+        for name in candidates:
+            if name in st.secrets:
+                key = str(st.secrets[name]).strip()
+                if key:
+                    return key
+    except Exception:
+        pass
+    return ""
+
+
+def get_api_key_source(provider_env: str) -> str:
+    """Anahtarın nereden geldiğini döndürür: byok | env | secrets."""
+    candidates = (provider_env, *_API_KEY_ALIASES.get(provider_env, ()))
+    if _from_streamlit_session(candidates):
+        return "byok"
+    if _from_env(candidates):
+        return "env"
+    if _from_secrets(candidates):
+        return "secrets"
+    return "none"
+
+
+def get_api_key(provider_env: str) -> str:
+    """BYOK oturum öncelikli; yoksa `.env`; son çare `st.secrets`."""
+    candidates = (provider_env, *_API_KEY_ALIASES.get(provider_env, ()))
+
+    key = _from_streamlit_session(candidates)
+    if key:
+        return key
+
+    key = _from_env(candidates)
+    if key:
+        return key
+
+    key = _from_secrets(candidates)
+    if key:
+        return key
+
+    raise OSError(
+        f"{provider_env} tanımlı değil. Şunlardan biriyle ayarlayın:\n"
+        f"  • ana sayfa: **Anahtarı kaydet** (BYOK, oturum boyunca)\n"
+        f"  • proje kökünde `.env`: {provider_env}=...\n"
+        f"  • terminal: `export {provider_env}=...` (Streamlit'i yeniden başlat)"
+    )

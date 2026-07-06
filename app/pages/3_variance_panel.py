@@ -19,6 +19,10 @@ import streamlit as st
 
 from pareto.analysis.variance import ROBUST_RULE_TEXT, summarize
 from pareto.contracts import EstimationResult
+from pareto.streamlit_ui import render_compact_sidebar
+
+with st.sidebar:
+    render_compact_sidebar()
 
 st.title("📊 3 · Varyans Paneli")
 st.caption("Tek kesin cevap yok; savunulabilir seçimler menüsü ve her birinin sonucu.")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from pareto.streamlit_ui import render_compact_sidebar
 from pareto.analysis.hypothesis import (
     SocraticDeclaration,
     TACProposal,
@@ -12,14 +13,19 @@ from pareto.analysis.hypothesis import (
     validate_estimand_spec_mapping,
 )
 from pareto.analysis.menu import (
+    ALL_AXES,
+    SpecMenu,
     build_deterministic_menu,
-    generate_spec_menu,
-    freeze_spec_menu,
     expand_to_specs,
+    freeze_spec_menu,
+    generate_spec_menu,
 )
 
 
-st.title("2 - Analysis (v2)")
+with st.sidebar:
+    render_compact_sidebar()
+
+st.title("2 - Analysis")
 
 
 # -----------------------------
@@ -150,7 +156,14 @@ frozen = st.session_state.get("frozen_estimand")
 state = st.session_state.get("analysis_state")
 
 if frozen is None or state is None:
+    st.info("Estimand henüz dondurulmadı — aşağıdaki formu doldurun.")
     st.stop()
+
+# Estimand değişmediyse önceki spec çıktısını koru
+if st.session_state.get("_specs_estimand_hash") != frozen.freeze_hash:
+    st.session_state.pop("analysis_specs", None)
+    st.session_state.pop("analysis_frozen_menu", None)
+    st.session_state["_specs_estimand_hash"] = frozen.freeze_hash
 
 
 st.subheader("Frozen estimand")
@@ -158,7 +171,7 @@ st.json(frozen.estimand.model_dump())
 st.code(f"hash={frozen.freeze_hash}")
 
 # -----------------------------
-# MENU BUILD (NEW FLOW)
+# MENU BUILD
 # -----------------------------
 
 unit_col = state["unit_col"]
@@ -166,47 +179,98 @@ time_col = state["time_col"]
 cluster_by = state["cluster_by"]
 controls = state["controls"]
 
-
-# estimator selection
 estimators = ["OLS"]
 if unit_col and time_col:
     estimators.append("TWFE")
 
+# Estimand değişince menü önbelleğini sıfırla
+if st.session_state.get("_menu_estimand_hash") != frozen.freeze_hash:
+    st.session_state.pop("menu_proposal", None)
+    st.session_state.pop("frozen_spec_menu", None)
+    st.session_state["_menu_estimand_hash"] = frozen.freeze_hash
 
-# -----------------------------
-# OPTION 1: DETERMINISTIC MENU
-# -----------------------------
+st.subheader("Spec menu")
 
-menu = build_deterministic_menu(
-    controls=controls,
-    cluster_by=cluster_by,
-    estimators=estimators,
-    available_columns=columns,
+menu_source = st.radio(
+    "Menu source",
+    options=["deterministic", "llm"],
+    format_func=lambda x: "Deterministic" if x == "deterministic" else "LLM (JUDGE)",
+    horizontal=True,
+    key="menu_source",
 )
 
+menu: SpecMenu | None = None
 
-# -----------------------------
-# OPTION 2 (optional): LLM MENU
-# -----------------------------
-# Uncomment if you want LLM-based robustness menu
-#
-# proposal_menu = generate_spec_menu(
-#     frozen=frozen,
-#     available_columns=columns,
-# )
-#
-# menu = freeze_spec_menu(
-#     proposal_menu,
-#     available_columns=columns,
-#     approved=True,
-# ).menu
+if menu_source == "deterministic":
+    menu = build_deterministic_menu(
+        controls=controls,
+        cluster_by=cluster_by,
+        estimators=estimators,
+        available_columns=columns,
+    )
+else:
+    gen_col, _ = st.columns([1, 3])
+    with gen_col:
+        generate_clicked = st.button("Generate menu proposal", type="primary")
 
+    if generate_clicked:
+        try:
+            with st.spinner("JUDGE is designing the robustness menu..."):
+                st.session_state["menu_proposal"] = generate_spec_menu(
+                    frozen=frozen,
+                    available_columns=columns,
+                )
+                st.session_state.pop("frozen_spec_menu", None)
+        except (OSError, RuntimeError, ValueError) as exc:
+            st.error(f"Menu generation failed: {exc}")
+            st.caption(
+                "Ana sayfada BYOK kaydet (veya `.env`). Hem BYOK hem `.env` doluysa BYOK kullanılır."
+            )
 
-# -----------------------------
-# FREEZE MENU (deterministic hash)
-# -----------------------------
+    proposal = st.session_state.get("menu_proposal")
+    if proposal is None:
+        st.info("Click **Generate menu proposal** to get JUDGE recommendations per axis.")
+        st.stop()
+
+    st.caption(proposal.overall_rationale)
+    for axis in proposal.axes:
+        with st.expander(f"{axis.axis_name} — baseline: `{axis.baseline_level}`"):
+            st.markdown(axis.rationale)
+            if axis.candidate_levels:
+                st.write("Candidates:", ", ".join(f"`{c}`" for c in axis.candidate_levels))
+
+    if proposal.needs_clarification:
+        st.warning(proposal.clarification_question or "Clarification required before freezing.")
+        st.stop()
+
+    if st.button("Freeze spec menu"):
+        try:
+            st.session_state["frozen_spec_menu"] = freeze_spec_menu(
+                proposal,
+                available_columns=columns,
+                approved=True,
+            )
+            st.success("Spec menu frozen.")
+        except ValueError as exc:
+            st.error(str(exc))
+
+    frozen_from_llm = st.session_state.get("frozen_spec_menu")
+    if frozen_from_llm is None:
+        st.info("Review the proposal above, then click **Freeze spec menu**.")
+        st.stop()
+
+    menu = frozen_from_llm.menu
+
+active_axes = st.multiselect(
+    "Active axes (empty = auto-detect levels with >1 option)",
+    options=list(ALL_AXES),
+    help="Only selected axes enter the factorial expansion; others stay pinned to baseline.",
+)
+if active_axes:
+    menu = menu.model_copy(update={"active_axes": tuple(active_axes)})
 
 frozen_menu = menu.freeze()
+st.code(f"menu_hash={frozen_menu.menu_hash}")
 
 
 # -----------------------------
@@ -229,6 +293,9 @@ try:
             spec,
             available_columns=columns,
         )
+
+    st.session_state["analysis_specs"] = specs
+    st.session_state["analysis_frozen_menu"] = frozen_menu
 
 except ValueError as e:
     st.error(str(e))

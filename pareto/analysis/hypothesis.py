@@ -14,6 +14,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from ..config import ModelRole
+from ..llm.guardrails import prompt_json
 from ..llm.router import build_agent
 from ..spec import Specification
 
@@ -104,11 +105,11 @@ def draft_tac_proposal(
 
     prompt = (
         "Research story:\n"
-        f"{research_story}\n\n"
+        f"{prompt_json(research_story)}\n\n"
         "Available columns:\n"
-        f"{available_columns}\n\n"
+        f"{prompt_json(available_columns)}\n\n"
         "User Socratic declaration made before seeing the agent:\n"
-        f"{declaration.model_dump()}\n\n"
+        f"{prompt_json(declaration.model_dump())}\n\n"
         "Return a TACProposal. Map conceptual treatment/outcome to explicit columns, "
         "translate the implied result back to plain language, and ask one targeted "
         "confirmation question. If the mapping is uncertain, set needs_clarification=true "
