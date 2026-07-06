@@ -1,9 +1,4 @@
-"""1 · Temizleme (human-in-the-loop).
-
-SPRINT-2: yükle → profille → karar defteri (vetted transform kararları) → belirsizleri
-gatekeeper'da sor → temiz CleanPanel + üretilen kod. Şimdilik profilleme deterministik
-olarak çalışır; LLM karar üretimi ve gatekeeper UI Sprint-2 (bkz docs/scrum).
-"""
+"""1 - Cleaning (human-in-the-loop)."""
 
 from __future__ import annotations
 
@@ -11,14 +6,19 @@ import streamlit as st
 
 from pareto.profiling import load_raw_file, profile_dataframe
 
-st.title("1 · Temizleme")
+st.title("1 - Cleaning")
 
-uploaded = st.file_uploader("Ham veri (csv/tsv/xlsx/dta)", type=["csv", "tsv", "xlsx", "dta"])
+uploaded = st.file_uploader("Raw data (csv/tsv/xlsx/dta)", type=["csv", "tsv", "xlsx", "dta"])
 if uploaded is not None:
-    df = load_raw_file(uploaded.name) if hasattr(uploaded, "name") else None
-    if df is not None:
-        st.success(f"{len(df)} satır · {df.shape[1]} kolon")
-        st.subheader("Deterministik profil (LLM'e giden özet payload)")
-        st.json(profile_dataframe(df))
+    try:
+        df = load_raw_file(uploaded)
+    except ValueError as exc:
+        st.error(str(exc))
+    else:
+        st.session_state["clean_df"] = df
+        st.session_state["clean_profile"] = profile_dataframe(df)
+        st.success(f"{len(df)} rows x {df.shape[1]} columns")
+        st.subheader("Deterministic profile sent to the cleaning agent")
+        st.json(st.session_state["clean_profile"])
 
-st.info("Karar defteri + vetted-transform üretimi + gatekeeper onayı: Sprint-2.")
+st.info("Decision ledger + vetted transforms + gatekeeper approval: Sprint-2.")
