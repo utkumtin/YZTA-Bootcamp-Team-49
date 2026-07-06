@@ -1,4 +1,4 @@
-"""2 - Analysis: estimand-first workflow."""
+"""2 - Analysis: estimand-first workflow (NEW ARCHITECTURE)."""
 
 from __future__ import annotations
 
@@ -11,175 +11,129 @@ from pareto.analysis.hypothesis import (
     freeze_estimand,
     validate_estimand_spec_mapping,
 )
-from pareto.analysis.menu import SpecMenu, expand_to_specs
+from pareto.analysis.menu import (
+    build_deterministic_menu,
+    generate_spec_menu,
+    freeze_spec_menu,
+    expand_to_specs,
+)
 
-st.title("2 - Analysis")
 
+st.title("2 - Analysis (v2)")
+
+
+# -----------------------------
+# DATA LOADING
+# -----------------------------
 
 def _df_from_state() -> pd.DataFrame | None:
     df = st.session_state.get("clean_df")
     return df if isinstance(df, pd.DataFrame) else None
 
 
-def _looks_like(columns: list[str], needles: tuple[str, ...]) -> str | None:
-    for col in columns:
-        name = col.lower()
-        if any(needle in name for needle in needles):
-            return col
+def _guess(columns: list[str], keywords: tuple[str, ...]) -> str | None:
+    for c in columns:
+        if any(k in c.lower() for k in keywords):
+            return c
     return None
 
 
-def _default_index(options: list[str], value: str | None) -> int:
-    return options.index(value) if value in options else 0
-
-
-def _build_proposal(
-    *,
-    declaration: SocraticDeclaration,
-    estimand_type: str,
-    treatment_col: str,
-    outcome_col: str,
-    outcome_unit: str,
-    population: str,
-    time_scope: str,
-    identification_assumption: str,
-) -> TACProposal:
-    sign_text = {
-        "positive": "increase",
-        "negative": "decrease",
-        "ambiguous": "change",
-    }[declaration.expected_sign]
-    h1_op = {"positive": ">", "negative": "<", "ambiguous": "!="}[declaration.expected_sign]
-    return TACProposal(
-        estimand_type=estimand_type,  # type: ignore[arg-type]
-        treatment=declaration.conceptual_treatment,
-        treatment_coding=treatment_col,
-        outcome=outcome_col,
-        outcome_unit=outcome_unit,
-        population=population,
-        time_scope=time_scope,
-        expected_sign=declaration.expected_sign,
-        identification_assumption=identification_assumption,
-        h0=f"{estimand_type} = 0",
-        h1=f"{estimand_type} {h1_op} 0",
-        implied_result_translation=(
-            f"If the estimate matches your prior, {declaration.conceptual_treatment} "
-            f"would {sign_text} {declaration.conceptual_outcome} for {population}."
-        ),
-        confirmation_question=(
-            f"Freeze {estimand_type}: {treatment_col} -> {outcome_col} "
-            f"with expected sign '{declaration.expected_sign}'?"
-        ),
-    )
-
-
 df = _df_from_state()
+
 if df is None:
-    st.warning("No dataframe found from Cleaning. Upload/profile data on page 1 first.")
-    manual_columns = st.text_area(
-        "Or paste column names manually",
-        placeholder="state, year, treatment, outcome, control_1",
-    )
-    columns = [c.strip() for c in manual_columns.replace("\n", ",").split(",") if c.strip()]
+    st.warning("No dataframe found. Please complete Cleaning step first.")
+    manual = st.text_area("Paste columns manually")
+    columns = [c.strip() for c in manual.split(",") if c.strip()]
 else:
     columns = [str(c) for c in df.columns]
-    st.success(f"Using dataframe from Cleaning: {len(df)} rows x {df.shape[1]} columns")
-    with st.expander("Columns", expanded=False):
-        st.write(columns)
+    st.success(f"Loaded dataset: {df.shape}")
 
 if not columns:
     st.stop()
 
-treatment_guess = _looks_like(columns, ("treat", "expanded", "policy", "fon kodu", "kod"))
-outcome_guess = _looks_like(columns, ("outcome", "rate", "return", "getiri", "1 yıl", "yıl"))
-unit_guess = _looks_like(columns, ("state", "unit", "id", "fon kodu", "kod"))
-time_guess = _looks_like(columns, ("year", "date", "tarih", "time"))
+
+# -----------------------------
+# GUESSES
+# -----------------------------
+
+treatment_guess = _guess(columns, ("treat", "policy", "kod"))
+outcome_guess = _guess(columns, ("outcome", "rate", "return"))
+unit_guess = _guess(columns, ("id", "unit", "state"))
+time_guess = _guess(columns, ("year", "date", "time"))
+
+
+# -----------------------------
+# SOCrATIC FORM
+# -----------------------------
 
 with st.form("estimand_form"):
+
     st.subheader("Socratic declaration")
-    research_story = st.text_area(
-        "Research question",
-        value="Estimate whether the selected treatment is associated with the selected outcome.",
-    )
+
     conceptual_treatment = st.text_input(
         "Conceptual treatment",
         value=treatment_guess or columns[0],
     )
+
     conceptual_outcome = st.text_input(
         "Conceptual outcome",
-        value=outcome_guess or columns[min(1, len(columns) - 1)],
+        value=outcome_guess or columns[-1],
     )
-    expected_sign = st.selectbox("Expected sign", ["negative", "positive", "ambiguous"])
 
-    st.subheader("TAC technical mapping")
-    left, right = st.columns(2)
-    with left:
-        estimand_type = st.selectbox("Estimand", ["ATT", "ATE", "LATE"])
-        treatment_col = st.selectbox(
-            "Treatment column",
-            columns,
-            index=_default_index(columns, treatment_guess),
-        )
-        outcome_col = st.selectbox(
-            "Outcome column",
-            columns,
-            index=_default_index(columns, outcome_guess),
-        )
-        outcome_unit = st.text_input("Outcome unit", value="original data unit")
-    with right:
-        unit_options = ["<none>", *columns]
-        time_options = ["<none>", *columns]
-        unit_col = st.selectbox(
-            "Unit column",
-            unit_options,
-            index=_default_index(unit_options, unit_guess),
-        )
-        time_col = st.selectbox(
-            "Time column",
-            time_options,
-            index=_default_index(time_options, time_guess),
-        )
-        cluster_default = unit_col if unit_col != "<none>" else columns[0]
-        cluster_by = st.selectbox(
-            "Cluster by",
-            columns,
-            index=_default_index(columns, cluster_default),
-        )
-
-    population = st.text_input("Population", value="uploaded dataset")
-    time_scope = st.text_input("Time scope", value="available rows")
-    identification_assumption = st.selectbox(
-        "Identification assumption",
-        ["associational", "parallel_trends"],
-        help="Use associational when the dataset is not a panel DiD setup.",
+    expected_sign = st.selectbox(
+        "Expected sign",
+        ["positive", "negative", "ambiguous"],
     )
+
+    st.subheader("Technical mapping")
+
+    treatment_col = st.selectbox("Treatment column", columns)
+    outcome_col = st.selectbox("Outcome column", columns)
+
+    unit_options = ["<none>", *columns]
+    time_options = ["<none>", *columns]
+
+    unit_col = st.selectbox("Unit column", unit_options)
+    time_col = st.selectbox("Time column", time_options)
+
+    cluster_by = st.selectbox("Cluster by", columns)
+
     controls = st.multiselect(
-        "Control columns",
-        [c for c in columns if c not in {treatment_col, outcome_col, unit_col, time_col}],
+        "Controls",
+        [c for c in columns if c not in {treatment_col, outcome_col}],
     )
 
-    submitted = st.form_submit_button("Create and freeze estimand")
+    submitted = st.form_submit_button("Freeze estimand")
+
 
 if submitted:
+
     declaration = SocraticDeclaration(
         conceptual_treatment=conceptual_treatment,
         conceptual_outcome=conceptual_outcome,
-        expected_sign=expected_sign,  # type: ignore[arg-type]
+        expected_sign=expected_sign,
     )
-    proposal = _build_proposal(
-        declaration=declaration,
-        estimand_type=estimand_type,
-        treatment_col=treatment_col,
-        outcome_col=outcome_col,
-        outcome_unit=outcome_unit,
-        population=population,
-        time_scope=time_scope,
-        identification_assumption=identification_assumption,
+
+    proposal = TACProposal(
+        estimand_type="ATT",
+        treatment=conceptual_treatment,
+        treatment_coding=treatment_col,
+        outcome=outcome_col,
+        outcome_unit="unit",
+        population="dataset",
+        time_scope="all",
+        expected_sign=expected_sign,
+        identification_assumption="associational",
+        h0="0",
+        h1="!=0",
+        implied_result_translation="",
+        confirmation_question="Confirm estimand?",
     )
+
     frozen = freeze_estimand(proposal, approved=True)
+
     st.session_state["frozen_estimand"] = frozen
-    st.session_state["analysis_form"] = {
-        "research_story": research_story,
+    st.session_state["analysis_state"] = {
         "proposal": proposal,
         "unit_col": None if unit_col == "<none>" else unit_col,
         "time_col": None if time_col == "<none>" else time_col,
@@ -187,51 +141,117 @@ if submitted:
         "controls": controls,
     }
 
+
+# -----------------------------
+# LOAD STATE
+# -----------------------------
+
 frozen = st.session_state.get("frozen_estimand")
-form_state = st.session_state.get("analysis_form")
-if frozen is None or form_state is None:
+state = st.session_state.get("analysis_state")
+
+if frozen is None or state is None:
     st.stop()
 
-proposal = form_state["proposal"]
-st.subheader("Frozen estimand")
-st.caption(proposal.implied_result_translation)
-st.code(f"freeze_hash = {frozen.freeze_hash}", language="text")
-st.json(frozen.estimand.model_dump())
 
-unit_col = form_state["unit_col"]
-time_col = form_state["time_col"]
-estimators = ["OLS"] if frozen.estimand.identification_assumption != "parallel_trends" else []
+st.subheader("Frozen estimand")
+st.json(frozen.estimand.model_dump())
+st.code(f"hash={frozen.freeze_hash}")
+
+# -----------------------------
+# MENU BUILD (NEW FLOW)
+# -----------------------------
+
+unit_col = state["unit_col"]
+time_col = state["time_col"]
+cluster_by = state["cluster_by"]
+controls = state["controls"]
+
+
+# estimator selection
+estimators = ["OLS"]
 if unit_col and time_col:
     estimators.append("TWFE")
-if not estimators:
-    st.error("parallel_trends needs both a unit column and a time column for TWFE.")
-    st.stop()
 
-menu = SpecMenu(
-    control_sets=[[], form_state["controls"]] if form_state["controls"] else [[]],
-    clustering_levels=[form_state["cluster_by"]],
-    estimators=estimators,  # type: ignore[arg-type]
-    active_axes=["control_set", "estimator"] if len(estimators) > 1 else ["control_set"],
-    rationale="Deterministic baseline menu from the confirmed estimand and selected columns.",
+
+# -----------------------------
+# OPTION 1: DETERMINISTIC MENU
+# -----------------------------
+
+menu = build_deterministic_menu(
+    controls=controls,
+    cluster_by=cluster_by,
+    estimators=estimators,
+    available_columns=columns,
 )
+
+
+# -----------------------------
+# OPTION 2 (optional): LLM MENU
+# -----------------------------
+# Uncomment if you want LLM-based robustness menu
+#
+# proposal_menu = generate_spec_menu(
+#     frozen=frozen,
+#     available_columns=columns,
+# )
+#
+# menu = freeze_spec_menu(
+#     proposal_menu,
+#     available_columns=columns,
+#     approved=True,
+# ).menu
+
+
+# -----------------------------
+# FREEZE MENU (deterministic hash)
+# -----------------------------
+
 frozen_menu = menu.freeze()
 
-st.subheader("Frozen spec menu")
-st.code(f"menu_hash = {frozen_menu.menu_hash}", language="text")
-st.json(frozen_menu.menu.model_dump())
+
+# -----------------------------
+# EXPAND SPECIFICATIONS
+# -----------------------------
 
 try:
     specs = expand_to_specs(
         frozen_menu,
         outcome=frozen.estimand.outcome,
         treatment=frozen.estimand.treatment_coding,
-        unit_col=unit_col or form_state["cluster_by"],
-        time_col=time_col or form_state["cluster_by"],
+        unit_col=unit_col or cluster_by,
+        time_col=time_col or cluster_by,
     )
+
+    # validation against estimand
     for spec in specs:
-        validate_estimand_spec_mapping(frozen, spec, available_columns=columns)
-except ValueError as exc:
-    st.error(str(exc))
-else:
-    st.subheader("Specification candidates")
-    st.dataframe(pd.DataFrame([s.model_dump() | {"content_hash": s.content_hash()} for s in specs]))
+        validate_estimand_spec_mapping(
+            frozen,
+            spec,
+            available_columns=columns,
+        )
+
+except ValueError as e:
+    st.error(str(e))
+    st.stop()
+
+
+# -----------------------------
+# OUTPUT
+# -----------------------------
+
+st.subheader("Specification set")
+
+df_specs = pd.DataFrame(
+    [
+        {
+            **s.model_dump(),
+            "hash": s.content_hash(),
+        }
+        for s in specs
+    ]
+)
+
+st.dataframe(df_specs)
+
+
+st.success(f"{len(specs)} specifications generated")
