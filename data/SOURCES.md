@@ -44,7 +44,7 @@ data/
   Sorgu: ilçe × yıl gruplaması, tüm ilçeler. Export edilen `.tsv` `raw/`'a konur.
   Dosya sonundaki `---` sonrası metadata footer'ı beklenen davranıştır (loader atlar).
 - **Atıf:** Centers for Disease Control and Prevention, National Center for Health
-  Statistics. Multiple Cause of Death 1999-2020, CDC WONDER. http://wonder.cdc.gov/mcd.html
+  Statistics. Multiple Cause of Death, CDC WONDER (export: 2009-2019). https://wonder.cdc.gov/mcd.html
 
 ### 2. KFF — Eyalet Medicaid genişleme tarihleri (tedavi)
 - **Rol:** tedavi kohortu (genişleme yılı) + never-treated maskesi.
