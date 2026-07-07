@@ -1,143 +1,114 @@
-"""Deterministic column profiling.
+"""Kolon profilleme (deterministik).
 
-Raw data is never sent to an LLM. We only build a per-column summary payload
-with dtype, missingness, examples, and candidate roles.
+Ham veri hiçbir zaman LLM'e gönderilmez. Sadece kolon bazında özet bilgi
+(dtype, eksiklik, örnekler ve aday roller) üretilir.
 """
 
 from __future__ import annotations
 
-import csv
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 import pandas as pd
-from pandas.errors import ParserError
+
+# Streamlit'in UploadedFile nesnesi tam olarak IO[bytes] değildir ama
+# .seek() / .name / .read() ile duck-type olarak uyumludur.
+FileLike = str | Path | IO[bytes] | Any
 
 
-def load_raw_file(source: str | Path | Any) -> pd.DataFrame:
-    """Load CSV / Excel / Stata (.dta) data into a dataframe.
+def load_raw_file(source: FileLike) -> pd.DataFrame:
+    """CSV / Excel / Stata (.dta) dosyasını dataframe olarak yükler."""
 
-    `source` may be a local path or a file-like object such as Streamlit's
-    UploadedFile. The latter has a `.name` but is not saved to the working
-    directory, so we must pass the object itself to pandas.
-    """
-    is_path = isinstance(source, str | Path)
-    suffix = Path(source if is_path else source.name).suffix.lower()
-    file_obj = Path(source) if is_path else source
+    if isinstance(source, (str, Path)):
+        # mypy tip daraltmasını yalnızca doğrudan isinstance() bloğu
+        # içinde yapar; bunu bir bool değişkende saklayıp sonra
+        # kullanmak (örn. `is_path = isinstance(...)`) daraltmayı
+        # kaybettirir. Bu yüzden dallanmayı burada, doğrudan yapıyoruz.
+        path = Path(source)
+        suffix = path.suffix.lower()
+        file_obj: FileLike = path
+    else:
+        # Streamlit UploadedFile gibi dosya benzeri nesneler için
+        # isim özniteliği güvenli biçimde alınır.
+        name = getattr(source, "name", "")
+        suffix = Path(name).suffix.lower()
+        file_obj = source
 
     if hasattr(file_obj, "seek"):
         file_obj.seek(0)
 
     if suffix in (".csv", ".tsv"):
         return _read_delimited(file_obj, suffix=suffix)
+
     if suffix in (".xlsx", ".xls"):
         return pd.read_excel(file_obj)
+
     if suffix == ".dta":
         return pd.read_stata(file_obj)
-    raise ValueError(f"Unsupported file extension: {suffix} (csv/tsv/xlsx/dta)")
+
+    raise ValueError(f"Desteklenmeyen dosya uzantısı: {suffix}")
 
 
-def _read_delimited(file_obj: Any, *, suffix: str) -> pd.DataFrame:
-    """Read delimited text with delimiter sniffing and fail-loud diagnostics."""
-    sample = _read_text_sample(file_obj)
-    separators = ["\t"] if suffix == ".tsv" else _candidate_separators(file_obj)
-    attempts: list[str] = []
-    best_single_col: pd.DataFrame | None = None
-    best_table: pd.DataFrame | None = None
+def _read_delimited(file_obj: FileLike, *, suffix: str) -> pd.DataFrame:
+    """CSV / TSV dosyasını deterministik olarak okur.
 
-    for sep in separators:
-        if hasattr(file_obj, "seek"):
-            file_obj.seek(0)
-        try:
-            df = pd.read_csv(
-                file_obj,
-                sep=sep,
-                engine="python",
-                skiprows=_detect_header_skiprows(sample, sep),
-            )
-        except (ParserError, UnicodeDecodeError, ValueError) as exc:
-            attempts.append(f"{sep!r}: {exc}")
-            continue
+    Not: Ayraç (delimiter) sniffing veya başlık (header) satırı otomatik
+    algılama kasıtlı olarak uygulanmaz — bu, ayrı bir görev kapsamındadır.
+    Dosya uzantısına göre sabit ayraç kullanılır (.csv -> ',', .tsv -> '\\t').
+    """
 
-        if df.shape[1] > 1 and (best_table is None or df.shape[1] > best_table.shape[1]):
-            best_table = df
-        best_single_col = df
+    if hasattr(file_obj, "seek"):
+        file_obj.seek(0)
 
-    if best_table is not None:
-        return best_table
-    if best_single_col is not None:
-        return best_single_col
-
-    detail = " | ".join(attempts[:4])
-    raise ValueError(
-        "Delimited file could not be parsed consistently. "
-        "Check whether the file has metadata rows before the header, mixed delimiters, "
-        f"or an unsupported encoding. Parser attempts: {detail}"
-    )
-
-
-def _candidate_separators(file_obj: Any) -> list[str]:
-    candidates = [",", ";", "\t", "|"]
-    sample = _read_text_sample(file_obj)
-    if not sample:
-        return candidates
+    sep = "\t" if suffix == ".tsv" else ","
 
     try:
-        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
-    except csv.Error:
-        return candidates
-
-    sniffed = dialect.delimiter
-    return [sniffed, *[sep for sep in candidates if sep != sniffed]]
-
-
-def _detect_header_skiprows(sample: str, sep: str) -> int:
-    """Skip metadata rows before the widest delimited header row."""
-    rows = list(csv.reader(sample.splitlines(), delimiter=sep))
-    scored: list[tuple[int, int]] = []
-    for idx, row in enumerate(rows[:25]):
-        non_empty = [cell for cell in row if cell.strip()]
-        if len(non_empty) > 1:
-            scored.append((len(non_empty), idx))
-    if not scored:
-        return 0
-    _, header_idx = max(scored, key=lambda item: (item[0], -item[1]))
-    return header_idx
-
-
-def _read_text_sample(file_obj: Any, size: int = 8192) -> str:
-    if hasattr(file_obj, "seek"):
-        file_obj.seek(0)
-
-    if isinstance(file_obj, Path):
-        raw = file_obj.read_bytes()[:size]
-    else:
-        raw = file_obj.read(size)
-
-    if hasattr(file_obj, "seek"):
-        file_obj.seek(0)
-
-    if isinstance(raw, str):
-        return raw
-    return raw.decode("utf-8-sig", errors="replace")
+        return pd.read_csv(
+            file_obj,
+            sep=sep,
+        )
+    except Exception as exc:
+        raise ValueError(f"Dosya okunamadı: {exc}") from exc
 
 
 def _guess_join_keys(df: pd.DataFrame) -> list[str]:
-    """Guess merge-key candidates from names and medium cardinality."""
+    """Birleştirme (join) anahtarı olabilecek kolonları tahmin eder.
+
+    Not: Yalnızca genel amaçlı, alan-bağımsız (domain-agnostic) anahtar
+    kelimeler kullanılır (id, code, key, vb.). "fon kodu", "getiri" gibi
+    finans alanına özgü hardcode string'ler burada kasıtlı olarak yer
+    almaz; kolon rolü tahmini domain'e özel varsayımlar barındırmamalıdır.
+    """
     candidates: list[str] = []
     n = len(df)
+
     for col in df.columns:
         name = str(col).lower()
-        looks_like_id = any(tok in name for tok in ("id", "code", "kod", "key", "fips", "no"))
+
+        looks_like_id = any(
+            token in name
+            for token in (
+                "id",
+                "code",
+                "kod",
+                "key",
+                "fips",
+                "no",
+            )
+        )
+
         nunique = df[col].nunique(dropna=True)
         reasonable_cardinality = 1 < nunique < n
+
         if looks_like_id or reasonable_cardinality:
             candidates.append(str(col))
+
     return candidates
 
 
 def profile_dataframe(df: pd.DataFrame) -> dict[str, Any]:
-    """Build the structured summary profile used by the cleaning agent."""
+    """Temizleme ajanı için deterministik kolon profili üretir."""
+
     profile: dict[str, Any] = {
         "n_rows": int(len(df)),
         "n_cols": int(df.shape[1]),
@@ -148,28 +119,45 @@ def profile_dataframe(df: pd.DataFrame) -> dict[str, Any]:
 
     for col in df.columns:
         series = df[col]
+
         col_info: dict[str, Any] = {
             "dtype": str(series.dtype),
             "n_missing": int(series.isna().sum()),
             "pct_missing": round(float(series.isna().mean()), 4),
             "n_unique": int(series.nunique(dropna=True)),
         }
+
         if pd.api.types.is_numeric_dtype(series):
             desc = series.describe()
+
             col_info["stats"] = {
                 "min": float(desc.get("min", float("nan"))),
                 "max": float(desc.get("max", float("nan"))),
                 "mean": float(desc.get("mean", float("nan"))),
                 "std": float(desc.get("std", float("nan"))),
             }
+
         else:
             top_values = series.value_counts(dropna=True).head(5)
-            col_info["top_values"] = {str(k): int(v) for k, v in top_values.items()}
-            sample = series.dropna().astype(str).head(20).tolist()
-            col_info["looks_like_date"] = any(
-                any(sep in v for sep in ("-", "/", ".")) and any(ch.isdigit() for ch in v)
-                for v in sample
+
+            col_info["top_values"] = {
+                str(key): int(value)
+                for key, value in top_values.items()
+            }
+
+            sample = (
+                series.dropna()
+                .astype(str)
+                .head(20)
+                .tolist()
             )
+
+            col_info["looks_like_date"] = any(
+                any(sep in value for sep in ("-", "/", "."))
+                and any(ch.isdigit() for ch in value)
+                for value in sample
+            )
+
         profile["columns"][str(col)] = col_info
 
     return profile

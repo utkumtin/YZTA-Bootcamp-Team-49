@@ -1,4 +1,4 @@
-"""2 - Analysis: estimand-first workflow (NEW ARCHITECTURE)."""
+"""2 - Analiz: estimand-first akışı (YENİ MİMARİ)."""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ import streamlit as st
 from pareto.streamlit_ui import render_compact_sidebar
 from pareto.analysis.hypothesis import (
     SocraticDeclaration,
-    TACProposal,
     freeze_estimand,
     validate_estimand_spec_mapping,
+    draft_tac_proposal,
 )
 from pareto.analysis.menu import (
     ALL_AXES,
@@ -25,7 +25,7 @@ from pareto.analysis.menu import (
 with st.sidebar:
     render_compact_sidebar()
 
-st.title("2 - Analysis")
+st.title("2 - Analiz")
 
 
 # -----------------------------
@@ -47,105 +47,158 @@ def _guess(columns: list[str], keywords: tuple[str, ...]) -> str | None:
 df = _df_from_state()
 
 if df is None:
-    st.warning("No dataframe found. Please complete Cleaning step first.")
-    manual = st.text_area("Paste columns manually")
+    st.warning("Veriseti bulunamadı. Lütfen önce Temizleme (Cleaning) adımını tamamlayın.")
+    manual = st.text_area("Kolonları manuel olarak yapıştırın")
     columns = [c.strip() for c in manual.split(",") if c.strip()]
 else:
     columns = [str(c) for c in df.columns]
-    st.success(f"Loaded dataset: {df.shape}")
+    st.success(f"Yüklenen veriseti: {df.shape}")
 
 if not columns:
     st.stop()
 
 
-# -----------------------------
-# GUESSES
-# -----------------------------
-
-treatment_guess = _guess(columns, ("treat", "policy", "kod"))
-outcome_guess = _guess(columns, ("outcome", "rate", "return"))
-unit_guess = _guess(columns, ("id", "unit", "state"))
-time_guess = _guess(columns, ("year", "date", "time"))
 
 
 # -----------------------------
-# SOCrATIC FORM
+# ADIM 1: SOKRATİK BEYAN
+# -----------------------------
+# -----------------------------
+# ADIM 1: SOKRATİK BEYAN
 # -----------------------------
 
-with st.form("estimand_form"):
+if "socratic_submitted" not in st.session_state:
+    st.session_state.socratic_submitted = False
 
-    st.subheader("Socratic declaration")
+if not st.session_state.socratic_submitted:
 
-    conceptual_treatment = st.text_input(
-        "Conceptual treatment",
-        value=treatment_guess or columns[0],
-    )
+    with st.form("socratic_form"):
 
-    conceptual_outcome = st.text_input(
-        "Conceptual outcome",
-        value=outcome_guess or columns[-1],
-    )
+        st.subheader("Adım 1: Sokratik Beyan")
 
-    expected_sign = st.selectbox(
-        "Expected sign",
-        ["positive", "negative", "ambiguous"],
-    )
+        st.caption(
+            "Bu aşamada veri setindeki kolonları düşünmeden yalnızca "
+            "araştırma probleminizi kavramsal olarak tanımlayın."
+        )
 
-    st.subheader("Technical mapping")
+        research_story = st.text_area(
+            "Araştırma Hikayesi",
+            help="Araştırmanın bağlamını ve hipotezini açıklayın.",
+        )
 
-    treatment_col = st.selectbox("Treatment column", columns)
-    outcome_col = st.selectbox("Outcome column", columns)
+        conceptual_treatment = st.text_input(
+            "Kavramsal Müdahale (Treatment)",
+            value="",
+            placeholder="Örn: Asgari ücret artışı",
+        )
 
-    unit_options = ["<none>", *columns]
-    time_options = ["<none>", *columns]
+        conceptual_outcome = st.text_input(
+            "Kavramsal Çıktı (Outcome)",
+            value="",
+            placeholder="Örn: İşsizlik oranı",
+        )
 
-    unit_col = st.selectbox("Unit column", unit_options)
-    time_col = st.selectbox("Time column", time_options)
+        sign_map = {
+            "positive": "Pozitif",
+            "negative": "Negatif",
+            "ambiguous": "Belirsiz",
+        }
 
-    cluster_by = st.selectbox("Cluster by", columns)
+        expected_sign = st.selectbox(
+            "Beklenen Etki Yönü",
+            options=["positive", "negative", "ambiguous"],
+            format_func=lambda x: sign_map[x],
+        )
 
-    controls = st.multiselect(
-        "Controls",
-        [c for c in columns if c not in {treatment_col, outcome_col}],
-    )
+        submitted_socratic = st.form_submit_button(
+            "Teknik Eşlemeye Geç"
+        )
 
-    submitted = st.form_submit_button("Freeze estimand")
+    if submitted_socratic:
 
+        if (
+            not research_story.strip()
+            or not conceptual_treatment.strip()
+            or not conceptual_outcome.strip()
+        ):
+            st.error(
+                "Lütfen araştırma hikayesini, müdahaleyi ve çıktıyı doldurun."
+            )
+            st.stop()
 
-if submitted:
+        st.session_state["declaration_draft"] = SocraticDeclaration(
+            conceptual_treatment=conceptual_treatment.strip(),
+            conceptual_outcome=conceptual_outcome.strip(),
+            expected_sign=expected_sign,
+        )
 
-    declaration = SocraticDeclaration(
-        conceptual_treatment=conceptual_treatment,
-        conceptual_outcome=conceptual_outcome,
-        expected_sign=expected_sign,
-    )
+        st.session_state["research_story_draft"] = research_story.strip()
 
-    proposal = TACProposal(
-        estimand_type="ATT",
-        treatment=conceptual_treatment,
-        treatment_coding=treatment_col,
-        outcome=outcome_col,
-        outcome_unit="unit",
-        population="dataset",
-        time_scope="all",
-        expected_sign=expected_sign,
-        identification_assumption="associational",
-        h0="0",
-        h1="!=0",
-        implied_result_translation="",
-        confirmation_question="Confirm estimand?",
-    )
+        st.session_state.socratic_submitted = True
 
-    frozen = freeze_estimand(proposal, approved=True)
+        st.rerun()
 
-    st.session_state["frozen_estimand"] = frozen
-    st.session_state["analysis_state"] = {
-        "proposal": proposal,
-        "unit_col": None if unit_col == "<none>" else unit_col,
-        "time_col": None if time_col == "<none>" else time_col,
-        "cluster_by": cluster_by,
-        "controls": controls,
-    }
+else:
+
+    st.success("✓ Sokratik beyan tamamlandı.")
+
+    with st.expander(
+        "Sokratik Beyanı Görüntüle / Düzenle",
+        expanded=False,
+    ):
+
+        decl = st.session_state["declaration_draft"]
+
+        st.write(f"**Araştırma Hikayesi:** {st.session_state['research_story_draft']}")
+        st.write(f"**Müdahale:** {decl.conceptual_treatment}")
+        st.write(f"**Çıktı:** {decl.conceptual_outcome}")
+        st.write(f"**Beklenen Yön:** {decl.expected_sign}")
+
+        if st.button("Sokratik Beyanı Düzenle"):
+
+            st.session_state.socratic_submitted = False
+            st.session_state.pop("estimand_draft", None)
+
+            st.rerun()
+# -----------------------------
+# ADIM 3: TEYİT EKRANI & DONDURMA
+# -----------------------------
+
+draft_proposal = st.session_state.get("estimand_draft")
+frozen = st.session_state.get("frozen_estimand")
+
+if draft_proposal and not frozen:
+    if getattr(draft_proposal, "needs_clarification", False):
+        st.warning("⚠️ Modelin eksik bilgiler için netleşmeye ihtiyacı var:")
+        st.info(draft_proposal.clarification_question)
+        
+        with st.form("clarification_form"):
+            clarity_answer = st.text_area("Yanıtınız / Ek Açıklama:")
+            if st.form_submit_button("Açıklamayı Gönder ve Tekrar Öneri Al"):
+                updated_story = st.session_state.get("last_research_story", "") + "\n\nKullanıcı Açıklaması: " + clarity_answer
+                
+                with st.spinner("Ek açıklamanızla yeniden değerlendiriliyor..."):
+                    try:
+                        new_proposal = draft_tac_proposal(
+                            research_story=updated_story,
+                            available_columns=columns,
+                            declaration=st.session_state["last_declaration"],
+                        )
+                        st.session_state["estimand_draft"] = new_proposal
+                        st.session_state["last_research_story"] = updated_story
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Hata: {e}")
+    else:
+        st.info("Aşağıdaki TAC Proposal önerisini inceleyin ve onaylayın.")
+        st.json(draft_proposal.model_dump())
+        
+        if st.button("Öneriyi Onayla ve Dondur"):
+            frozen = freeze_estimand(draft_proposal, approved=True)
+            st.session_state["frozen_estimand"] = frozen
+            st.session_state["analysis_state"] = st.session_state["analysis_state_draft"]
+            st.success("Estimand başarıyla donduruldu!")
+            st.rerun()
 
 
 # -----------------------------
@@ -156,17 +209,17 @@ frozen = st.session_state.get("frozen_estimand")
 state = st.session_state.get("analysis_state")
 
 if frozen is None or state is None:
-    st.info("Estimand henüz dondurulmadı — aşağıdaki formu doldurun.")
+    if st.session_state.get("socratic_submitted"):
+        st.info("Estimand henüz dondurulmadı — teknik eşlemeyi tamamlayıp onaylayın.")
     st.stop()
 
-# Estimand değişmediyse önceki spec çıktısını koru
 if st.session_state.get("_specs_estimand_hash") != frozen.freeze_hash:
     st.session_state.pop("analysis_specs", None)
     st.session_state.pop("analysis_frozen_menu", None)
     st.session_state["_specs_estimand_hash"] = frozen.freeze_hash
 
 
-st.subheader("Frozen estimand")
+st.subheader("Dondurulmuş Estimand")
 st.json(frozen.estimand.model_dump())
 st.code(f"hash={frozen.freeze_hash}")
 
@@ -183,18 +236,17 @@ estimators = ["OLS"]
 if unit_col and time_col:
     estimators.append("TWFE")
 
-# Estimand değişince menü önbelleğini sıfırla
 if st.session_state.get("_menu_estimand_hash") != frozen.freeze_hash:
     st.session_state.pop("menu_proposal", None)
     st.session_state.pop("frozen_spec_menu", None)
     st.session_state["_menu_estimand_hash"] = frozen.freeze_hash
 
-st.subheader("Spec menu")
+st.subheader("Spesifikasyon Menüsü")
 
 menu_source = st.radio(
-    "Menu source",
+    "Menü kaynağı",
     options=["deterministic", "llm"],
-    format_func=lambda x: "Deterministic" if x == "deterministic" else "LLM (JUDGE)",
+    format_func=lambda x: "Deterministik" if x == "deterministic" else "LLM (JUDGE)",
     horizontal=True,
     key="menu_source",
 )
@@ -211,25 +263,22 @@ if menu_source == "deterministic":
 else:
     gen_col, _ = st.columns([1, 3])
     with gen_col:
-        generate_clicked = st.button("Generate menu proposal", type="primary")
+        generate_clicked = st.button("Menü önerisi oluştur", type="primary")
 
     if generate_clicked:
         try:
-            with st.spinner("JUDGE is designing the robustness menu..."):
+            with st.spinner("JUDGE dayanıklılık menüsünü tasarlıyor..."):
                 st.session_state["menu_proposal"] = generate_spec_menu(
                     frozen=frozen,
                     available_columns=columns,
                 )
                 st.session_state.pop("frozen_spec_menu", None)
         except (OSError, RuntimeError, ValueError) as exc:
-            st.error(f"Menu generation failed: {exc}")
-            st.caption(
-                "Ana sayfada BYOK kaydet (veya `.env`). Hem BYOK hem `.env` doluysa BYOK kullanılır."
-            )
+            st.error(f"Menü oluşturma başarısız: {exc}")
 
     proposal = st.session_state.get("menu_proposal")
     if proposal is None:
-        st.info("Click **Generate menu proposal** to get JUDGE recommendations per axis.")
+        st.info("Her eksende JUDGE önerilerini almak için **Menü önerisi oluştur** butonuna tıklayın.")
         st.stop()
 
     st.caption(proposal.overall_rationale)
@@ -237,34 +286,34 @@ else:
         with st.expander(f"{axis.axis_name} — baseline: `{axis.baseline_level}`"):
             st.markdown(axis.rationale)
             if axis.candidate_levels:
-                st.write("Candidates:", ", ".join(f"`{c}`" for c in axis.candidate_levels))
+                st.write("Adaylar:", ", ".join(f"`{c}`" for c in axis.candidate_levels))
 
     if proposal.needs_clarification:
-        st.warning(proposal.clarification_question or "Clarification required before freezing.")
+        st.warning(proposal.clarification_question or "Dondurmadan önce netleşme gerekiyor.")
         st.stop()
 
-    if st.button("Freeze spec menu"):
+    if st.button("Spesifikasyon menüsünü dondur"):
         try:
             st.session_state["frozen_spec_menu"] = freeze_spec_menu(
                 proposal,
                 available_columns=columns,
                 approved=True,
             )
-            st.success("Spec menu frozen.")
+            st.success("Spesifikasyon menüsü donduruldu.")
         except ValueError as exc:
             st.error(str(exc))
 
     frozen_from_llm = st.session_state.get("frozen_spec_menu")
     if frozen_from_llm is None:
-        st.info("Review the proposal above, then click **Freeze spec menu**.")
+        st.info("Yukarıdaki öneriyi inceleyin, ardından **Spesifikasyon menüsünü dondur** butonuna tıklayın.")
         st.stop()
 
     menu = frozen_from_llm.menu
 
 active_axes = st.multiselect(
-    "Active axes (empty = auto-detect levels with >1 option)",
+    "Aktif eksenler (boş = birden fazla seçeneği olan seviyeleri otomatik algıla)",
     options=list(ALL_AXES),
-    help="Only selected axes enter the factorial expansion; others stay pinned to baseline.",
+    help="Yalnızca seçilen eksenler faktöriyel çarpıma girer; diğerleri taban seviyeye sabitlenir.",
 )
 if active_axes:
     menu = menu.model_copy(update={"active_axes": tuple(active_axes)})
@@ -287,12 +336,20 @@ try:
     )
 
     # validation against estimand
+    found_warnings = []
     for spec in specs:
-        validate_estimand_spec_mapping(
+        spec_warnings = validate_estimand_spec_mapping(
             frozen,
             spec,
             available_columns=columns,
         )
+        if spec_warnings:
+            found_warnings.extend(spec_warnings)
+
+    if found_warnings:
+        with st.expander("⚠️ Spesifikasyon Eşleme Uyarıları (Yumuşatılmış Kurallar)", expanded=False):
+            for w in set(found_warnings):
+                st.warning(w)
 
     st.session_state["analysis_specs"] = specs
     st.session_state["analysis_frozen_menu"] = frozen_menu
@@ -306,7 +363,7 @@ except ValueError as e:
 # OUTPUT
 # -----------------------------
 
-st.subheader("Specification set")
+st.subheader("Spesifikasyon Seti")
 
 df_specs = pd.DataFrame(
     [
@@ -321,4 +378,4 @@ df_specs = pd.DataFrame(
 st.dataframe(df_specs)
 
 
-st.success(f"{len(specs)} specifications generated")
+st.success(f"{len(specs)} spesifikasyon üretildi")
