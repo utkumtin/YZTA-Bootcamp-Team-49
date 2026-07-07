@@ -29,6 +29,8 @@ def sanitize_profile(profile: dict[str, Any]) -> dict[str, Any]:
     Sayısal istatistikler (min/max/mean) dokunulmaz — talimat taşıyamazlar.
     """
     out: dict[str, Any] = {k: v for k, v in profile.items() if k != "columns"}
+    if "potential_join_keys" in out:
+        out["potential_join_keys"] = [spotlight(str(k)) for k in out["potential_join_keys"]]
     marked_cols: dict[str, Any] = {}
     for col_name, info in profile.get("columns", {}).items():
         new_info = dict(info)
