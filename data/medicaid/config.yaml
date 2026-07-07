@@ -99,7 +99,7 @@ merge:
   derive:
     state_fips: { from: county_fips, take_first: 2 }
     county_fips: { concat: [state_fips, county_fips_3] }   # SAHIE/SAIPE kaynakları için
-  on: state_fips
+  "on": state_fips     # tırnak şart: YAML 1.1 çıplak `on`'u boolean True'ya çevirir
   how: left
 
 panel:                                       # CleanPanel manifest'e eşlenir
