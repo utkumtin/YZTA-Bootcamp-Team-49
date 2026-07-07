@@ -23,7 +23,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 
-USER_AGENT = "pareto-bootcamp-research (utkumtin@gmail.com)"
+USER_AGENT = "pareto-bootcamp-research"
 
 # --- MANUEL kaynaklar: yalnız varlık kontrolü -------------------------------
 
