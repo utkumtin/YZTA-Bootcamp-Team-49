@@ -14,11 +14,12 @@ import hashlib
 import itertools
 import json
 import logging
-from typing import Literal
+from typing import Literal, TypeVar, cast
 
 from pydantic import BaseModel
 
 from ..config import SETTINGS, ModelRole
+from ..llm.guardrails import prompt_json
 from ..llm.router import build_agent
 from ..spec import SUPPORTED_ESTIMATORS, Specification
 from .hypothesis import FrozenEstimand
@@ -47,7 +48,8 @@ ALL_AXES: tuple[AxisName, ...] = (
     "weighting",
 )
 
-DEFAULT_WEIGHT_COL = "population"
+DEFAULT_WEIGHT_COL = SETTINGS.default_weight_col
+SupportedEstimator = Literal["OLS", "TWFE"]
 
 
 # -----------------------------
@@ -84,7 +86,7 @@ class SpecMenu(BaseModel):
     pre_period_windows: tuple[int | None, ...] = (None,)
     clustering_levels: tuple[str, ...]
     never_treated_levels: tuple[bool, ...] = (True,)
-    estimators: tuple[str, ...] = ("OLS", "TWFE")
+    estimators: tuple[SupportedEstimator, ...] = ("OLS", "TWFE")
     weighting_levels: tuple[str | None, ...] = (None,)
     active_axes: tuple[str, ...] = ()  # boş → _default_active
     rationale: str = ""
@@ -171,7 +173,10 @@ def build_deterministic_menu(
 ) -> SpecMenu:
     """LLM'siz minimal spec menüsü; ağırlıklandırma default nüfus-ağırlıklı."""
     control_sets: list[list[str]] = [[], controls] if controls else [[]]
-    estimator_tuple = tuple(estimators) if estimators else ("OLS",)
+    estimator_tuple = cast(
+        tuple[SupportedEstimator, ...],
+        tuple(estimators) if estimators else ("OLS",),
+    )
 
     return SpecMenu(
         control_sets=control_sets,
@@ -204,9 +209,9 @@ def generate_spec_menu(
     estimand = frozen.estimand
     prompt = (
         "Frozen estimand:\n"
-        f"{estimand.model_dump()}\n\n"
+        f"{prompt_json(estimand.model_dump())}\n\n"
         "Available columns:\n"
-        f"{available_columns}\n\n"
+        f"<available_columns>{prompt_json(available_columns)}</available_columns>\n\n"
         "Supported estimators: OLS, TWFE.\n\n"
         "Create a SpecMenuProposal with exactly these 7 axes:\n"
         "control_set, sample, pre_period, clustering, never_treated, estimator, weighting.\n\n"
@@ -241,6 +246,48 @@ def generate_spec_menu(
 # -----------------------------
 
 
+def _parse_sample_filter(level: str) -> str | None:
+    if level == "none":
+        return None
+    if not level.strip():
+        raise ValueError("Sample filtresi boş olamaz.")
+    return level
+
+
+def _parse_pre_period(level: str) -> int | None:
+    if level == "none":
+        return None
+    try:
+        parsed = int(level)
+    except ValueError as exc:
+        raise ValueError(f"Geçersiz pre_period seviyesi: {level}") from exc
+    if parsed <= 0:
+        raise ValueError(f"pre_period pozitif olmalı: {parsed}")
+    return parsed
+
+
+def _parse_never_treated(level: str) -> bool:
+    lowered = level.lower()
+    if lowered not in {"true", "false"}:
+        raise ValueError(f"never_treated için yalnız true/false kabul edilir: {level}")
+    return lowered == "true"
+
+
+T = TypeVar("T")
+
+
+def _dedupe_preserving_order(values: list[T]) -> list[T]:
+    seen: set[str] = set()
+    deduped: list[T] = []
+    for value in values:
+        key = str(value)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(value)
+    return deduped
+
+
 def spec_menu_proposal_to_menu(
     proposal: SpecMenuProposal,
     *,
@@ -251,18 +298,27 @@ def spec_menu_proposal_to_menu(
     def axis(name: str) -> list[str]:
         return _axis_levels(proposal, name)
 
-    control_sets = [_parse_control_set(v) for v in axis("control_set")]
-    sample_filters = tuple(None if v == "none" else v for v in axis("sample"))
-    pre_period_windows = tuple(None if v == "none" else int(v) for v in axis("pre_period"))
-    clustering_levels = tuple(axis("clustering"))
-    never_treated_levels = tuple(v.lower() == "true" for v in axis("never_treated"))
-    weighting_levels = tuple(None if v == "none" else v for v in axis("weighting"))
-    estimator_levels = tuple(axis("estimator"))
+    control_sets = _dedupe_preserving_order([_parse_control_set(v) for v in axis("control_set")])
+    sample_filters = tuple(_dedupe_preserving_order([_parse_sample_filter(v) for v in axis("sample")]))
+    pre_period_windows = tuple(_dedupe_preserving_order([_parse_pre_period(v) for v in axis("pre_period")]))
+    clustering_levels = tuple(_dedupe_preserving_order(axis("clustering")))
+    never_treated_levels = tuple(_dedupe_preserving_order([_parse_never_treated(v) for v in axis("never_treated")]))
+    weighting_levels = tuple(_dedupe_preserving_order([None if v == "none" else v for v in axis("weighting")]))
+    estimator_levels_raw = _dedupe_preserving_order(axis("estimator"))
 
-    if estimator_levels[0] not in SUPPORTED_ESTIMATORS:
-        raise ValueError(f"Unsupported estimator: {estimator_levels[0]}")
-    if clustering_levels[0] not in cols:
-        raise ValueError(f"Invalid clustering column: {clustering_levels[0]}")
+    for estimator in estimator_levels_raw:
+        if estimator not in SUPPORTED_ESTIMATORS:
+            raise ValueError(f"Unsupported estimator: {estimator}")
+    estimator_levels = cast(tuple[SupportedEstimator, ...], tuple(estimator_levels_raw))
+
+    for cluster in clustering_levels:
+        if cluster not in cols:
+            raise ValueError(f"Invalid clustering column: {cluster}")
+
+    for control_set in control_sets:
+        for control in control_set:
+            if control not in cols:
+                raise ValueError(f"Invalid control column: {control}")
 
     for w in weighting_levels:
         if w is not None and w not in cols:
@@ -290,6 +346,7 @@ def freeze_spec_menu(
     *,
     available_columns: list[str],
     approved: bool,
+    active_axes: tuple[AxisName, ...] = (),
 ) -> FrozenSpecMenu:
     if proposal.needs_clarification:
         raise ValueError(proposal.clarification_question or "Clarification required")
@@ -297,6 +354,8 @@ def freeze_spec_menu(
         raise ValueError("User approval required to freeze spec menu")
 
     menu = spec_menu_proposal_to_menu(proposal, available_columns=available_columns)
+    if active_axes:
+        menu = menu.model_copy(update={"active_axes": active_axes})
     return FrozenSpecMenu(menu=menu, menu_hash=_menu_hash(menu))
 
 

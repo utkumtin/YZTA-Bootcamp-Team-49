@@ -6,6 +6,7 @@ determinizm pinleri. Sırlar buraya YAZILMAZ; yalnız env/`st.secrets` üzerinde
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -42,6 +43,7 @@ class ParetoSettings:
 
     # --- Multiverse sınırları (sert tavan 24) ---
     max_specifications: int = 24  # aşımda uyar + logla, sessiz kırpma yok
+    default_weight_col: str = "population"
 
     # --- Determinizm (seed + BLAS/hash pin) ---
     seed: int = 20260704
@@ -56,17 +58,74 @@ class ParetoSettings:
 
 
 SETTINGS = ParetoSettings()
+logger = logging.getLogger(__name__)
+
+
+def load_dotenv_file() -> None:
+    """Repo kökündeki `.env` dosyasını yükle (Streamlit cwd'den bağımsız)."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        logger.debug("python-dotenv bulunamadı, .env yüklenmedi.")
+        return
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    load_dotenv(os.path.join(root, ".env"))
+
+_API_KEY_ALIASES: dict[str, tuple[str, ...]] = {
+    "GEMINI_API_KEY": ("GOOGLE_API_KEY",),
+}
+
+def _from_env(candidates: tuple[str, ...]) -> str:
+    for name in candidates:
+        key = os.environ.get(name, "").strip()
+        if key:
+            return key
+    return ""
+
+
+def _from_secrets(candidates: tuple[str, ...]) -> str:
+    try:
+        import streamlit as st
+    except ImportError:
+        return ""
+    try:
+        for name in candidates:
+            if name in st.secrets:
+                key = str(st.secrets[name]).strip()
+                if key:
+                    return key
+    except Exception as exc:
+        logger.warning("st.secrets okunamadı: %s", exc)
+    return ""
+
+
+def resolve_api_key(provider_env: str) -> tuple[str, str]:
+    """API anahtarını çöz ve kaynağı döndür: env | secrets | none."""
+    candidates = (provider_env, *_API_KEY_ALIASES.get(provider_env, ()))
+    env_key = _from_env(candidates)
+    if env_key:
+        return env_key, "env"
+    secret_key = _from_secrets(candidates)
+    if secret_key:
+        return secret_key, "secrets"
+    return "", "none"
 
 
 def get_api_key(provider_env: str) -> str:
-    """BYOK: sağlayıcı anahtarını env'den okur (örn. 'GEMINI_API_KEY').
+    """Önce env, yoksa st.secrets'dan API anahtarını döndür."""
+    key, _source = resolve_api_key(provider_env)
+    if key:
+        return key
 
-    Anahtar sadece env / `st.secrets` üzerinden gelir; repo'ya asla girmez.
-    """
-    key = os.environ.get(provider_env)
-    if not key:
-        raise OSError(
-            f"{provider_env} tanımlı değil. `export {provider_env}=...` ile ayarlayın "
-            "(veya Streamlit'te BYOK alanına girin)."
-        )
-    return key
+    raise OSError(
+        f"{provider_env} tanımlı değil. Şunlardan biriyle ayarlayın:\n"
+        f"  • ana sayfa: **Anahtarı kaydet** (BYOK, oturum boyunca)\n"
+        f"  • proje kökünde `.env`: {provider_env}=...\n"
+        f"  • terminal: `export {provider_env}=...` (Streamlit'i yeniden başlat)"
+    )
+
+
+def get_api_key_source(provider_env: str) -> str:
+    """Anahtar kaynağını döndür: env | secrets | none."""
+    _key, source = resolve_api_key(provider_env)
+    return source

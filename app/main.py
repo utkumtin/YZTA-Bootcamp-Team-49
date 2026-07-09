@@ -1,8 +1,7 @@
 """Pareto — Streamlit girişi (Streamlit + Community Cloud).
 
-review sorun: prototip CLI-first'tü. Artık Streamlit uçtan uca. Bu landing sayfası
-modu (public/demo · private no-train) ve BYOK anahtar girişini kurar; akış sol
-menüdeki sayfalarda: 1_cleaning → 2_analysis → 3_variance_panel.
+Ana sayfa: BYOK (bir kez) + oturum durumu. Diğer sayfalar: kompakt sidebar.
+Oturum verisi `st.session_state` ile sayfalar arası kalır.
 
 Çalıştırma:  streamlit run app/main.py
 """
@@ -11,7 +10,15 @@ from __future__ import annotations
 
 import streamlit as st
 
+from pareto.config import load_dotenv_file
+from pareto.streamlit_ui import render_byok_panel, render_compact_sidebar, render_session_overview
+
+load_dotenv_file()
+
 st.set_page_config(page_title="Pareto", page_icon="📊", layout="wide")
+
+with st.sidebar:
+    render_compact_sidebar()
 
 st.title("📊 Pareto")
 st.caption(
@@ -19,19 +26,8 @@ st.caption(
     "Sözümüz: **savunulabilir sonuç.**"
 )
 
-with st.sidebar:
-    st.header("Ayarlar")
-    mode = st.radio(
-        "Gizlilik modu",
-        options=["public", "private"],
-        help="public = free model + canned demo. private = yalnız no-train uçlar.",
-    )
-    st.text_input(
-        "BYOK — API anahtarı",
-        type="password",
-        help="Canlı LLM için kendi anahtarın (env / st.secrets). Repo'ya asla yazılmaz.",
-    )
-    st.caption(f"Aktif mod: **{mode}**")
+render_byok_panel()
+render_session_overview()
 
 st.subheader("Akış")
 st.markdown(
@@ -41,7 +37,5 @@ st.markdown(
 )
 
 st.info(
-    "Sprint-1 iskeleti kuruldu. Temizleme agent'ı, spec-menü üretimi ve canlı LLM "
-    "akışı Sprint-2 kapsamında (bkz docs/scrum/sprint-2-plan.md). Varyans paneli, "
-    "runner çıktısı `runs/<run_id>/results.json` üzerinden şimdiden çalışır."
+    "Veri, estimand ve spec çıktıları oturum boyunca saklanır — sayfa değiştirince kaybolmaz."
 )

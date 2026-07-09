@@ -11,11 +11,12 @@ dondurmadan gelir (menu.freeze), model stabilitesinden değil.
 
 from __future__ import annotations
 
+import os
 from contextlib import contextmanager
 from typing import Any
 
-from ..config import SETTINGS, ModelRole
-from .providers import chain_for
+from ..config import ModelRole, PrivacyMode, SETTINGS, get_api_key
+from .providers import ProviderModel, chain_for
 
 _TEST_MODEL: Any | None = None  # test enjeksiyonu (TestModel/FunctionModel)
 
@@ -32,13 +33,38 @@ def use_test_model(model: Any):
         _TEST_MODEL = previous
 
 
+def _model_from_provider(pm: ProviderModel) -> Any:
+    """Zincir girdisinden PydanticAI model nesnesi kurar (BYOK api_key ile)."""
+    if pm.provider == "google":
+        from pydantic_ai.models.google import GoogleModel
+        from pydantic_ai.providers.google import GoogleProvider
+
+        return GoogleModel(
+            pm.model_id,
+            provider=GoogleProvider(api_key=get_api_key(pm.api_key_env)),
+        )
+    # Google dışı sağlayıcılarda da BYOK/.env anahtarını ortama pinle.
+    os.environ[pm.api_key_env] = get_api_key(pm.api_key_env)
+    # Diğer sağlayıcılar: "<provider>:<model_id>" (groq vb. optional extra gerekir)
+    return f"{pm.provider}:{pm.model_id}"
+
+
+def _get_effective_privacy_mode() -> PrivacyMode:
+    """UI seçimi varsa kullan, yoksa varsayılan ayara dön."""
+    try:
+        import streamlit as st
+    except ImportError:
+        return SETTINGS.privacy_mode
+    raw = st.session_state.get("privacy_mode", SETTINGS.privacy_mode.value)
+    return PrivacyMode.PRIVATE if str(raw) == PrivacyMode.PRIVATE.value else PrivacyMode.PUBLIC
+
+
 def _resolve_model(role: ModelRole) -> Any:
     """Test modeli varsa onu; yoksa zincirin ilk (birincil) modelini döndürür."""
     if _TEST_MODEL is not None:
         return _TEST_MODEL
-    primary = chain_for(role, SETTINGS.privacy_mode)[0]
-    # PydanticAI model string biçimi: "<provider>:<model_id>"
-    return f"{primary.provider}:{primary.model_id}"
+    primary = chain_for(role, _get_effective_privacy_mode())[0]
+    return _model_from_provider(primary)
 
 
 def build_agent(role: ModelRole, *, system_prompt: str, output_type: Any | None = None):

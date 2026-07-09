@@ -17,7 +17,7 @@ from ..config import ModelRole, PrivacyMode
 
 @dataclass(frozen=True)
 class ProviderModel:
-    provider: str  # pydantic-ai provider prefix (örn. "google-gla", "groq")
+    provider: str  # pydantic-ai provider prefix (örn. "google", "groq")
     model_id: str
     api_key_env: str  # BYOK env değişkeni
     no_train: bool  # PRIVATE modda yalnız True seçilebilir
@@ -27,11 +27,11 @@ class ProviderModel:
 # Yargı: pinli, thinking ON. Mekanik: failover zinciri (ucuz → hızlı → geniş).
 _JUDGE_CHAIN: tuple[ProviderModel, ...] = (
     ProviderModel(
-        "google-gla", "gemini-3.5-flash", "GEMINI_API_KEY", no_train=False, thinking=True
+        "google", "gemini-3.5-flash", "GEMINI_API_KEY", no_train=False, thinking=True
     ),
 )
 _MECHANICAL_CHAIN: tuple[ProviderModel, ...] = (
-    ProviderModel("google-gla", "gemini-flash-lite", "GEMINI_API_KEY", no_train=False),
+    ProviderModel("google", "gemini-flash-lite", "GEMINI_API_KEY", no_train=False),
     ProviderModel("groq", "llama-3.3-70b-versatile", "GROQ_API_KEY", no_train=True),
     ProviderModel("openrouter", "deepseek/deepseek-r1:free", "OPENROUTER_API_KEY", no_train=False),
 )
@@ -39,7 +39,7 @@ _MECHANICAL_CHAIN: tuple[ProviderModel, ...] = (
 # PRIVATE mod: no-train/ZDR uçlar (paid Gemini/Claude no-train+DPA · Groq no-retention).
 _PRIVATE_JUDGE_CHAIN: tuple[ProviderModel, ...] = (
     ProviderModel(
-        "google-gla", "gemini-3.1-pro", "GEMINI_PAID_API_KEY", no_train=True, thinking=True
+        "google", "gemini-3.1-pro", "GEMINI_PAID_API_KEY", no_train=True, thinking=True
     ),
 )
 _PRIVATE_MECHANICAL_CHAIN: tuple[ProviderModel, ...] = (
