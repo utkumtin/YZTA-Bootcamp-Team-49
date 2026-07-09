@@ -1,0 +1,44 @@
+# Card-Krueger NJ-PA asgari ücret — minik 2×2 fixture (CI smoke matrisi).
+# Rol: hızlı test + genelleme garantisi (SCOPE §11); hero ya da flip seti DEĞİL.
+# DİKKAT: veri GENİŞ formatta (iki görüşme dalgası aynı satırda, `2` sonekli kolonlar).
+# unit×time uzun panele reshape temizleme aşamasının işi — fixture bunu da egzersiz eder.
+
+dataset: card_krueger
+description: >
+  NJ asgari ücret artışının (Nisan 1992) fast-food istihdamına etkisi
+  (Card & Krueger 1994). 410 restoran × 2 dalga (Şub/Mar 1992 öncesi,
+  Kas/Ara 1992 sonrası), NJ = tedavi, PA = kontrol. Klasik 2×2 DiD.
+
+sources:
+  njmin:
+    file: raw/card_krueger.csv             # raw/njmin.zip içindeki public.dat'tan export (fetch_data.py)
+    format: csv
+    note: >
+      Kaynak: davidcard.berkeley.edu/data_sets/njmin.zip. Kolon tanımları
+      raw/codebook dosyasında; '.' → NA çevrildi. Dalga-2 kolonları '2' sonekli.
+      FTE istihdam türetilir: EMPFT + NMGRS + 0.5*EMPPT (makaledeki tanım).
+    columns:
+      store_id: "SHEET"
+      treated_state: "STATE"               # 1 = NJ (tedavi), 0 = PA (kontrol)
+      chain: "CHAIN"                       # 1=BK 2=KFC 3=Roys 4=Wendys
+      co_owned: "CO_OWNED"
+      emp_ft_w1: "EMPFT"                   # dalga 1 (müdahale öncesi)
+      emp_pt_w1: "EMPPT"
+      managers_w1: "NMGRS"
+      wage_start_w1: "WAGE_ST"
+      status_w2: "STATUS2"                 # 3 = kalıcı kapanış (FTE=0 sayılır, makale)
+      emp_ft_w2: "EMPFT2"                  # dalga 2 (müdahale sonrası)
+      emp_pt_w2: "EMPPT2"
+      managers_w2: "NMGRS2"
+      wage_start_w2: "WAGE_ST2"
+
+panel:                                     # reshape SONRASI hedef yapı
+  unit: store_id
+  time: wave                               # {1, 2} — DATE2 gerçek tarih verir
+  outcome: [fte_employment]                # türetilmiş: EMPFT + NMGRS + 0.5*EMPPT
+  covariates: [chain, co_owned]
+  weight: null
+
+treatment:
+  cohort_from: treated_state               # 2-grup 2-dönem; kohort makinesi gerekmez
+  never_treated_when: { treated_state: 0 }
