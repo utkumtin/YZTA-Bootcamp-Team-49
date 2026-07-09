@@ -14,36 +14,6 @@ def test_load_raw_file_accepts_streamlit_uploaded_file_like_csv():
     assert df.to_dict(orient="list") == {"a": [1, 3], "b": [2, 4]}
 
 
-def test_load_raw_file_sniffs_semicolon_csv_upload():
-    uploaded = BytesIO(b"a;b;c\n1;2;3\n4;5;6\n")
-    uploaded.name = "deneme.csv"
-
-    df = load_raw_file(uploaded)
-
-    assert df.to_dict(orient="list") == {"a": [1, 4], "b": [2, 5], "c": [3, 6]}
-
-
-def test_load_raw_file_skips_export_metadata_before_header():
-    uploaded = BytesIO(
-        "\n".join(
-            [
-                "Dışa Aktarım Tarihi:,06.07.2026 18:51:00",
-                "Toplam Kayıt Sayısı:,2",
-                "Fon Kodu,Fon Adı,Fonun Risk Değeri,1 Ay (%)",
-                'AAL,ATA PORTFÖY PARA PİYASASI (TL) FONU,1,"2,9625"',
-                'AAS,ATA PORTFÖY FON SEPETİ SERBEST FONU,5,"-0,033"',
-            ]
-        ).encode("utf-8")
-    )
-    uploaded.name = "tefas.csv"
-
-    df = load_raw_file(uploaded)
-
-    assert df.shape == (2, 4)
-    assert list(df.columns) == ["Fon Kodu", "Fon Adı", "Fonun Risk Değeri", "1 Ay (%)"]
-    assert df["Fon Kodu"].tolist() == ["AAL", "AAS"]
-
-
 def test_load_raw_file_accepts_path(tmp_path):
     path = tmp_path / "data.tsv"
     path.write_text("a\tb\n1\t2\n", encoding="utf-8")

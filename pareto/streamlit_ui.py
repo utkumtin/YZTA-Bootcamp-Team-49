@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import os
+
 import streamlit as st
 
-from .config import BYOK_GEMINI_WIDGET_KEY, get_api_key, get_api_key_source, store_byok_key
+from .config import get_api_key, get_api_key_source
+
+BYOK_WIDGET_KEYS: dict[str, str] = {
+    "GEMINI_API_KEY": "byok_gemini_input",
+    "GROQ_API_KEY": "byok_groq_input",
+    "OPENROUTER_API_KEY": "byok_openrouter_input",
+}
 
 
 def render_compact_sidebar() -> str:
@@ -25,35 +33,39 @@ def render_compact_sidebar() -> str:
 
 
 def render_byok_panel() -> None:
-    """Ana sayfada bir kez: Gemini BYOK girişi (session boyunca kalır)."""
+    """Ana sayfada bir kez: sağlayıcı BYOK girişleri (session boyunca kalır)."""
     st.subheader("API anahtarı (BYOK)")
     st.caption(
         "Anahtarı burada bir kez kaydedin; diğer sayfalarda tekrar girmeniz gerekmez. "
         "Hem `.env` hem BYOK doluysa **BYOK önceliklidir**."
     )
 
-    with st.form("byok_gemini_form", clear_on_submit=False):
-        st.text_input(
-            "Gemini API key",
-            type="password",
-            key=BYOK_GEMINI_WIDGET_KEY,
-            help="Yapıştır → **Anahtarı kaydet**.",
-        )
-        saved = st.form_submit_button("Anahtarı kaydet", type="primary")
+    with st.form("byok_form", clear_on_submit=False):
+        st.text_input("Gemini API key", type="password", key=BYOK_WIDGET_KEYS["GEMINI_API_KEY"])
+        st.text_input("Groq API key", type="password", key=BYOK_WIDGET_KEYS["GROQ_API_KEY"])
+        st.text_input("OpenRouter API key", type="password", key=BYOK_WIDGET_KEYS["OPENROUTER_API_KEY"])
+        saved = st.form_submit_button("Anahtarları kaydet", type="primary")
 
     if saved:
-        raw = str(st.session_state.get(BYOK_GEMINI_WIDGET_KEY, "")).strip()
-        if raw:
-            store_byok_key("GEMINI_API_KEY", raw)
-            st.success("Anahtar oturuma kaydedildi — tüm sayfalarda geçerli.")
+        byok_keys = st.session_state.setdefault("byok_keys", {})
+        saved_any = False
+        for env_name, widget_key in BYOK_WIDGET_KEYS.items():
+            raw = str(st.session_state.get(widget_key, "")).strip()
+            if raw:
+                byok_keys[env_name] = raw
+                os.environ[env_name] = raw
+                saved_any = True
+        if saved_any:
+            st.success("Anahtarlar oturuma kaydedildi — tüm sayfalarda geçerli.")
         else:
-            st.warning("Anahtar boş.")
+            st.warning("Kaydedilecek anahtar bulunamadı.")
 
-    if st.session_state.get("byok_keys", {}).get("GEMINI_API_KEY") and st.button(
-        "Anahtarı temizle", key="byok_clear_gemini"
-    ):
-        st.session_state.get("byok_keys", {}).pop("GEMINI_API_KEY", None)
-        st.session_state.pop(BYOK_GEMINI_WIDGET_KEY, None)
+    if st.session_state.get("byok_keys") and st.button("Tüm BYOK anahtarlarını temizle", key="byok_clear_all"):
+        for env_name in BYOK_WIDGET_KEYS:
+            os.environ.pop(env_name, None)
+        st.session_state["byok_keys"] = {}
+        for widget_key in BYOK_WIDGET_KEYS.values():
+            st.session_state.pop(widget_key, None)
         st.rerun()
 
     _render_api_key_status(detailed=True)
@@ -96,14 +108,21 @@ def _render_session_pills() -> None:
 
 
 def _render_api_key_status(*, detailed: bool = False) -> None:
-    try:
-        key = get_api_key("GEMINI_API_KEY")
-        source = get_api_key_source("GEMINI_API_KEY")
-        label = {"byok": "BYOK (oturum)", "env": ".env", "secrets": "st.secrets"}[source]
-        st.caption(f"Gemini: **algılandı** ✓ — kaynak: **{label}** ({len(key)} kar.)")
-    except OSError:
-        msg = "Gemini: **yok** — ana sayfada BYOK kaydet veya `.env` kullan"
-        if detailed:
-            st.warning(msg)
-        else:
-            st.caption(msg)
+    byok_keys = st.session_state.get("byok_keys", {})
+    providers = ("GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY")
+    for provider in providers:
+        byok_value = str(byok_keys.get(provider, "")).strip() if isinstance(byok_keys, dict) else ""
+        if byok_value:
+            st.caption(f"{provider}: **algılandı** ✓ — kaynak: **BYOK (oturum)** ({len(byok_value)} kar.)")
+            continue
+        try:
+            key = get_api_key(provider)
+            source = get_api_key_source(provider)
+            label = {"env": ".env", "secrets": "st.secrets", "none": "yok"}[source]
+            st.caption(f"{provider}: **algılandı** ✓ — kaynak: **{label}** ({len(key)} kar.)")
+        except OSError:
+            msg = f"{provider}: **yok** — ana sayfada BYOK kaydet veya `.env` kullan"
+            if detailed:
+                st.warning(msg)
+            else:
+                st.caption(msg)

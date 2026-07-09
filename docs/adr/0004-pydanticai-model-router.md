@@ -18,3 +18,8 @@ mekanikte failover (Flash-Lite → Groq → OpenRouter). Test: `use_test_model` 
 ## Sonuç
 Model-agnostik, test edilebilir, privacy-aware. Reprodüksiyon dondurmadan gelir, model
 stabilitesinden değil. Paid-frontier escalation provize-kapalı.
+
+## Notlar (2026-07-09 güncellemesi)
+- Google provider prefix'i `google` olarak standardize edildi (legacy `google-gla` kullanılmıyor).
+- BYOK akışı yalnız Google ile sınırlı değil; Groq/OpenRouter anahtarları da aynı oturum panelinden
+  alınır ve router zincirine yansıtılır.

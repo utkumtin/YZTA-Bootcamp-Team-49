@@ -5,7 +5,7 @@ from pydantic_ai.models.test import TestModel
 from pareto.analysis.hypothesis import (
     SocraticDeclaration,
     TACProposal,
-    elicit_estimand,
+    draft_tac_proposal,
     freeze_estimand,
     validate_estimand_spec_mapping,
 )
@@ -41,12 +41,12 @@ def test_testmodel_dialogue_freezes_expected_estimand_fields():
     )
 
     with use_test_model(TestModel(custom_output_args=_proposal_args())):
-        frozen = elicit_estimand(
-            "Estimate whether Medicaid expansion lowered uninsured rates.",
-            ["state", "year", "expanded", "uninsured_rate"],
-            declaration,
-            approved=True,
+        proposal = draft_tac_proposal(
+            research_story="Estimate whether Medicaid expansion lowered uninsured rates.",
+            available_columns=["state", "year", "expanded", "uninsured_rate"],
+            declaration=declaration,
         )
+        frozen = freeze_estimand(proposal, approved=True)
 
     assert frozen.estimand.treatment == "Medicaid expansion adoption"
     assert frozen.estimand.treatment_coding == "expanded"
@@ -64,14 +64,14 @@ def test_freeze_estimand_fails_when_agent_is_uncertain():
         }
     )
 
-    with pytest.raises(ValueError, match="targeted confirmation needed"):
+    with pytest.raises(ValueError, match="dondurulamıyor"):
         freeze_estimand(proposal, approved=True)
 
 
 def test_freeze_estimand_requires_user_approval():
     proposal = TACProposal(**_proposal_args())
 
-    with pytest.raises(ValueError, match="user approval is required"):
+    with pytest.raises(ValueError, match="kullanıcı onayı gereklidir"):
         freeze_estimand(proposal, approved=False)
 
 
@@ -108,7 +108,7 @@ def test_validate_estimand_spec_mapping_fails_loud_on_dirty_mapping():
         time_fe="year",
     )
 
-    with pytest.raises(ValueError, match="Estimand -> Specification mapping error"):
+    with pytest.raises(ValueError, match="doğrulaması başarısız"):
         validate_estimand_spec_mapping(
             frozen,
             spec,

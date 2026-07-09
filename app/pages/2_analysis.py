@@ -21,6 +21,7 @@ from pareto.analysis.menu import (
     expand_to_specs,
     freeze_spec_menu,
     generate_spec_menu,
+    validate_spec_menu_to_specs,
 )
 
 
@@ -220,7 +221,7 @@ if not st.session_state.socratic_submitted:
 
 
 # -------------------------------------------------
-# SOCIATIC SUMMARY
+# SOCRATIC SUMMARY
 # -------------------------------------------------
 
 else:
@@ -368,11 +369,7 @@ if (
     and not frozen_estimand
 ):
 
-    if getattr(
-        draft_proposal,
-        "needs_clarification",
-        False,
-    ):
+    if getattr(draft_proposal, "needs_clarification", False):
 
         st.warning(
             "⚠️ Teknik eşleme için ek açıklama gerekiyor."
@@ -436,63 +433,29 @@ if (
 
 
             except Exception as exc:
-
-                st.error(
-                    f"Tekrar değerlendirme başarısız: {exc}"
-                )
-
-
-
-# -------------------------------------------------
-# TAC CONFIRMATION
-# -------------------------------------------------
-
-elif (
-    draft_proposal is not None
-    and not frozen_estimand
-):
-
-    st.subheader(
-        "Adım 3: Estimand Teyidi"
-    )
-
-
-    st.info(
-        "Aşağıdaki öneriyi inceleyin. "
-        "Onaydan sonra estimand dondurulur."
-    )
-
-
-    st.json(
-        draft_proposal.model_dump()
-    )
-
-
-    if st.button(
-        "Öneriyi Onayla ve Dondur",
-        type="primary",
-    ):
-
-        frozen = freeze_estimand(
-            draft_proposal,
-            approved=True,
+                st.error(f"Tekrar değerlendirme başarısız: {exc}")
+    else:
+        st.subheader("Adım 3: Estimand Teyidi")
+        st.info(
+            "Aşağıdaki öneriyi inceleyin. "
+            "Onaydan sonra estimand dondurulur."
         )
+        st.json(draft_proposal.model_dump())
 
-
-        st.session_state[
-            "frozen_estimand"
-        ] = frozen
-
-
-        st.success(
-            "Estimand başarıyla donduruldu."
-        )
-
-
-        st.rerun()
+        if st.button(
+            "Öneriyi Onayla ve Dondur",
+            type="primary",
+        ):
+            frozen = freeze_estimand(
+                draft_proposal,
+                approved=True,
+            )
+            st.session_state["frozen_estimand"] = frozen
+            st.success("Estimand başarıyla donduruldu.")
+            st.rerun()
 
 # -------------------------------------------------
-# LOAD FROZEN ANALYSIS STATE
+# ANALYSIS STATE
 # -------------------------------------------------
 
 frozen_estimand = st.session_state.get(
@@ -515,25 +478,42 @@ if frozen_estimand is None:
 
 
 
-state = st.session_state.get(
-    "analysis_state"
-)
-
+state = st.session_state.get("analysis_state")
 
 if state is None:
+    guessed_unit = next((c for c in columns if "id" in c.lower()), columns[0])
+    guessed_time = next((c for c in columns if "year" in c.lower() or "date" in c.lower()), columns[0])
+    guessed_cluster = guessed_unit
 
-    state = st.session_state.get(
-        "analysis_state_draft"
-    )
+    st.subheader("Analiz Yapılandırması")
+    with st.form("analysis_state_form"):
+        unit_col_input = st.selectbox("Birim kolonu (unit)", options=columns, index=columns.index(guessed_unit))
+        time_col_input = st.selectbox("Zaman kolonu (time)", options=columns, index=columns.index(guessed_time))
+        cluster_by_input = st.selectbox(
+            "Kümeleme kolonu (cluster)",
+            options=columns,
+            index=columns.index(guessed_cluster),
+        )
+        controls_input = st.multiselect(
+            "Kontrol kolonları",
+            options=columns,
+            default=[],
+            help="Treatment ve outcome kolonlarını kontrol olarak seçmeyin.",
+        )
+        saved_state = st.form_submit_button("Yapılandırmayı kaydet", type="primary")
 
+    if not saved_state:
+        st.info("Devam etmek için analiz yapılandırmasını kaydedin.")
+        st.stop()
 
-if state is None:
-
-    st.error(
-        "Analiz durumu bulunamadı."
-    )
-
-    st.stop()
+    state = {
+        "unit_col": unit_col_input,
+        "time_col": time_col_input,
+        "cluster_by": cluster_by_input,
+        "controls": controls_input,
+    }
+    st.session_state["analysis_state"] = state
+    st.rerun()
 
 
 
@@ -687,7 +667,7 @@ else:
                 "JUDGE dayanıklılık menüsü hazırlıyor..."
             ):
 
-                proposal = generate_spec_menu(
+                menu_proposal = generate_spec_menu(
                     frozen=frozen_estimand,
                     available_columns=columns,
                 )
@@ -695,7 +675,7 @@ else:
 
                 st.session_state[
                     "menu_proposal"
-                ] = proposal
+                ] = menu_proposal
 
 
                 st.session_state.pop(
@@ -715,12 +695,12 @@ else:
 
 
 
-    proposal = st.session_state.get(
+    menu_proposal = st.session_state.get(
         "menu_proposal"
     )
 
 
-    if proposal is None:
+    if menu_proposal is None:
 
         st.info(
             "Önce JUDGE menü önerisi oluşturun."
@@ -731,11 +711,11 @@ else:
 
 
     st.caption(
-        proposal.overall_rationale
+        menu_proposal.overall_rationale
     )
 
 
-    for axis in proposal.axes:
+    for axis in menu_proposal.axes:
 
         with st.expander(
             f"{axis.axis_name} "
@@ -758,10 +738,10 @@ else:
 
 
 
-    if proposal.needs_clarification:
+    if menu_proposal.needs_clarification:
 
         st.warning(
-            proposal.clarification_question
+            menu_proposal.clarification_question
             or
             "Menü için ek açıklama gerekiyor."
         )
@@ -770,18 +750,24 @@ else:
 
 
 
-    if st.button(
-        "Spesifikasyon menüsünü dondur"
-    ):
+    proposed_active_axes = st.multiselect(
+        "Dondurmadan önce aktif eksenler",
+        options=list(ALL_AXES),
+        default=list(ALL_AXES),
+        help="Seçilen eksenler dondurulan menünün parçası olur.",
+    )
+
+    if st.button("Spesifikasyon menüsünü dondur"):
 
         try:
 
             st.session_state[
                 "frozen_spec_menu"
             ] = freeze_spec_menu(
-                proposal,
+                menu_proposal,
                 available_columns=columns,
                 approved=True,
+                active_axes=tuple(proposed_active_axes),
             )
 
 
@@ -827,24 +813,17 @@ if menu is None:
 
 
 
-active_axes = st.multiselect(
-    "Aktif eksenler",
-    options=list(ALL_AXES),
-    default=list(menu.active_axes),
-    help=(
-        "Seçilen eksenler faktöriyel genişlemeye dahil edilir."
-    ),
-)
-
-
-
-if active_axes:
-
-    menu = menu.model_copy(
-        update={
-            "active_axes": tuple(active_axes)
-        }
+if menu_source == "deterministic":
+    active_axes = st.multiselect(
+        "Aktif eksenler",
+        options=list(ALL_AXES),
+        default=list(menu.active_axes),
+        help="Seçilen eksenler faktöriyel genişlemeye dahil edilir.",
     )
+    if active_axes:
+        menu = menu.model_copy(update={"active_axes": tuple(active_axes)})
+else:
+    st.caption("LLM menüsünde aktif eksenler dondurma anında sabitlenir.")
 
 
 
@@ -892,6 +871,8 @@ try:
             or cluster_by
         ),
     )
+
+    validate_spec_menu_to_specs(frozen_menu, specs)
 
 
 

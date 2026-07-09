@@ -6,6 +6,7 @@ determinizm pinleri. Sırlar buraya YAZILMAZ; yalnız env/`st.secrets` üzerinde
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -42,6 +43,7 @@ class ParetoSettings:
 
     # --- Multiverse sınırları (sert tavan 24) ---
     max_specifications: int = 24  # aşımda uyar + logla, sessiz kırpma yok
+    default_weight_col: str = "population"
 
     # --- Determinizm (seed + BLAS/hash pin) ---
     seed: int = 20260704
@@ -56,56 +58,22 @@ class ParetoSettings:
 
 
 SETTINGS = ParetoSettings()
+logger = logging.getLogger(__name__)
 
 
-def _load_dotenv() -> None:
+def load_dotenv_file() -> None:
     """Repo kökündeki `.env` dosyasını yükle (Streamlit cwd'den bağımsız)."""
     try:
         from dotenv import load_dotenv
     except ImportError:
+        logger.debug("python-dotenv bulunamadı, .env yüklenmedi.")
         return
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     load_dotenv(os.path.join(root, ".env"))
 
-
-_load_dotenv()
-
 _API_KEY_ALIASES: dict[str, tuple[str, ...]] = {
     "GEMINI_API_KEY": ("GOOGLE_API_KEY",),
 }
-
-BYOK_GEMINI_WIDGET_KEY = "byok_gemini_input"
-
-
-def store_byok_key(env_name: str, value: str) -> None:
-    """Sidebar BYOK anahtarını session_state'e yazar."""
-    try:
-        import streamlit as st
-    except ImportError:
-        return
-    st.session_state.setdefault("byok_keys", {})[env_name] = value.strip()
-
-
-def _from_streamlit_session(candidates: tuple[str, ...]) -> str:
-    """BYOK oturum anahtarı (widget + byok_keys)."""
-    try:
-        import streamlit as st
-    except ImportError:
-        return ""
-
-    byok = st.session_state.get("byok_keys")
-    if isinstance(byok, dict):
-        for name in candidates:
-            key = str(byok.get(name, "")).strip()
-            if key:
-                return key
-
-    widget_val = str(st.session_state.get(BYOK_GEMINI_WIDGET_KEY, "")).strip()
-    if widget_val and "GEMINI_API_KEY" in candidates:
-        return widget_val
-
-    return ""
-
 
 def _from_env(candidates: tuple[str, ...]) -> str:
     for name in candidates:
@@ -126,36 +94,26 @@ def _from_secrets(candidates: tuple[str, ...]) -> str:
                 key = str(st.secrets[name]).strip()
                 if key:
                     return key
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("st.secrets okunamadı: %s", exc)
     return ""
 
 
-def get_api_key_source(provider_env: str) -> str:
-    """Anahtarın nereden geldiğini döndürür: byok | env | secrets."""
+def resolve_api_key(provider_env: str) -> tuple[str, str]:
+    """API anahtarını çöz ve kaynağı döndür: env | secrets | none."""
     candidates = (provider_env, *_API_KEY_ALIASES.get(provider_env, ()))
-    if _from_streamlit_session(candidates):
-        return "byok"
-    if _from_env(candidates):
-        return "env"
-    if _from_secrets(candidates):
-        return "secrets"
-    return "none"
+    env_key = _from_env(candidates)
+    if env_key:
+        return env_key, "env"
+    secret_key = _from_secrets(candidates)
+    if secret_key:
+        return secret_key, "secrets"
+    return "", "none"
 
 
 def get_api_key(provider_env: str) -> str:
-    """BYOK oturum öncelikli; yoksa `.env`; son çare `st.secrets`."""
-    candidates = (provider_env, *_API_KEY_ALIASES.get(provider_env, ()))
-
-    key = _from_streamlit_session(candidates)
-    if key:
-        return key
-
-    key = _from_env(candidates)
-    if key:
-        return key
-
-    key = _from_secrets(candidates)
+    """Önce env, yoksa st.secrets'dan API anahtarını döndür."""
+    key, _source = resolve_api_key(provider_env)
     if key:
         return key
 
@@ -165,3 +123,9 @@ def get_api_key(provider_env: str) -> str:
         f"  • proje kökünde `.env`: {provider_env}=...\n"
         f"  • terminal: `export {provider_env}=...` (Streamlit'i yeniden başlat)"
     )
+
+
+def get_api_key_source(provider_env: str) -> str:
+    """Anahtar kaynağını döndür: env | secrets | none."""
+    _key, source = resolve_api_key(provider_env)
+    return source
