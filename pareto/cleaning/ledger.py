@@ -29,6 +29,10 @@ class LedgerEntry(BaseModel):
     gerekce: str
     belirsizlik_bayragi: bool
     timestamp: str = ""
+    # İnsanın gatekeeper'daki kararı: "approved" | "modified" | "rejected" | None
+    # (None = henüz çözülmemiş / audit dışı ham JUDGE önerisi). persist_ledger
+    # bu alan sayesinde insan kararını da denetim izine yazabilir.
+    resolution: str | None = None
 
     @field_validator("transform_name")
     @classmethod

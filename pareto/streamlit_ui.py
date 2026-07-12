@@ -44,7 +44,9 @@ def render_byok_panel() -> None:
     with st.form("byok_form", clear_on_submit=False):
         st.text_input("Gemini API key", type="password", key=BYOK_WIDGET_KEYS["GEMINI_API_KEY"])
         st.text_input("Groq API key", type="password", key=BYOK_WIDGET_KEYS["GROQ_API_KEY"])
-        st.text_input("OpenRouter API key", type="password", key=BYOK_WIDGET_KEYS["OPENROUTER_API_KEY"])
+        st.text_input(
+            "OpenRouter API key", type="password", key=BYOK_WIDGET_KEYS["OPENROUTER_API_KEY"]
+        )
         saved = st.form_submit_button("Anahtarları kaydet", type="primary")
 
     if saved:
@@ -61,7 +63,9 @@ def render_byok_panel() -> None:
         else:
             st.warning("Kaydedilecek anahtar bulunamadı.")
 
-    if st.session_state.get("byok_keys") and st.button("Tüm BYOK anahtarlarını temizle", key="byok_clear_all"):
+    if st.session_state.get("byok_keys") and st.button(
+        "Tüm BYOK anahtarlarını temizle", key="byok_clear_all"
+    ):
         for env_name in BYOK_WIDGET_KEYS:
             os.environ.pop(env_name, None)
         st.session_state["byok_keys"] = {}
@@ -114,7 +118,9 @@ def _render_api_key_status(*, detailed: bool = False) -> None:
     for provider in providers:
         byok_value = str(byok_keys.get(provider, "")).strip() if isinstance(byok_keys, dict) else ""
         if byok_value:
-            st.caption(f"{provider}: **algılandı** ✓ — kaynak: **BYOK (oturum)** ({len(byok_value)} kar.)")
+            st.caption(
+                f"{provider}: **algılandı** ✓ — kaynak: **BYOK (oturum)** ({len(byok_value)} kar.)"
+            )
             continue
         try:
             key = get_api_key(provider)
@@ -127,8 +133,9 @@ def _render_api_key_status(*, detailed: bool = False) -> None:
                 st.warning(msg)
             else:
                 st.caption(msg)
-                
-def render_clean_panel(df_before: "pd.DataFrame", df_after: "pd.DataFrame", script: str) -> None:
+
+
+def render_clean_panel(df_before: pd.DataFrame, df_after: pd.DataFrame, script: str) -> None:
     """Uygulanan temizlik özeti: satır/kolon/eksik değişimi + üretilen script."""
     st.subheader("CleanPanel — uygulanan temizlik")
     c1, c2, c3 = st.columns(3)

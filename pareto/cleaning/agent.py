@@ -14,7 +14,7 @@ import json
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 from ..config import SETTINGS, ModelRole
 from ..llm.guardrails import sanitize_profile
@@ -44,23 +44,87 @@ def resolve(
 ) -> ResolvedDecision:
     """Belirsizlik bayrağı yoksa otomatik onay; varsa çağıran resolution vermeden ilerleyemez.
 
-    Gatekeeper burada: `belirsizlik_bayragi=True` ve `auto_approve=False` olan bir
-    kararda `resolution` sağlanmazsa fonksiyon fail-loud biçimde ValueError fırlatır.
-    UI katmanı (1_cleaning.py) bunu, kullanıcı APPROVED/MODIFIED/REJECTED seçip
+    Gatekeeper burada: `belirsizlik_bayragi=True` olan bir kararda `resolution`
+    verilmeden `auto_approve=True` ile çağrılırsa (default davranış) fonksiyon
+    fail-loud biçimde ValueError fırlatır — otomatik onay yalnız bayraksız
+    kararlar içindir. `resolution` açıkça verildiyse (auto_approve ne olursa
+    olsun) o resolution kullanılır; sessizce APPROVED'a düşülmez. UI katmanı
+    (1_cleaning.py) bunu, kullanıcı APPROVED/MODIFIED/REJECTED seçip
     "kaydet"e bastıktan sonra çağırır — yani karar tek yönlü ilerlemez.
     """
-    if not entry.belirsizlik_bayragi or auto_approve:
-        return ResolvedDecision(entry=entry, resolution=Resolution.APPROVED)
-
     if resolution is None:
+        if not entry.belirsizlik_bayragi:
+            return ResolvedDecision(entry=entry, resolution=Resolution.APPROVED)
+        if auto_approve:
+            raise ValueError(
+                "Bayraklı bir karar (belirsizlik_bayragi=True) resolution verilmeden "
+                "auto_approve=True ile otomatik onaylanamaz; otomatik onay yalnız "
+                "bayraksız kararlar içindir."
+            )
         raise ValueError(
             "Belirsiz karar (belirsizlik_bayragi=True) için resolution zorunlu: "
             "kullanıcı UI'da onayla/değiştir/reddet seçmeden ilerlenemez (gatekeeper)."
         )
-    if resolution == Resolution.MODIFIED and not modified_params:
+
+    if resolution == Resolution.MODIFIED and modified_params is None:
         raise ValueError("MODIFIED çözümü için modified_params gerekli.")
 
+    if resolution == Resolution.MODIFIED:
+        try:
+            TypeAdapter(TransformCall).validate_python(
+                {"transform_name": entry.transform_name, **modified_params}
+            )
+        except ValidationError as exc:
+            raise ValueError(f"Değiştirilmiş params vetted şemaya uymuyor: {exc}") from exc
+
     return ResolvedDecision(entry=entry, resolution=resolution, modified_params=modified_params)
+
+
+def entries_to_apply(
+    entries: list[LedgerEntry], resolutions: dict[int, ResolvedDecision]
+) -> list[LedgerEntry]:
+    """resolutions -> apply_ledger'ın beklediği düz LedgerEntry listesi.
+
+    REJECTED elenir, MODIFIED'de params güncellenir, APPROVED aynen geçer.
+    Streamlit'siz saf mantık olduğu için burada (agent.py) yaşar ve birim
+    testlerle doğrudan import edilebilir.
+    """
+    out: list[LedgerEntry] = []
+    for i, entry in enumerate(entries):
+        decision = resolutions.get(i)
+        if decision is None or decision.resolution == Resolution.REJECTED:
+            continue
+        if decision.resolution == Resolution.MODIFIED and decision.modified_params is not None:
+            out.append(entry.model_copy(update={"params": decision.modified_params}))
+        else:
+            out.append(entry)
+    return out
+
+
+def audit_entries(
+    entries: list[LedgerEntry], resolutions: dict[int, ResolvedDecision]
+) -> list[LedgerEntry]:
+    """persist_ledger için TÜM kararları (REJECTED dahil) resolution bilgisiyle döner.
+
+    `entries_to_apply`'dan farkı: hiçbir karar elenmez. Her `LedgerEntry`,
+    insanın verdiği kararla (`resolution="approved"|"modified"|"rejected"`)
+    damgalanır; MODIFIED kararlarda `params` kullanıcının girdiği yeni değerlerle
+    güncellenir, REJECTED kararlarda JUDGE'ın orijinal önerisi (params dahil)
+    olduğu gibi korunur. Böylece diske yazılan denetim izi, gerçekte uygulanan
+    `entries_to_apply` çıktısıyla asla çelişmez — insan kararı da audit trail'in
+    parçası olur.
+    """
+    out: list[LedgerEntry] = []
+    for i, entry in enumerate(entries):
+        decision = resolutions.get(i)
+        if decision is None:
+            out.append(entry.model_copy(update={"resolution": None}))
+            continue
+        update: dict[str, Any] = {"resolution": decision.resolution.value}
+        if decision.resolution == Resolution.MODIFIED and decision.modified_params is not None:
+            update["params"] = decision.modified_params
+        out.append(entry.model_copy(update=update))
+    return out
 
 
 # --------------------------------------------------------------------------- #
