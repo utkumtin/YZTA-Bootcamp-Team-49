@@ -159,6 +159,24 @@ def test_diagnose_axes_significance_requires_confidence_interval_for_comparison(
     assert estimator_pairs["significance_flip_rate"] is None
 
 
+def test_diagnose_axes_counts_significance_flip_when_ci_status_changes():
+    specs = [
+        _spec("a", estimator="OLS"),
+        _spec("b", estimator="TWFE"),
+    ]
+    results = [
+        _r("a", 1.0, 0.5, 1.5),
+        _r("b", 1.0, -0.2, 2.2),
+    ]
+
+    out = diagnose_axes(results, specs)
+    estimator_pairs = out["matched_pairs"]["estimator"]
+
+    assert estimator_pairs["significance_comparable_pairs"] == 1
+    assert estimator_pairs["significance_flip_count"] == 1
+    assert estimator_pairs["significance_flip_rate"] == 1.0
+
+
 def test_diagnose_axes_counts_only_pairs_with_one_axis_different():
     specs = [
         _spec("base", estimator="OLS"),
