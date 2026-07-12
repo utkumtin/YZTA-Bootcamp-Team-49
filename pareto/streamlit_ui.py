@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 
+import pandas as pd
 import streamlit as st
 
 from .config import get_api_key, get_api_key_source
@@ -126,3 +127,18 @@ def _render_api_key_status(*, detailed: bool = False) -> None:
                 st.warning(msg)
             else:
                 st.caption(msg)
+                
+def render_clean_panel(df_before: "pd.DataFrame", df_after: "pd.DataFrame", script: str) -> None:
+    """Uygulanan temizlik özeti: satır/kolon/eksik değişimi + üretilen script."""
+    st.subheader("CleanPanel — uygulanan temizlik")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("Satır", df_after.shape[0], delta=df_after.shape[0] - df_before.shape[0])
+    with c2:
+        st.metric("Kolon", df_after.shape[1], delta=df_after.shape[1] - df_before.shape[1])
+    with c3:
+        missing_before = int(df_before.isna().sum().sum())
+        missing_after = int(df_after.isna().sum().sum())
+        st.metric("Toplam eksik", missing_after, delta=missing_after - missing_before)
+    with st.expander("Üretilen script (reprodüksiyon)", expanded=False):
+        st.code(script, language="python")

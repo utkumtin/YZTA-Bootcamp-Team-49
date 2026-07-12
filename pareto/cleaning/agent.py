@@ -35,11 +35,32 @@ class ResolvedDecision(BaseModel):
     modified_params: dict | None = None
 
 
-def resolve(entry: LedgerEntry, *, auto_approve: bool = True) -> ResolvedDecision:
-    """Belirsizlik bayrağı yoksa otomatik onay; varsa UI kapısına bırakılır (Sprint-2)."""
-    if entry.belirsizlik_bayragi and not auto_approve:
-        raise NotImplementedError("Belirsiz kararlar için gatekeeper UI Sprint-2 (bkz docs/scrum).")
-    return ResolvedDecision(entry=entry, resolution=Resolution.APPROVED)
+def resolve(
+    entry: LedgerEntry,
+    *,
+    auto_approve: bool = True,
+    resolution: Resolution | None = None,
+    modified_params: dict | None = None,
+) -> ResolvedDecision:
+    """Belirsizlik bayrağı yoksa otomatik onay; varsa çağıran resolution vermeden ilerleyemez.
+
+    Gatekeeper burada: `belirsizlik_bayragi=True` ve `auto_approve=False` olan bir
+    kararda `resolution` sağlanmazsa fonksiyon fail-loud biçimde ValueError fırlatır.
+    UI katmanı (1_cleaning.py) bunu, kullanıcı APPROVED/MODIFIED/REJECTED seçip
+    "kaydet"e bastıktan sonra çağırır — yani karar tek yönlü ilerlemez.
+    """
+    if not entry.belirsizlik_bayragi or auto_approve:
+        return ResolvedDecision(entry=entry, resolution=Resolution.APPROVED)
+
+    if resolution is None:
+        raise ValueError(
+            "Belirsiz karar (belirsizlik_bayragi=True) için resolution zorunlu: "
+            "kullanıcı UI'da onayla/değiştir/reddet seçmeden ilerlenemez (gatekeeper)."
+        )
+    if resolution == Resolution.MODIFIED and not modified_params:
+        raise ValueError("MODIFIED çözümü için modified_params gerekli.")
+
+    return ResolvedDecision(entry=entry, resolution=resolution, modified_params=modified_params)
 
 
 # --------------------------------------------------------------------------- #
