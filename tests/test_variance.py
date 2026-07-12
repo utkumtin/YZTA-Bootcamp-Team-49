@@ -1,4 +1,5 @@
-from pareto.analysis.variance import Band, diagnose_axes, summarize
+from pareto.analysis.menu import ALL_AXES
+from pareto.analysis.variance import AXES, Band, diagnose_axes, summarize
 from pareto.contracts import EstimationResult
 from pareto.spec import Specification
 
@@ -9,6 +10,7 @@ def _r(
     ci_low: float | None = None,
     ci_high: float | None = None,
     *,
+    p_value: float = 0.01,
     status: str = "ok",
 ) -> EstimationResult:
     return EstimationResult(
@@ -17,7 +19,7 @@ def _r(
         coefficient=coef,
         ci_low=ci_low,
         ci_high=ci_high,
-        p_value=0.01,
+        p_value=p_value,
         status=status,
     )
 
@@ -43,6 +45,10 @@ def test_failed_specs_excluded_from_summary():
     failed = [EstimationResult(spec_id="b", estimator="OLS", status="failed", error="singular")]
     s = summarize(ok + failed)
     assert s["n_ok"] == 1 and s["n_failed"] == 1
+
+
+def test_variance_axes_are_sourced_from_menu_axes():
+    assert AXES == tuple(str(axis) for axis in ALL_AXES)
 
 
 def _spec(
@@ -135,6 +141,24 @@ def test_diagnose_axes_sign_flip_rate_none_when_no_sign_comparable_pairs():
     assert estimator_pairs["sign_flip_rate"] is None
 
 
+def test_diagnose_axes_significance_requires_confidence_interval_for_comparison():
+    specs = [
+        _spec("a", estimator="OLS"),
+        _spec("b", estimator="TWFE"),
+    ]
+    results = [
+        _r("a", 1.0, p_value=0.001),
+        _r("b", 2.0, p_value=0.9),
+    ]
+
+    out = diagnose_axes(results, specs)
+    estimator_pairs = out["matched_pairs"]["estimator"]
+
+    assert estimator_pairs["significance_comparable_pairs"] == 0
+    assert estimator_pairs["significance_flip_count"] == 0
+    assert estimator_pairs["significance_flip_rate"] is None
+
+
 def test_diagnose_axes_counts_only_pairs_with_one_axis_different():
     specs = [
         _spec("base", estimator="OLS"),
@@ -225,6 +249,16 @@ def test_diagnose_axes_anova_partial_r2_is_none_for_single_level_axis():
     out = diagnose_axes(results, specs)
 
     assert out["anova_partial_r2"]["estimator"] is None
+
+
+def test_diagnose_axes_anova_warns_when_no_axis_varies():
+    specs = [_spec(f"s{i}") for i in range(3)]
+    results = [_r("s0", 1.0), _r("s1", 1.1), _r("s2", 0.9)]
+
+    out = diagnose_axes(results, specs)
+
+    assert all(value is None for value in out["anova_partial_r2"].values())
+    assert "ANOVA partial-R² için eksen varyasyonu yok." in out["warnings"]
 
 
 def test_diagnose_axes_excludes_unmatched_spec_id_with_warning():

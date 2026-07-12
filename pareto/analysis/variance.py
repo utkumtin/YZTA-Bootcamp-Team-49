@@ -11,12 +11,15 @@ ayrı dikişlerdir (aşağıda; Sprint-2). LLM narrative açıklama YAPAR, ölç
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from enum import StrEnum
 from typing import Any
 
 import numpy as np
 
 from ..contracts import EstimationResult
+from ..spec import Specification
+from .menu import ALL_AXES
 
 
 class Band(StrEnum):
@@ -29,6 +32,7 @@ class Band(StrEnum):
 SIGN_ROBUST = 0.95
 SIG_ROBUST = 0.70
 SIGN_FRAGILE = 0.90
+ALPHA = 0.05
 
 
 class VarianceSummary(dict):
@@ -98,28 +102,20 @@ ROBUST_RULE_TEXT = (
 )
 
 
-AXES: tuple[str, ...] = (
-    "control_set",
-    "sample",
-    "pre_period",
-    "clustering",
-    "never_treated",
-    "estimator",
-    "weighting",
-)
+AXES: tuple[str, ...] = tuple(str(axis) for axis in ALL_AXES)
 
 _RSS_EPS = 1e-12
 
 
-def _axis_values(spec: Any) -> dict[str, Any]:
+def _axis_values(spec: Specification) -> dict[str, Any]:
     return {
-        "control_set": tuple(getattr(spec, "controls", ()) or ()),
-        "sample": getattr(spec, "sample_filter", None),
-        "pre_period": getattr(spec, "pre_period_window", None),
-        "clustering": getattr(spec, "cluster_by", None),
-        "never_treated": getattr(spec, "include_never_treated", None),
-        "estimator": getattr(spec, "estimator", None),
-        "weighting": getattr(spec, "weight_col", None),
+        "control_set": tuple(spec.controls),
+        "sample": spec.sample_filter,
+        "pre_period": spec.pre_period_window,
+        "clustering": spec.cluster_by,
+        "never_treated": spec.include_never_treated,
+        "estimator": spec.estimator,
+        "weighting": spec.weight_col,
     }
 
 
@@ -140,10 +136,9 @@ def _level_key(value: Any) -> str:
 
 
 def _is_significant(result: EstimationResult) -> bool | None:
+    """CI-based significance, aligned with summarize()."""
     if result.ci_low is not None and result.ci_high is not None:
         return result.ci_low > 0 or result.ci_high < 0
-    if result.p_value is not None:
-        return result.p_value < 0.05
     return None
 
 
@@ -204,18 +199,17 @@ def _matched_pairs(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
             "sign_flip_rate": round(sign_flips / sign_comparable, 6)
             if sign_comparable
             else None,
+            "significance_comparable_pairs": sig_comparable,
+            "significance_flip_count": sig_flips,
+            "significance_flip_rate": round(sig_flips / sig_comparable, 6)
+            if sig_comparable
+            else None,
         }
-        if sig_comparable:
-            axis_out["significance_flip_count"] = sig_flips
-            axis_out["significance_flip_rate"] = round(sig_flips / sig_comparable, 6)
-        else:
-            axis_out["significance_flip_count"] = None
-            axis_out["significance_flip_rate"] = None
         out[axis] = axis_out
     return out
 
 
-def _design_matrix(rows: list[dict[str, Any]], axes: tuple[str, ...]) -> np.ndarray | None:
+def _design_matrix(rows: list[dict[str, Any]], axes: tuple[str, ...]) -> np.ndarray:
     columns: list[np.ndarray] = [np.ones(len(rows))]
     for axis in axes:
         levels = sorted({_level_key(row["axes"][axis]) for row in rows})
@@ -228,8 +222,6 @@ def _design_matrix(rows: list[dict[str, Any]], axes: tuple[str, ...]) -> np.ndar
                     dtype=float,
                 )
             )
-    if not columns:
-        return None
     return np.column_stack(columns)
 
 
@@ -251,17 +243,21 @@ def _anova_partial_r2(rows: list[dict[str, Any]]) -> tuple[dict[str, float | Non
     if len(rows) < 3:
         return {axis: None for axis in AXES}, ["ANOVA partial-R² için yeterli gözlem yok."]
 
+    has_axis_variation = any(
+        len({_level_key(row["axes"][axis]) for row in rows}) > 1 for axis in AXES
+    )
+    if not has_axis_variation:
+        return {axis: None for axis in AXES}, ["ANOVA partial-R² için eksen varyasyonu yok."]
+
     y = np.array([row["coefficient"] for row in rows], dtype=float)
     full_x = _design_matrix(rows, AXES)
-    if full_x is None:
-        return {axis: None for axis in AXES}, ["ANOVA partial-R² için eksen varyasyonu yok."]
 
     full_rss = _rss(y, full_x)
     if full_rss is None:
         return {axis: None for axis in AXES}, ["ANOVA partial-R² için model derecesi yetersiz."]
 
     for axis in AXES:
-        levels = {row["axes"][axis] for row in rows}
+        levels = {_level_key(row["axes"][axis]) for row in rows}
         if len(levels) <= 1:
             out[axis] = None
             warnings.append(f"{axis}: tek seviyeli eksen; partial-R² hesaplanmadı.")
@@ -269,10 +265,6 @@ def _anova_partial_r2(rows: list[dict[str, Any]]) -> tuple[dict[str, float | Non
 
         reduced_axes = tuple(name for name in AXES if name != axis)
         reduced_x = _design_matrix(rows, reduced_axes)
-        if reduced_x is None:
-            out[axis] = None
-            warnings.append(f"{axis}: reduced model kurulamadı.")
-            continue
 
         reduced_rss = _rss(y, reduced_x)
         if reduced_rss is None or abs(reduced_rss) <= _RSS_EPS:
@@ -286,14 +278,14 @@ def _anova_partial_r2(rows: list[dict[str, Any]]) -> tuple[dict[str, float | Non
     return out, warnings
 
 
-def diagnose_axes(results: list[EstimationResult], specs) -> dict:  # noqa: ANN001
+def diagnose_axes(results: list[EstimationResult], specs: Sequence[Specification]) -> dict:
     """Matched-pair (ceteris-paribus) + ANOVA partial-R² atıf teşhisi.
 
     SPRINT-2: hangi eksenin işaret/anlamlılık dönüşünü sürüklediğini korelasyonla
     DEĞİL, faktöriyel içinde tek-eksen-değişen çiftlerle atfeder. Bkz docs/scrum.
     """
     warnings: list[str] = []
-    specs_by_id = {getattr(spec, "spec_id", None): spec for spec in specs}
+    specs_by_id = {spec.spec_id: spec for spec in specs}
     rows: list[dict[str, Any]] = []
     n_failed = 0
     n_missing_coefficient = 0
