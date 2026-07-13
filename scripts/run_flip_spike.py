@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import platform
+import subprocess
 import sys
 from collections import Counter
 from collections.abc import Iterable, Sequence
@@ -19,6 +21,8 @@ import pandas as pd
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+# Keep direct execution stable from any current working directory:
+# `.venv/bin/python scripts/run_flip_spike.py` is not installed as a package entry point.
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -31,6 +35,15 @@ from pareto.spec import SUPPORTED_ESTIMATORS, Specification  # noqa: E402
 
 DATASETS = ("divorce", "castle")
 TREATMENT_DUMMY_LOGICAL_NAMES = ("post", "treated")
+GENERATION_COMMAND = (
+    ".venv/bin/python scripts/run_flip_spike.py --dataset all "
+    "--out docs/spikes/s2-15-flip-spike.md"
+)
+ESTIMATOR_FE_AXIS_NOTE = (
+    "estimator axis here compares pooled OLS (no fixed effects) with TWFE "
+    "(unit and time fixed effects), so observed flips may reflect fixed-effect "
+    "inclusion as well as estimator choice."
+)
 
 
 def _require_key(mapping: dict[str, Any], key: str, context: str) -> Any:
@@ -147,10 +160,14 @@ def load_dataset_frame(
 
 
 def build_spike_specs(dataset: str, config: dict[str, Any]) -> list[Specification]:
+    """Build the fixed S2-15 matrix supported by the committed estimators."""
     control_levels = ((), config["controls"])
     weight_levels = (None, config["weight_col"])
     specs: list[Specification] = []
 
+    # Sample, pre-period, and never-treated axes are intentionally excluded:
+    # current OLS/TWFE estimators do not apply them, so varying them would only
+    # create decorative specs rather than real estimator behavior.
     for controls in control_levels:
         for weight_col in weight_levels:
             for estimator in SUPPORTED_ESTIMATORS:
@@ -161,6 +178,8 @@ def build_spike_specs(dataset: str, config: dict[str, Any]) -> list[Specificatio
                         outcome=config["outcome"],
                         treatment=config["treatment"],
                         controls=tuple(controls),
+                        # In this spike, the estimator axis also changes FE inclusion:
+                        # OLS is pooled; TWFE adds unit and time fixed effects.
                         unit_fe=config["unit_col"] if estimator == "TWFE" else None,
                         time_fe=config["time_col"] if estimator == "TWFE" else None,
                         cluster_by=config["cluster_by"],
@@ -214,18 +233,6 @@ def _failed_specs(results: Sequence[EstimationResult]) -> list[dict[str, Any]]:
 def _failure_reasons(results: Sequence[EstimationResult]) -> dict[str, int]:
     counter = Counter(result.error or "unknown" for result in results if result.status != "ok")
     return dict(sorted(counter.items()))
-
-
-def _coefficient_range(results: Sequence[EstimationResult]) -> dict[str, float | None]:
-    coefs = [
-        float(result.coefficient)
-        for result in results
-        if result.status == "ok" and result.coefficient is not None
-    ]
-    return {
-        "min": round(min(coefs), 6) if coefs else None,
-        "max": round(max(coefs), 6) if coefs else None,
-    }
 
 
 def _descriptive_dominant_sign_axis(
@@ -287,16 +294,16 @@ def _dataset_decision(
     elif sign_flips > 0 and dominant_sign_axis is not None:
         status = "GO"
         if dominant_sign_axis == "estimator":
-            reason = "readable estimator-dominant sign fragility"
+            reason = "readable estimator/FE-inclusion-dominant sign fragility"
         elif estimator_sign_flips > 0:
             reason = (
                 f"readable axis fragility; {dominant_sign_axis} is dominant, "
-                "with estimator flips also observed"
+                "and changes on the estimator/FE-inclusion axis were also observed"
             )
         else:
             reason = (
                 f"readable axis fragility; {dominant_sign_axis} is dominant "
-                "and no estimator flip was observed"
+                "and no estimator/FE-inclusion change was observed"
             )
     else:
         status = "NO-GO"
@@ -370,7 +377,10 @@ def dataset_report(
             "n_total": len(results),
             "n_ok": summary["n_ok"],
             "n_failed": summary["n_failed"],
-            "coefficient_range": _coefficient_range(results),
+            "coefficient_range": {
+                "min": summary["point_min"],
+                "max": summary["point_max"],
+            },
             "summary": dict(summary),
             "axis_diagnosis": diagnosis,
             "failed_specs": _failed_specs(results),
@@ -381,17 +391,24 @@ def dataset_report(
 
 
 def _overall_decision(dataset_reports: Sequence[dict[str, Any]]) -> dict[str, str]:
-    dataset_names = _format_dataset_names(report["dataset"] for report in dataset_reports)
     statuses = [report["decision"]["status"] for report in dataset_reports]
     if "INCONCLUSIVE" in statuses:
+        # INCONCLUSIVE wins because one unresolved dataset is enough to make the
+        # product decision incomplete, even if another dataset already has a GO.
+        inconclusive_names = _format_dataset_names(
+            report["dataset"]
+            for report in dataset_reports
+            if report["decision"]["status"] == "INCONCLUSIVE"
+        )
         return {
             "status": "INCONCLUSIVE",
             "reason": (
-                f"at least one analyzed dataset ({dataset_names}) lacks enough "
-                "successful comparable results"
+                f"inconclusive dataset(s): {inconclusive_names} lack enough successful "
+                "comparable results"
             ),
         }
     if "GO" in statuses:
+        dataset_names = _format_dataset_names(report["dataset"] for report in dataset_reports)
         return {
             "status": "GO",
             "reason": (
@@ -402,7 +419,8 @@ def _overall_decision(dataset_reports: Sequence[dict[str, Any]]) -> dict[str, st
     return {
         "status": "NO-GO",
         "reason": (
-            f"no readable sign flip in analyzed dataset(s): {dataset_names}; "
+            "no readable sign flip in analyzed dataset(s): "
+            f"{_format_dataset_names(report['dataset'] for report in dataset_reports)}; "
             "backstop axis expansion required"
         ),
     }
@@ -430,6 +448,41 @@ def _spec_count_summary(dataset_reports: Sequence[dict[str, Any]]) -> dict[str, 
     }
 
 
+def _source_commit(repo_root: Path = REPO_ROOT) -> str:
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+    return completed.stdout.strip() or "unknown"
+
+
+def _platform_name() -> str:
+    system = platform.system()
+    return "macOS" if system == "Darwin" else system or "unknown"
+
+
+def _report_provenance(repo_root: Path = REPO_ROOT) -> dict[str, str]:
+    # No timestamp here: the committed spike report should be reproducible byte-for-byte
+    # when code, data, and commit are unchanged.
+    source_commit = _source_commit(repo_root=repo_root)
+    return {
+        "generation_command": GENERATION_COMMAND,
+        "source_commit": source_commit,
+        "python": platform.python_version(),
+        "platform": _platform_name(),
+        "analysis_core": (
+            "pareto.analysis.variance.summarize and diagnose_axes at source commit "
+            f"{source_commit}"
+        ),
+    }
+
+
 def run_dataset(dataset: str, *, dry_run: bool, repo_root: Path = REPO_ROOT) -> dict[str, Any]:
     config = analysis_config(dataset, repo_root=repo_root)
     df = load_dataset_frame(dataset, config, repo_root=repo_root)
@@ -444,6 +497,7 @@ def run_spike(dataset: str, *, dry_run: bool, repo_root: Path = REPO_ROOT) -> di
     report = {
         "spike": "S2-15 Flip spike",
         "dry_run": dry_run,
+        "provenance": _report_provenance(repo_root=repo_root),
         "spec_matrix": {
             "controls": ["none", "configured control set"],
             "weighting": ["unweighted", "configured weight column"],
@@ -456,7 +510,7 @@ def run_spike(dataset: str, *, dry_run: bool, repo_root: Path = REPO_ROOT) -> di
             "positive-negative sign flip with readable axis attribution.",
             "GO validates readable axis fragility in the current axis set; it does "
             "not by itself validate a canonical estimator-only or staggered-estimator story.",
-            "NO-GO: successful comparable results exist for both datasets, but neither "
+            "NO-GO: all analyzed datasets have successful comparable results, but none "
             "has a readable sign flip; backstop axis expansion required.",
             "INCONCLUSIVE: estimator/spec failures or no sign-comparable matched pairs "
             "prevent a reliable product decision.",
@@ -471,6 +525,7 @@ def run_spike(dataset: str, *, dry_run: bool, repo_root: Path = REPO_ROOT) -> di
             "canonical staggered estimators are not supported in the committed core; "
             "only OLS and TWFE are run",
         ],
+        "interpretation_notes": [ESTIMATOR_FE_AXIS_NOTE],
         "datasets": reports,
     }
     report["overall_decision"] = _overall_decision(reports)
@@ -481,6 +536,11 @@ def _format_rate(value: Any) -> str:
     if value is None:
         return "-"
     return f"{value:.3f}" if isinstance(value, float) else str(value)
+
+
+def _format_optional(value: Any) -> str:
+    # Dry-run reports intentionally hide raw Python None values from the Markdown.
+    return "-" if value is None else str(value)
 
 
 def render_markdown(report: dict[str, Any]) -> str:
@@ -494,8 +554,22 @@ def render_markdown(report: dict[str, Any]) -> str:
         )
         spec_count_line = f"- Specs per dataset: {formatted_counts}"
 
+    provenance = report["provenance"]
     lines = [
         "# S2-15 Flip Spike",
+        "",
+        "## Provenance",
+        "",
+        "Generated with:",
+        "",
+        "```bash",
+        provenance["generation_command"],
+        "```",
+        "",
+        f"- Source commit: {provenance['source_commit']}",
+        f"- Python: {provenance['python']}",
+        f"- Platform: {provenance['platform']}",
+        f"- Analysis core: {provenance['analysis_core']}",
         "",
         "## Spec Matrix",
         "",
@@ -509,6 +583,8 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
     ]
     lines.extend(f"- {rule}" for rule in report["decision_rules"])
+    lines.extend(["", "## Interpretation Note", ""])
+    lines.extend(f"- {note}" for note in report.get("interpretation_notes", []))
     lines.extend(["", "## Limitations", ""])
     lines.extend(f"- {limitation}" for limitation in report["limitations"])
     lines.extend(
@@ -532,16 +608,17 @@ def render_markdown(report: dict[str, Any]) -> str:
                 f"- Decision: **{decision['status']}** - {decision['reason']}",
                 f"- Data: `{dataset['data_path']}`",
                 f"- Specs: {dataset['spec_count']}",
-                f"- Successful specs: {dataset['n_ok']}",
-                f"- Failed specs: {dataset['n_failed']}",
-                f"- Band: {summary.get('band')}",
+                f"- Successful specs: {_format_optional(dataset['n_ok'])}",
+                f"- Failed specs: {_format_optional(dataset['n_failed'])}",
+                f"- Band: {_format_optional(summary.get('band'))}",
                 f"- Sign agreement: {_format_rate(summary.get('sign_agreement'))}",
                 "- Coefficient range: "
-                f"{dataset['coefficient_range']['min']} to "
-                f"{dataset['coefficient_range']['max']}",
+                f"{_format_optional(dataset['coefficient_range']['min'])} to "
+                f"{_format_optional(dataset['coefficient_range']['max'])}",
                 "- Descriptive dominant sign axis: "
-                f"{decision['descriptive_dominant_sign_axis']}",
-                f"- Dominant partial-R2 axis: {decision['dominant_partial_r2_axis']}",
+                f"{_format_optional(decision['descriptive_dominant_sign_axis'])}",
+                "- Dominant partial-R2 axis: "
+                f"{_format_optional(decision['dominant_partial_r2_axis'])}",
                 "",
                 "### Matched-Pair Axis Attribution",
                 "",
@@ -575,14 +652,14 @@ def render_markdown(report: dict[str, Any]) -> str:
                     f"- {failure['spec_id']} ({failure['estimator']}): {failure['error']}"
                 )
         else:
-            lines.extend(["", "### Failed Specs", "", "- None"])
+            lines.extend(["", "### Failed Specs", "", "- No failed specs."])
 
         lines.extend(["", "### Spec List", ""])
         for spec in dataset["specs"]:
             lines.append(
                 "- "
                 f"{spec['spec_id']}: estimator={spec['estimator']}, "
-                f"controls={spec['controls']}, weight={spec['weight_col']}"
+                f"controls={spec['controls']}, weight={_format_optional(spec['weight_col'])}"
             )
         lines.append("")
 

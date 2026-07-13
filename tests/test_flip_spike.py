@@ -2,10 +2,12 @@ import json
 
 import pytest
 
+import scripts.run_flip_spike as flip_spike
 from pareto.config import SETTINGS
 from pareto.contracts import EstimationResult
 from pareto.spec import SUPPORTED_ESTIMATORS, Specification
 from scripts.run_flip_spike import (
+    ESTIMATOR_FE_AXIS_NOTE,
     _dataset_decision,
     _overall_decision,
     _spec_count_summary,
@@ -16,6 +18,21 @@ from scripts.run_flip_spike import (
     required_columns,
     validate_required_columns,
 )
+
+
+def _provenance() -> dict[str, str]:
+    return {
+        "generation_command": (
+            ".venv/bin/python scripts/run_flip_spike.py --dataset all "
+            "--out docs/spikes/s2-15-flip-spike.md"
+        ),
+        "source_commit": "abc1234",
+        "python": "3.11.7",
+        "platform": "macOS",
+        "analysis_core": (
+            "pareto.analysis.variance.summarize and diagnose_axes at source commit abc1234"
+        ),
+    }
 
 
 def _result(
@@ -145,6 +162,39 @@ def test_flip_spike_dataset_report_requires_results_when_not_dry_run():
         dataset_report("castle", config, specs, results=None, dry_run=False)
 
 
+def test_flip_spike_coefficient_range_comes_from_summarize(monkeypatch):
+    config = analysis_config("castle")
+    specs = build_spike_specs("castle", config)
+
+    def fake_summarize(results):
+        return {
+            "n_total": len(results),
+            "n_ok": 1,
+            "n_failed": 0,
+            "point_min": -7.5,
+            "point_max": 8.5,
+            "sign_agreement": 1.0,
+            "band": "stable",
+        }
+
+    monkeypatch.setattr(flip_spike, "summarize", fake_summarize)
+    monkeypatch.setattr(
+        flip_spike,
+        "diagnose_axes",
+        lambda _results, _specs: _diagnosis(comparable_pairs=0),
+    )
+
+    report = dataset_report(
+        "castle",
+        config,
+        specs,
+        results=[_result(coefficient=99.0)],
+        dry_run=False,
+    )
+
+    assert report["coefficient_range"] == {"min": -7.5, "max": 8.5}
+
+
 def test_flip_spike_missing_required_columns_error_is_clear():
     config = analysis_config("divorce")
     columns = set(required_columns(config))
@@ -192,8 +242,8 @@ def test_flip_spike_dataset_decision_reports_estimator_flips_when_not_dominant()
 
     assert decision["status"] == "GO"
     assert decision["descriptive_dominant_sign_axis"] == "control_set"
-    assert "with estimator flips also observed" in decision["reason"]
-    assert "not estimator flip" not in decision["reason"]
+    assert "estimator/FE-inclusion axis were also observed" in decision["reason"]
+    assert "no estimator/FE-inclusion change was observed" not in decision["reason"]
 
 
 def test_flip_spike_dataset_decision_reports_no_estimator_flip_when_absent():
@@ -201,7 +251,15 @@ def test_flip_spike_dataset_decision_reports_no_estimator_flip_when_absent():
 
     assert decision["status"] == "GO"
     assert decision["descriptive_dominant_sign_axis"] == "control_set"
-    assert "no estimator flip was observed" in decision["reason"]
+    assert "no estimator/FE-inclusion change was observed" in decision["reason"]
+
+
+def test_flip_spike_dataset_decision_reports_estimator_dominant_branch():
+    decision = _dataset_decision([_result()], _diagnosis(control_flips=1, estimator_flips=2))
+
+    assert decision["status"] == "GO"
+    assert decision["descriptive_dominant_sign_axis"] == "estimator"
+    assert "readable estimator/FE-inclusion-dominant sign fragility" in decision["reason"]
 
 
 def test_flip_spike_overall_decision_prioritizes_inconclusive():
@@ -213,6 +271,34 @@ def test_flip_spike_overall_decision_prioritizes_inconclusive():
     decision = _overall_decision(reports)
 
     assert decision["status"] == "INCONCLUSIVE"
+    assert "castle" in decision["reason"]
+    assert "divorce" not in decision["reason"]
+
+
+def test_flip_spike_overall_inconclusive_reason_only_names_divorce_when_needed():
+    reports = [
+        {"dataset": "divorce", "decision": {"status": "INCONCLUSIVE"}},
+        {"dataset": "castle", "decision": {"status": "GO"}},
+    ]
+
+    decision = _overall_decision(reports)
+
+    assert decision["status"] == "INCONCLUSIVE"
+    assert "divorce" in decision["reason"]
+    assert "castle" not in decision["reason"]
+
+
+def test_flip_spike_overall_inconclusive_reason_names_both_when_needed():
+    reports = [
+        {"dataset": "divorce", "decision": {"status": "INCONCLUSIVE"}},
+        {"dataset": "castle", "decision": {"status": "INCONCLUSIVE"}},
+    ]
+
+    decision = _overall_decision(reports)
+
+    assert decision["status"] == "INCONCLUSIVE"
+    assert "divorce" in decision["reason"]
+    assert "castle" in decision["reason"]
 
 
 def test_flip_spike_overall_decision_go_when_all_conclusive_and_any_go():
@@ -277,12 +363,14 @@ def test_flip_spike_spec_count_summary_is_derived_from_dataset_reports():
 def test_flip_spike_markdown_uses_report_spec_counts():
     markdown = render_markdown(
         {
+            "provenance": _provenance(),
             "spec_matrix": {
                 "estimators": ["OLS", "TWFE"],
                 "specs_per_dataset": None,
                 "spec_counts_by_dataset": {"divorce": 3, "castle": 5},
             },
             "decision_rules": [],
+            "interpretation_notes": [],
             "limitations": [],
             "overall_decision": {"status": "INCONCLUSIVE", "reason": "test"},
             "datasets": [],
@@ -292,9 +380,109 @@ def test_flip_spike_markdown_uses_report_spec_counts():
     assert "- Specs per dataset: divorce=3; castle=5" in markdown
 
 
+def test_flip_spike_markdown_includes_deterministic_provenance():
+    markdown = render_markdown(
+        {
+            "provenance": _provenance(),
+            "spec_matrix": {
+                "estimators": ["OLS", "TWFE"],
+                "specs_per_dataset": 2,
+                "spec_counts_by_dataset": {"test": 2},
+            },
+            "decision_rules": [],
+            "interpretation_notes": [],
+            "limitations": [],
+            "overall_decision": {"status": "INCONCLUSIVE", "reason": "test"},
+            "datasets": [],
+        }
+    )
+
+    assert "## Provenance" in markdown
+    assert _provenance()["generation_command"] in markdown
+    assert "Source commit:" in markdown
+    assert "pareto.analysis.variance.summarize and diagnose_axes" in markdown
+    assert "source commit abc1234" in markdown
+    assert "timestamp" not in markdown.lower()
+
+
+def test_flip_spike_markdown_documents_estimator_fe_axis_semantics():
+    markdown = render_markdown(
+        {
+            "provenance": _provenance(),
+            "spec_matrix": {
+                "estimators": ["OLS", "TWFE"],
+                "specs_per_dataset": 2,
+                "spec_counts_by_dataset": {"test": 2},
+            },
+            "decision_rules": [],
+            "interpretation_notes": [ESTIMATOR_FE_AXIS_NOTE],
+            "limitations": [],
+            "overall_decision": {"status": "INCONCLUSIVE", "reason": "test"},
+            "datasets": [],
+        }
+    )
+
+    assert "pooled OLS (no fixed effects)" in markdown
+    assert "TWFE (unit and time fixed effects)" in markdown
+    assert markdown.count(ESTIMATOR_FE_AXIS_NOTE) == 1
+    assert "## Interpretation Note" in markdown
+
+
+def test_flip_spike_markdown_no_go_rule_is_dataset_count_independent():
+    markdown = render_markdown(
+        {
+            "provenance": _provenance(),
+            "spec_matrix": {
+                "estimators": ["OLS", "TWFE"],
+                "specs_per_dataset": 2,
+                "spec_counts_by_dataset": {"test": 2},
+            },
+            "decision_rules": [
+                "NO-GO: all analyzed datasets have successful comparable results, "
+                "but none has a readable sign flip; backstop axis expansion required."
+            ],
+            "interpretation_notes": [],
+            "limitations": [],
+            "overall_decision": {"status": "INCONCLUSIVE", "reason": "test"},
+            "datasets": [],
+        }
+    )
+
+    assert "all analyzed datasets have successful comparable results" in markdown
+    assert "both datasets" not in markdown
+
+
+def test_flip_spike_dry_run_markdown_does_not_render_none_values():
+    config = analysis_config("castle")
+    specs = build_spike_specs("castle", config)
+    dataset = dataset_report("castle", config, specs, results=None, dry_run=True)
+    markdown = render_markdown(
+        {
+            "provenance": _provenance(),
+            "spec_matrix": {
+                "estimators": ["OLS", "TWFE"],
+                "specs_per_dataset": 8,
+                "spec_counts_by_dataset": {"castle": 8},
+            },
+            "decision_rules": [],
+            "interpretation_notes": [],
+            "limitations": [],
+            "overall_decision": {"status": "INCONCLUSIVE", "reason": "test"},
+            "datasets": [dataset],
+        }
+    )
+
+    assert "None" not in markdown
+    assert "- Band: -" in markdown
+    assert "- Coefficient range: - to -" in markdown
+    assert "- Descriptive dominant sign axis: -" in markdown
+    assert "- Dominant partial-R2 axis: -" in markdown
+
+
 def test_flip_spike_markdown_documents_go_and_descriptive_axis_semantics():
     markdown = render_markdown(
         {
+            "provenance": _provenance(),
             "spec_matrix": {
                 "estimators": ["OLS", "TWFE"],
                 "specs_per_dataset": 2,
@@ -306,6 +494,7 @@ def test_flip_spike_markdown_documents_go_and_descriptive_axis_semantics():
                 "Descriptive dominant sign axis ranks axes by sign_flip_count, then "
                 "sign_flip_rate, then mean_abs_delta; this is not formal statistical dominance.",
             ],
+            "interpretation_notes": [],
             "limitations": [],
             "overall_decision": {"status": "INCONCLUSIVE", "reason": "test"},
             "datasets": [],
