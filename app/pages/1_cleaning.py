@@ -109,7 +109,7 @@ if st.session_state.get("clean_df") is not None:
 
         if auto:
             st.subheader(f"Otomatik onaylanan kararlar ({len(auto)})")
-            for i, e in auto:
+            for _, e in auto:
                 st.success(f"**{e.transform_name}** — {e.bulgu}")
 
         if flagged:

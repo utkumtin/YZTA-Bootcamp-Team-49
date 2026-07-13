@@ -74,19 +74,22 @@ class TestResolve:
     def test_modified_without_params_raises(self) -> None:
         entry = _entry(flagged=True)
         with pytest.raises(ValueError):
-            resolve(
-                entry, auto_approve=False, resolution=Resolution.MODIFIED, modified_params=None
-            )
+            resolve(entry, auto_approve=False, resolution=Resolution.MODIFIED, modified_params=None)
 
     def test_modified_with_empty_dict_is_allowed(self) -> None:
         """Madde 10: modified_params={} artık geçerli MODIFIED sayılır
-        (örn. drop_duplicates(subset=None) gibi meşru bir 'params'ı boşaltma)."""
+        (örn. drop_duplicates(subset=None) gibi meşru bir 'params'ı boşaltma).
+
+        resolve() artık ham girdiyi değil TypeAdapter'dan geçmiş, normalize
+        edilmiş çıktıyı saklıyor (bkz. madde 3 revizyonu); bu yüzden {} girilse
+        bile sonuç şemanın varsayılanlarıyla dolu döner: {'subset': None}.
+        """
         entry = _entry(transform_name="drop_duplicates", params={"subset": ["a"]}, flagged=True)
         decision = resolve(
             entry, auto_approve=False, resolution=Resolution.MODIFIED, modified_params={}
         )
         assert decision.resolution == Resolution.MODIFIED
-        assert decision.modified_params == {}
+        assert decision.modified_params == {"subset": None}
 
     def test_modified_params_invalid_schema_raises_value_error(self) -> None:
         """Madde 4: L3 bypass kapatıldı. Yanlış anahtar ("column" yerine "col"
@@ -98,6 +101,20 @@ class TestResolve:
                 auto_approve=False,
                 resolution=Resolution.MODIFIED,
                 modified_params={"column": "x"},
+            )
+
+    def test_modified_params_extra_key_is_rejected_not_silently_dropped(self) -> None:
+        """Madde 3: _VettedCall artık extra='forbid'. Şemada olmayan fazladan bir
+        anahtar (örn. yanlışlıkla eklenmiş "errors") sessizce yok sayılıp apply
+        aşamasında ham TypeError'a dönüşmek yerine burada ValueError olarak
+        yakalanır."""
+        entry = _entry(transform_name="coerce_numeric", params={"col": "x"}, flagged=True)
+        with pytest.raises(ValueError):
+            resolve(
+                entry,
+                auto_approve=False,
+                resolution=Resolution.MODIFIED,
+                modified_params={"col": "y", "errors": "coerce"},
             )
 
     def test_modified_params_valid_schema_passes(self) -> None:

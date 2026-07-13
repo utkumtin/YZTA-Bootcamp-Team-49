@@ -14,7 +14,7 @@ import json
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from ..config import SETTINGS, ModelRole
 from ..llm.guardrails import sanitize_profile
@@ -66,16 +66,19 @@ def resolve(
             "kullanıcı UI'da onayla/değiştir/reddet seçmeden ilerlenemez (gatekeeper)."
         )
 
-    if resolution == Resolution.MODIFIED and modified_params is None:
-        raise ValueError("MODIFIED çözümü için modified_params gerekli.")
-
     if resolution == Resolution.MODIFIED:
+        if modified_params is None:
+            raise ValueError("MODIFIED çözümü için modified_params gerekli.")
         try:
-            TypeAdapter(TransformCall).validate_python(
+            validated: TransformCall = TypeAdapter(TransformCall).validate_python(
                 {"transform_name": entry.transform_name, **modified_params}
             )
         except ValidationError as exc:
             raise ValueError(f"Değiştirilmiş params vetted şemaya uymuyor: {exc}") from exc
+        # Ham kullanıcı dict'i değil, doğrulanmış modelin çıktısı saklanır: fazladan
+        # anahtarlar (extra="forbid" zaten reddeder ama savunma amaçlı) ve
+        # transform_name sızıntısı burada kendiliğinden temizlenmiş olur.
+        modified_params = validated.params()
 
     return ResolvedDecision(entry=entry, resolution=resolution, modified_params=modified_params)
 
@@ -132,6 +135,10 @@ def audit_entries(
 # --------------------------------------------------------------------------- #
 class _VettedCall(BaseModel):
     """Kapalı transform sözlüğünden tek çağrı: ad + tipli parametreler."""
+
+    # extra="forbid": şemada olmayan / yanlış yazılmış bir anahtar (örn. "coll")
+    # sessizce yok sayılmak yerine ValidationError olarak yükselir.
+    model_config = ConfigDict(extra="forbid")
 
     def params(self) -> dict[str, Any]:
         return self.model_dump(exclude={"transform_name"})
