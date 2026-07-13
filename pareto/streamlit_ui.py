@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 
+import pandas as pd
 import streamlit as st
 
 from .config import get_api_key, get_api_key_source
@@ -43,7 +44,9 @@ def render_byok_panel() -> None:
     with st.form("byok_form", clear_on_submit=False):
         st.text_input("Gemini API key", type="password", key=BYOK_WIDGET_KEYS["GEMINI_API_KEY"])
         st.text_input("Groq API key", type="password", key=BYOK_WIDGET_KEYS["GROQ_API_KEY"])
-        st.text_input("OpenRouter API key", type="password", key=BYOK_WIDGET_KEYS["OPENROUTER_API_KEY"])
+        st.text_input(
+            "OpenRouter API key", type="password", key=BYOK_WIDGET_KEYS["OPENROUTER_API_KEY"]
+        )
         saved = st.form_submit_button("Anahtarları kaydet", type="primary")
 
     if saved:
@@ -60,7 +63,9 @@ def render_byok_panel() -> None:
         else:
             st.warning("Kaydedilecek anahtar bulunamadı.")
 
-    if st.session_state.get("byok_keys") and st.button("Tüm BYOK anahtarlarını temizle", key="byok_clear_all"):
+    if st.session_state.get("byok_keys") and st.button(
+        "Tüm BYOK anahtarlarını temizle", key="byok_clear_all"
+    ):
         for env_name in BYOK_WIDGET_KEYS:
             os.environ.pop(env_name, None)
         st.session_state["byok_keys"] = {}
@@ -113,7 +118,9 @@ def _render_api_key_status(*, detailed: bool = False) -> None:
     for provider in providers:
         byok_value = str(byok_keys.get(provider, "")).strip() if isinstance(byok_keys, dict) else ""
         if byok_value:
-            st.caption(f"{provider}: **algılandı** ✓ — kaynak: **BYOK (oturum)** ({len(byok_value)} kar.)")
+            st.caption(
+                f"{provider}: **algılandı** ✓ — kaynak: **BYOK (oturum)** ({len(byok_value)} kar.)"
+            )
             continue
         try:
             key = get_api_key(provider)
@@ -126,3 +133,19 @@ def _render_api_key_status(*, detailed: bool = False) -> None:
                 st.warning(msg)
             else:
                 st.caption(msg)
+
+
+def render_clean_panel(df_before: pd.DataFrame, df_after: pd.DataFrame, script: str) -> None:
+    """Uygulanan temizlik özeti: satır/kolon/eksik değişimi + üretilen script."""
+    st.subheader("CleanPanel — uygulanan temizlik")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("Satır", df_after.shape[0], delta=df_after.shape[0] - df_before.shape[0])
+    with c2:
+        st.metric("Kolon", df_after.shape[1], delta=df_after.shape[1] - df_before.shape[1])
+    with c3:
+        missing_before = int(df_before.isna().sum().sum())
+        missing_after = int(df_after.isna().sum().sum())
+        st.metric("Toplam eksik", missing_after, delta=missing_after - missing_before)
+    with st.expander("Üretilen script (reprodüksiyon)", expanded=False):
+        st.code(script, language="python")
