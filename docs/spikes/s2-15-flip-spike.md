@@ -1,5 +1,18 @@
 # S2-15 Flip Spike
 
+## Provenance
+
+Generated with:
+
+```bash
+.venv/bin/python scripts/run_flip_spike.py --dataset all --out docs/spikes/s2-15-flip-spike.md
+```
+
+- Source commit: 9d49796
+- Python: 3.11.7
+- Platform: macOS
+- Analysis core: pareto.analysis.variance.summarize and diagnose_axes at source commit 9d49796
+
 ## Spec Matrix
 
 - Controls: none; configured control set
@@ -12,9 +25,13 @@
 
 - GO: successful comparable matched-pair results show at least one positive-negative sign flip with readable axis attribution.
 - GO validates readable axis fragility in the current axis set; it does not by itself validate a canonical estimator-only or staggered-estimator story.
-- NO-GO: successful comparable results exist for both datasets, but neither has a readable sign flip; backstop axis expansion required.
+- NO-GO: all analyzed datasets have successful comparable results, but none has a readable sign flip; backstop axis expansion required.
 - INCONCLUSIVE: estimator/spec failures or no sign-comparable matched pairs prevent a reliable product decision.
 - Descriptive dominant sign axis ranks axes by sign_flip_count, then sign_flip_rate, then mean_abs_delta; this is not formal statistical dominance.
+
+## Interpretation Note
+
+- estimator axis here compares pooled OLS (no fixed effects) with TWFE (unit and time fixed effects), so observed flips may reflect fixed-effect inclusion as well as estimator choice.
 
 ## Limitations
 
@@ -28,7 +45,7 @@
 
 ## Divorce
 
-- Decision: **GO** - readable axis fragility; control_set is dominant, with estimator flips also observed
+- Decision: **GO** - readable axis fragility; control_set is dominant, and changes on the estimator/FE-inclusion axis were also observed
 - Data: `data/divorce/raw/divorce.csv`
 - Specs: 8
 - Successful specs: 8
@@ -63,22 +80,22 @@
 
 ### Failed Specs
 
-- None
+- No failed specs.
 
 ### Spec List
 
-- divorce_00: estimator=OLS, controls=[], weight=None
-- divorce_01: estimator=TWFE, controls=[], weight=None
+- divorce_00: estimator=OLS, controls=[], weight=-
+- divorce_01: estimator=TWFE, controls=[], weight=-
 - divorce_02: estimator=OLS, controls=[], weight=weight
 - divorce_03: estimator=TWFE, controls=[], weight=weight
-- divorce_04: estimator=OLS, controls=['pcinc', 'asmrh', 'cases'], weight=None
-- divorce_05: estimator=TWFE, controls=['pcinc', 'asmrh', 'cases'], weight=None
+- divorce_04: estimator=OLS, controls=['pcinc', 'asmrh', 'cases'], weight=-
+- divorce_05: estimator=TWFE, controls=['pcinc', 'asmrh', 'cases'], weight=-
 - divorce_06: estimator=OLS, controls=['pcinc', 'asmrh', 'cases'], weight=weight
 - divorce_07: estimator=TWFE, controls=['pcinc', 'asmrh', 'cases'], weight=weight
 
 ## Castle
 
-- Decision: **GO** - readable axis fragility; control_set is dominant, with estimator flips also observed
+- Decision: **GO** - readable axis fragility; control_set is dominant, and changes on the estimator/FE-inclusion axis were also observed
 - Data: `data/castle/raw/castle.csv`
 - Specs: 8
 - Successful specs: 8
@@ -113,15 +130,15 @@
 
 ### Failed Specs
 
-- None
+- No failed specs.
 
 ### Spec List
 
-- castle_00: estimator=OLS, controls=[], weight=None
-- castle_01: estimator=TWFE, controls=[], weight=None
+- castle_00: estimator=OLS, controls=[], weight=-
+- castle_01: estimator=TWFE, controls=[], weight=-
 - castle_02: estimator=OLS, controls=[], weight=population
 - castle_03: estimator=TWFE, controls=[], weight=population
-- castle_04: estimator=OLS, controls=['unemployrt', 'income', 'poverty', 'police', 'prisoner'], weight=None
-- castle_05: estimator=TWFE, controls=['unemployrt', 'income', 'poverty', 'police', 'prisoner'], weight=None
+- castle_04: estimator=OLS, controls=['unemployrt', 'income', 'poverty', 'police', 'prisoner'], weight=-
+- castle_05: estimator=TWFE, controls=['unemployrt', 'income', 'poverty', 'police', 'prisoner'], weight=-
 - castle_06: estimator=OLS, controls=['unemployrt', 'income', 'poverty', 'police', 'prisoner'], weight=population
 - castle_07: estimator=TWFE, controls=['unemployrt', 'income', 'poverty', 'police', 'prisoner'], weight=population
