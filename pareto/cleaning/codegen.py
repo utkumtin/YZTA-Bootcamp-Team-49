@@ -103,8 +103,17 @@ def verify_reproduction(
     job_dir.mkdir(parents=True, exist_ok=True)
     (job_dir / "raw.pkl").write_bytes(pickle.dumps(raw_df))
     shutil.copyfile(audit_script, job_dir / "cleaning_steps.py")
+    # Aynı run_id ile önceki denemeden kalan çıktı, "worker yazmadı" tespitini
+    # maskelemesin diye her koşudan önce silinir.
+    (job_dir / "reproduced.pkl").unlink(missing_ok=True)
 
     env = {**os.environ, **SETTINGS.deterministic_env}
+    # Subprocess'in `pareto`'yu bulması cwd'ye bağlı kalmasın (ör. Streamlit
+    # repo kökü dışından başlatılırsa): paket kökü PYTHONPATH'e eklenir.
+    pkg_root = str(Path(__file__).resolve().parents[2])
+    env["PYTHONPATH"] = (
+        os.pathsep.join([pkg_root, env["PYTHONPATH"]]) if env.get("PYTHONPATH") else pkg_root
+    )
     try:
         proc = subprocess.run(  # noqa: S603  # sabit argüman listesi, shell yok; girdi kullanıcıdan gelmez
             [sys.executable, "-m", "pareto.cleaning.codegen", "--job", str(job_dir)],
@@ -121,11 +130,17 @@ def verify_reproduction(
     if proc.returncode != 0:
         raise ReproductionError(
             f"Audit script sandbox'ta koşamadı (exit={proc.returncode}, sandbox: {job_dir}).\n"
-            f"stderr:\n{proc.stderr}"
+            f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
         )
 
+    reproduced_path = job_dir / "reproduced.pkl"
+    if not reproduced_path.exists():
+        raise ReproductionError(
+            f"Sandbox exit=0 döndü ama reproduced.pkl yazılmamış (sandbox: {job_dir}).\n"
+            f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+        )
     reproduced = pickle.loads(  # noqa: S301  # reproduced.pkl'i worker yazar; aynı lokal güven sınırı
-        (job_dir / "reproduced.pkl").read_bytes()
+        reproduced_path.read_bytes()
     )
     try:
         pd.testing.assert_frame_equal(

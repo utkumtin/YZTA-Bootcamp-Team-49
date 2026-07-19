@@ -1,5 +1,6 @@
 """Codegen L4 testleri: sandbox reprodüksiyonu + tolerans eşitliği (fail-loud)."""
 
+import subprocess
 from dataclasses import replace
 
 import pandas as pd
@@ -73,6 +74,21 @@ def test_verify_reproduction_fails_loud_when_script_crashes(audit_dir, tmp_path)
     broken.write_text("def clean(df):\n    raise RuntimeError('kasitli cokme')\n", encoding="utf-8")
     with pytest.raises(ReproductionError, match="kasitli cokme"):
         verify_reproduction(raw, broken, raw, "run_crash")
+
+
+def test_verify_reproduction_fails_loud_when_worker_writes_no_output(audit_dir, monkeypatch):
+    # NEDEN: exit=0 dönen ama reproduced.pkl yazmayan bir worker, kapının
+    # ReproductionError sözleşmesi dışında ham FileNotFoundError sızdırmamalı;
+    # UI yalnız ReproductionError yakaladığı için bu da tipli hatayla patlamalıdır.
+    raw = _raw_df()
+    cleaned, audit_path = apply_ledger(raw, _entries(), "run_noout")
+    monkeypatch.setattr(
+        codegen.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess(a, returncode=0, stdout="", stderr=""),
+    )
+    with pytest.raises(ReproductionError, match="reproduced.pkl"):
+        verify_reproduction(raw, audit_path, cleaned, "run_noout")
 
 
 def test_verify_reproduction_tolerates_tiny_float_noise(audit_dir):
