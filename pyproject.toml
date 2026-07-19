@@ -12,7 +12,7 @@ dependencies = [
     "streamlit>=1.32",
     "plotly>=5.20",
     "pydantic>=2.6",
-    "pydantic-ai>=0.0.14",
+    "pydantic-ai[groq]>=0.0.14",
     "pyreadstat>=1.2",
     "openpyxl>=3.1",
     "charset-normalizer>=3.3",
@@ -56,3 +56,6 @@ exclude = ["notebooks/"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "live: gerçek sağlayıcı API çağrısı yapar (BYOK env anahtarı gerekir, yoksa atlanır)",
+]

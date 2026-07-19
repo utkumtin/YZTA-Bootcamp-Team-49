@@ -55,6 +55,7 @@ class ParetoSettings:
     runs_dir: str = "runs"
     store_dir: str = "runs/store"
     audit_trail_dir: str = "runs/audit_trail"
+    llm_cache_dir: str = "runs/llm_cache"  # temp=0 yanıt cache'i (free-tier RPM azaltır)
 
 
 SETTINGS = ParetoSettings()

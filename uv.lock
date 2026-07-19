@@ -908,6 +908,23 @@ wheels = [
 ]
 
 [[package]]
+name = "groq"
+version = "1.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0b/3a/31c54e35d694ba9c263939ecae0874c78fc51f22b9fb13d2dab50edf6e3c/groq-1.5.0.tar.gz", hash = "sha256:8648388f8668629490bb0eab11252b4cc43316149fda9c6343e9a9577fe7df88", size = 158239, upload-time = "2026-06-21T22:57:30.202Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ce/c3/cac2aee75198c0382a2e6070619a798de2288e01850abb6e999746bb92e3/groq-1.5.0-py3-none-any.whl", hash = "sha256:a927fd75b4a60cb066c408cb4f9647536caf74e241ea75bc57d1810501b8203f", size = 143690, upload-time = "2026-06-21T22:57:29.213Z" },
+]
+
+[[package]]
 name = "h11"
 version = "0.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2400,7 +2417,7 @@ dependencies = [
     { name = "pandas" },
     { name = "plotly" },
     { name = "pydantic" },
-    { name = "pydantic-ai" },
+    { name = "pydantic-ai", extra = ["groq"] },
     { name = "pyfixest" },
     { name = "pyreadstat" },
     { name = "python-dotenv" },
@@ -2426,7 +2443,7 @@ requires-dist = [
     { name = "plotly", specifier = ">=5.20" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.7" },
     { name = "pydantic", specifier = ">=2.6" },
-    { name = "pydantic-ai", specifier = ">=0.0.14" },
+    { name = "pydantic-ai", extras = ["groq"], specifier = ">=0.0.14" },
     { name = "pyfixest", specifier = ">=0.18" },
     { name = "pyreadstat", specifier = ">=1.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
@@ -2809,6 +2826,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/cd/aa/c1f0d8cd78c0653936ef842210ca96e6849085d58c3e93520f4e68563ef8/pydantic_ai-2.5.0-py3-none-any.whl", hash = "sha256:309f85896b80ff58f9baffd4f28a2fb6485e07c9e20a6c1f31cf81a18910c153", size = 7717, upload-time = "2026-07-04T00:47:29.504Z" },
 ]
 
+[package.optional-dependencies]
+groq = [
+    { name = "pydantic-ai-slim", extra = ["groq"] },
+]
+
 [[package]]
 name = "pydantic-ai-slim"
 version = "2.5.0"
@@ -2843,6 +2865,9 @@ evals = [
 ]
 google = [
     { name = "google-genai" },
+]
+groq = [
+    { name = "groq" },
 ]
 logfire = [
     { name = "logfire", extra = ["httpx"] },
