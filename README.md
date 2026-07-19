@@ -129,7 +129,7 @@ We run the project from a **GitHub Projects Kanban** board (Backlog · Ready · 
 Review · Done). Each card is a user story with story points, an owner, and a task/acceptance checklist.
 
 - **Board:** [GitHub Projects Kanban](https://github.com/users/utkumtin/projects/3)
-- **Screenshot:** ![Kanban board (Sprint 2)](docs/img/kanban-board-0507.png)
+- **Screenshot:** ![Kanban board (end of Sprint 2)](docs/img/kanban-board-1907.png)
 
 ---
 
@@ -259,6 +259,160 @@ numeric `Estimate` field per card (Fibonacci story points):
   * **Müsaitlik-bazlı planlama** benimsendi (U Hafta-1 yok → temizleme backend'i öne çekildi).
   * Her yeni LLM adımı için baştan **`TestModel` testi** yazılmalı (davranış değil niyet).
   * **Scrum Master** rolü net atanmalı (atandı: Ozan Çelik).
+
+</details>
+
+---
+
+# Sprint 2
+
+<details>
+<summary><h2>Product Status</h2></summary>
+
+Sprint 2 turned the Sprint 1 walking skeleton into a working pipeline: the LLM-driven steps
+that each page previously announced as "Sprint 2" are now live. The estimand-first hypothesis
+flow (Socratic + TAC → frozen, hashed Estimand), the JUDGE spec-menu, the cleaning agent with
+its decision ledger and human gate, deterministic axis diagnostics and the LLM variance
+narrative all run end-to-end on the committed datasets, with the model router connected to
+live providers (BYOK-first) and session state preserved across pages:
+
+| Landing: mode + BYOK + session summary | 1 · Cleaning: profiling + agent + ledger |
+|---|---|
+| ![Landing page (Sprint 2)](docs/img/s2-landing.png) | ![Cleaning page (Sprint 2)](docs/img/s2-cleaning.png) |
+
+| 2 · Analysis: frozen estimand + JUDGE spec menu | 3 · Variance panel: diagnostics + narrative |
+|---|---|
+| ![Analysis page (Sprint 2)](docs/img/s2-analysis.png) | ![Variance panel page (Sprint 2)](docs/img/s2-variance-panel.png) |
+
+<details>
+<summary><h4>Türkçe açıklama</h4></summary>
+
+Sprint 2, Sprint 1'in yürüyen iskeletini çalışan bir boru hattına çevirdi: her sayfanın
+"Sprint 2'de gelecek" dediği LLM'li adımlar artık canlı. Estimand-first hipotez akışı
+(Socratic + TAC → donmuş, hash'li Estimand), JUDGE spec-menü, karar defterli + insan-kapılı
+temizleme ajanı, deterministik eksen diagnostikleri ve LLM varyans narrative'i committed
+veri setleri üzerinde uçtan uca koşuyor; model router canlı sağlayıcılara bağlı (önce BYOK)
+ve oturum durumu sayfalar arasında korunuyor. Görseller: açılış (oturum özeti) ·
+1·Temizleme (profilleme + ajan + karar defteri) · 2·Analiz (donmuş estimand + JUDGE menü) ·
+3·Varyans Paneli (diagnostik + narrative).
+
+</details>
+</details>
+
+<details>
+<summary><h2>Project Management / Board</h2></summary>
+
+Board state at the end of Sprint 2 (WIP limits and Fibonacci `Estimate` field unchanged):
+
+![GitHub Projects board (end of Sprint 2)](docs/img/kanban-board-1907.png)
+
+</details>
+
+- **Sprint Notes:**
+  * **Estimand-first flow landed** (PR #19): Socratic + TAC elicitation → frozen, hashed
+    Estimand, with validator and API-free `TestModel` tests.
+  * **JUDGE spec-menu** (PR #20 · #21 · #25): judge-proposed defensible levels + baseline per
+    axis, menu validator, weighting axis; menu frozen + hashed.
+  * **Datasets committed** (PR #22): `medicaid` (hero), `divorce`, `castle`, `card_krueger`
+    with a fetch script and `SOURCES.md`.
+  * **Cleaning agent core** (PR #26): high-confidence auto-fixes + decision ledger
+    (S2-01 · S2-02), plus a **human gate for uncertain decisions** (PR #29).
+  * **Deterministic axis attribution** (S2-08, PR #27): matched-pair + ANOVA diagnostics.
+  * **Codegen assert hardening** for the vetted transform library (S2-04, PR #31).
+  * **Empirical go/no-go spike** (S2-15, PR #30): estimator sign-flip reproduced on
+    `divorce` / `castle` — the spike pulled forward per the Sprint 1 retrospective.
+  * **LLM variance narrative** (PR #33): explains the spread, never measures it.
+  * **Router live** (PR #34): connected to real providers with response caching; BYOK
+    precedence fixed (a pasted key overrides server keys).
+  * **Session-state persistence** across pages (data / estimand / spec summary on the landing page).
+- **Expected point completion within Sprint:** `84` Points — `72` completed.
+- **Point Completion Logic:** Same Fibonacci scheme as Sprint 1 (relative effort, no fixed
+  grand total, velocity tracked sprint over sprint). Sprint 2 was the heaviest sprint
+  (committed core, end-to-end) at **84 committed points**, of which **72 were completed**.
+  The remaining **12 points** — S2-07 (2_analysis UI) · S2-11 (variance-panel v1 display) ·
+  S2-13 (end-to-end integration validation) · S2-14 (OLS/TWFE R-reference tolerance check) —
+  carry over into Sprint 3.
+- **Daily Scrum:** No calls this sprint; all coordination ran **asynchronously in the team
+  WhatsApp group** — the single, archived channel agreed in the Sprint 1 retrospective.
+  Instead of screenshots, the full Sprint 2 chat log is exported and committed:
+  [Sprint 2 WhatsApp log](docs/sprint-comms/sprint-2-chat.txt).
+- **Product Backlog URL:** [GitHub Projects Kanban](https://github.com/users/utkumtin/projects/3)
+- **Sprint Review:**
+  * Ozan Çelik built the estimand-first flow and the JUDGE spec-menu, wired BYOK + session
+    state into the UI, and added the human gate for uncertain cleaning decisions.
+  * Betül Bostan implemented the matched-pair / ANOVA axis diagnostics and ran the
+    estimator sign-flip spike on `divorce` / `castle` (the early go/no-go).
+  * Utku Metin committed the datasets, the cleaning-agent core, codegen asserts, the LLM
+    variance narrative, and connected the router to live providers.
+  * Utku Uzunhüseyin could not be active this sprint (work / relocation); tasks were
+    redistributed by availability, as planned in the Sprint 1 retrospective.
+  * 72 of 84 points were completed; the 4 remaining issues (12 points) roll into Sprint 3.
+  * PR review turnaround became the bottleneck near the sprint's end (a review deadlock on
+    the last open PR) — addressed in the retrospective.
+- **Sprint Review Participants:** Utku Metin, Ozan Çelik, Betül Bostan, Utku Uzunhüseyin
+- **Sprint Retrospective:**
+  * **Fix the PR review bottleneck:** reviews within ~24h or a fallback reviewer steps in;
+    never end a sprint with an unreviewed PR blocking a dependent task.
+  * **Carry-over first:** Sprint 3 starts by redistributing the 4 open Sprint 2 issues
+    across owners before any new scope is added.
+  * **Availability-based planning continues:** Sprint 3 capacity was collected in-channel
+    (18–19 Jul) and issues are assigned to match each member's stated hours.
+  * **Async cadence kept, calls added:** WhatsApp-as-archived-channel worked (this log is
+    the proof), but Sprint 3 adds at least one mid-sprint sync call.
+  * **Process fixed early and kept:** feature PRs target `dev`; `main` is updated weekly.
+
+<details>
+<summary><h4>Türkçe açıklama</h4></summary>
+
+- **Sprint Notları:**
+  * **Estimand-first akış indi** (PR #19): Socratic + TAC → donmuş, hash'li Estimand;
+    validator + API'siz `TestModel` testleri.
+  * **JUDGE spec-menü** (PR #20 · #21 · #25): eksen başına savunulabilir seviyeler + baseline,
+    menü validator'ü, ağırlıklandırma ekseni; menü dondurulup hash'lenir.
+  * **Veri setleri commit'lendi** (PR #22): `medicaid` (hero), `divorce`, `castle`,
+    `card_krueger` + indirme script'i + `SOURCES.md`.
+  * **Temizleme ajanı çekirdeği** (PR #26): yüksek-güvenli otomatik düzeltme + karar defteri
+    (S2-01 · S2-02); **belirsiz kararlarda insan kapısı** (PR #29).
+  * **Deterministik eksen atfı** (S2-08, PR #27): matched-pair + ANOVA diagnostikleri.
+  * **Codegen assert sıkılaştırması** (S2-04, PR #31).
+  * **Ampirik go/no-go spike** (S2-15, PR #30): `divorce` / `castle` üzerinde estimator işaret
+    değişimi yeniden üretildi — Sprint 1 retrosunda öne çekilen spike.
+  * **LLM varyans narrative'i** (PR #33): açıklar, asla ölçmez.
+  * **Router canlı** (PR #34): gerçek sağlayıcılara bağlandı, yanıt cache'i; BYOK önceliği
+    düzeltildi (yapıştırılan anahtar sunucu anahtarlarını ezer).
+  * **Oturum durumu** sayfalar arasında korunur (açılışta veri / estimand / spec özeti).
+- **Sprint İçinde Tamamlanması Beklenen Puan:** `84` Puan — `72` tamamlandı.
+- **Puan Tamamlama Mantığı:** Sprint 1 ile aynı Fibonacci şeması. Sprint 2 en ağır sprint
+  (committed çekirdek, uçtan uca): **84 puan taahhüt**, **72 puan tamamlandı**. Kalan
+  **12 puan** — S2-07 (2_analysis UI) · S2-11 (varyans paneli v1 gösterim) · S2-13 (uçtan uca
+  entegrasyon doğrulaması) · S2-14 (OLS/TWFE R-referans tolerans) — Sprint 3'e devreder.
+- **Daily Scrum:** Bu sprint sesli/görüntülü görüşme yapılmadı; tüm koordinasyon Sprint 1
+  retrosunda kararlaştırılan **tek arşivli kanal olan WhatsApp grubunda asenkron** yürüdü.
+  Ekran görüntüsü yerine Sprint 2 sohbet dökümünün tamamı export edilip commit'lendi:
+  [Sprint 2 WhatsApp dökümü](docs/sprint-comms/sprint-2-chat.txt).
+- **Sprint Gözden Geçirilmesi (Review):**
+  * Ozan Çelik estimand-first akışı ve JUDGE spec-menüyü yaptı; BYOK + oturum durumunu
+    arayüze bağladı; belirsiz temizleme kararları için insan kapısını ekledi.
+  * Betül Bostan matched-pair / ANOVA eksen diagnostiklerini yazdı ve `divorce` / `castle`
+    üzerindeki işaret-değişimi spike'ını (erken go/no-go) koştu.
+  * Utku Metin veri setlerini, temizleme ajanı çekirdeğini, codegen assert'lerini, LLM varyans
+    narrative'ini indirdi ve router'ı canlı sağlayıcılara bağladı.
+  * Utku Uzunhüseyin bu sprint aktif olamadı (iş / taşınma); görevler Sprint 1 retrosunda
+    kararlaştırıldığı gibi müsaitliğe göre yeniden dağıtıldı.
+  * 84 puanın 72'si tamamlandı; kalan 4 issue (12 puan) Sprint 3'e devrediyor.
+  * Sprint sonunda PR review süresi darboğaz oldu (son açık PR'da review kilitlenmesi) —
+    retrospektifte ele alındı.
+- **Sprint Gözden Geçirme Katılımcıları:** Utku Metin, Ozan Çelik, Betül Bostan, Utku Uzunhüseyin
+- **Sprint Retrospektifi:**
+  * **PR review darboğazı çözülmeli:** review'lar ~24 saat içinde; olmuyorsa yedek reviewer
+    devreye girer. Bağımlı task'ı bloklayan review'lanmamış PR ile sprint bitirilmez.
+  * **Önce devirler:** Sprint 3, yeni kapsam eklenmeden önce açık 4 Sprint 2 issue'sunun
+    sahiplere dağıtılmasıyla başlar.
+  * **Müsaitlik-bazlı planlama sürüyor:** Sprint 3 kapasitesi kanalda toplandı (18–19 Tem);
+    issue'lar herkesin bildirdiği saate göre atanır.
+  * **Asenkron kadans kalıyor, görüşme ekleniyor:** arşivli-WhatsApp-kanalı işledi (bu döküm
+    kanıtı), ama Sprint 3'e en az bir sprint-ortası senkron görüşme eklenir.
+  * **Erken oturan süreç korunur:** feature PR'ları `dev`'e açılır; `main` haftalık güncellenir.
 
 </details>
 
