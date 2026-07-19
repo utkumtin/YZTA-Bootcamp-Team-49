@@ -14,7 +14,12 @@ from pareto.cleaning.agent import (
     generate_ledger,
     resolve,
 )
-from pareto.cleaning.codegen import apply_ledger, render_audit_script
+from pareto.cleaning.codegen import (
+    ReproductionError,
+    apply_ledger,
+    render_audit_script,
+    verify_reproduction,
+)
 from pareto.cleaning.ledger import persist_ledger
 from pareto.profiling import load_raw_file, profile_dataframe
 from pareto.streamlit_ui import render_clean_panel, render_compact_sidebar
@@ -194,6 +199,18 @@ if st.session_state.get("clean_df") is not None:
 
             cleaned_df, audit_path = apply_ledger(raw_df, to_apply, st.session_state["run_id"])
 
+            # L4 kapısı: diske yazılan script sandbox'ta koşulur ve çıktısı
+            # in-process sonuçla tolerans içinde eşleşmek zorundadır. Eşleşmezse
+            # akış burada durur, temiz veri oturuma yazılmaz (sessiz geçme yok).
+            try:
+                repro_dir = verify_reproduction(
+                    raw_df, audit_path, cleaned_df, st.session_state["run_id"]
+                )
+            except ReproductionError as exc:
+                st.error(f"Reprodüksiyon doğrulaması başarısız: {exc}")
+                st.stop()
+            st.session_state["last_repro_dir"] = str(repro_dir)
+
             st.session_state["clean_df"] = cleaned_df
             st.session_state["clean_profile"] = profile_dataframe(cleaned_df)
             st.session_state["last_script"] = render_audit_script(to_apply)
@@ -216,5 +233,6 @@ if st.session_state.get("clean_df") is not None:
             )
             st.caption(
                 f"Audit script: `{st.session_state.get('last_audit_path', '')}` · "
-                f"Karar defteri: `{st.session_state.get('last_ledger_path', '')}`"
+                f"Karar defteri: `{st.session_state.get('last_ledger_path', '')}` · "
+                f"L4 repro sandbox: `{st.session_state.get('last_repro_dir', '')}`"
             )
