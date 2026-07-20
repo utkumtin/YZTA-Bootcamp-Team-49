@@ -54,18 +54,28 @@ def estimate_pretrend_event_study(
         treated_cohorts=treated_cohort_keys,
     )
 
+    window_min, window_max = event_time_window
+    if window_min > window_max:
+        return _failed_result(base, "event_time_window min must be <= max.")
+    if not window_min <= reference_period <= window_max:
+        return _failed_result(base, "reference_period must be inside event_time_window.")
+
+    dummy_times = [t for t in range(window_min, window_max + 1) if t != reference_period]
+    dummy_cols = [_event_dummy_name(t) for t in dummy_times]
+    conflicts = sorted((set(df.columns) | set(controls)) & set(dummy_cols))
+    if conflicts:
+        return _failed_result(
+            base,
+            "Generated event-study dummy columns conflict with existing columns "
+            f"or controls: {conflicts}",
+        )
+
     required = [outcome_col, unit_col, time_col, cohort_col, never_treated_col, *controls]
     if weight_col is not None:
         required.append(weight_col)
     missing = [col for col in dict.fromkeys(required) if col not in df.columns]
     if missing:
         return _failed_result(base, f"Missing required columns: {missing}")
-
-    window_min, window_max = event_time_window
-    if window_min > window_max:
-        return _failed_result(base, "event_time_window min must be <= max.")
-    if not window_min <= reference_period <= window_max:
-        return _failed_result(base, "reference_period must be inside event_time_window.")
 
     work_result = _build_working_frame(
         df,
@@ -93,8 +103,6 @@ def estimate_pretrend_event_study(
     base["warnings"].extend(warnings)
     base["n_obs"] = int(len(work))
 
-    dummy_times = [t for t in range(window_min, window_max + 1) if t != reference_period]
-    dummy_cols = [_event_dummy_name(t) for t in dummy_times]
     rhs = " + ".join([*dummy_cols, *controls])
     if not rhs:
         return _failed_result(base, "No event-time dummies or controls available for model.")
@@ -117,7 +125,7 @@ def estimate_pretrend_event_study(
         series.append(point)
 
     base["status"] = "ok"
-    base["series"] = _jsonable(series)
+    base["series"] = series
     return _jsonable(base)
 
 
@@ -167,15 +175,23 @@ def _cohort_keys(values: Sequence[int | float | str] | None) -> list[Any]:
     return sorted({key for key in keys if key is not None}, key=lambda item: str(item))
 
 
-def _normalize_never_treated(value: Any) -> bool:
+def _normalize_never_treated(value: Any) -> bool | None:
     if _is_missing(value):
         return False
     if isinstance(value, bool):
         return value
     if isinstance(value, int | float):
-        return bool(value)
+        if float(value) == 1.0:
+            return True
+        if float(value) == 0.0:
+            return False
+        return None
     lowered = str(value).strip().lower()
-    return lowered in {"true", "t", "yes", "y", "1"}
+    if lowered in {"true", "t", "yes", "y", "1"}:
+        return True
+    if lowered in {"false", "f", "no", "n", "0"}:
+        return False
+    return None
 
 
 def _build_working_frame(
@@ -193,7 +209,12 @@ def _build_working_frame(
     reference_period: int,
 ) -> tuple[pd.DataFrame, list[Any], dict[int, int], list[str]] | str:
     work = df.copy()
-    work["_pareto_never_treated"] = work[never_treated_col].map(_normalize_never_treated)
+    normalized_never_treated = work[never_treated_col].map(_normalize_never_treated)
+    if bool(normalized_never_treated.isna().any()):
+        return "never_treated_col contains unrecognized values."
+    work["_pareto_never_treated"] = normalized_never_treated.astype(bool)
+    if not bool(work["_pareto_never_treated"].any()):
+        return "No never-treated control observations remain after normalization."
     work["_pareto_cohort_key"] = work[cohort_col].map(_cohort_key)
 
     if treated_cohort_keys:
@@ -227,6 +248,8 @@ def _build_working_frame(
         return f"time_col and cohort_col must be numeric or year-like: {exc}"
 
     selected_treated = work["_pareto_cohort_key"].isin(used_cohort_keys)
+    if bool(work.loc[selected_treated, "_pareto_cohort"].isna().any()):
+        return "treated cohort values must be numeric/year-like for event-time construction."
     work["_pareto_event_time"] = pd.NA
     work.loc[selected_treated, "_pareto_event_time"] = (
         work.loc[selected_treated, "_pareto_time"]
@@ -239,8 +262,13 @@ def _build_working_frame(
         window_min,
         window_max,
     )
-    if not bool((in_window_treated & (work["_pareto_event_time"] < 0)).any()):
-        return "No pre-period event-time observations available for diagnostic check."
+    non_reference_pre_period = (
+        in_window_treated
+        & (work["_pareto_event_time"] < 0)
+        & (work["_pareto_event_time"] != reference_period)
+    )
+    if not bool(non_reference_pre_period.any()):
+        return "No non-reference pre-period event-time observations available for diagnostic check."
     if not bool((selected_treated & (work["_pareto_event_time"] == reference_period)).any()):
         return "No observations found for the reference_period."
 

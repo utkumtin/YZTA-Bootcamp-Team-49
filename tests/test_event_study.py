@@ -74,11 +74,14 @@ def test_event_study_reference_period_is_omitted_from_series():
 
 
 def test_event_study_pre_period_coefficients_are_produced():
-    out = _estimate(_panel(), treated_cohorts=(2014,))
+    out = _estimate(_panel(), treated_cohorts=(2014,), event_time_window=(-3, 4))
     pre_points = [point for point in out["series"] if point["event_time"] < 0]
+    event_zero = next(point for point in out["series"] if point["event_time"] == 0)
 
     assert {point["event_time"] for point in pre_points} == {-3, -2}
     assert all(point["coefficient"] is not None for point in pre_points)
+    assert all(abs(point["coefficient"]) < 0.25 for point in pre_points)
+    assert event_zero["coefficient"] > 0.25
 
 
 def test_event_study_committed_cohort_keeps_never_controls_and_excludes_other_cohorts():
@@ -124,7 +127,24 @@ def test_event_study_no_pre_period_returns_failed_output():
     )
 
     assert out["status"] == "failed"
-    assert "No pre-period" in out["error"]
+    assert "No non-reference pre-period" in out["error"]
+
+
+def test_event_study_only_reference_pre_period_returns_failed_output():
+    out = estimate_pretrend_event_study(
+        _panel(years=range(2013, 2018)),
+        outcome_col="y",
+        unit_col="unit",
+        time_col="year",
+        cohort_col="cohort",
+        never_treated_col="never_treated",
+        treated_cohorts=(2014,),
+        event_time_window=(-3, 3),
+        reference_period=-1,
+    )
+
+    assert out["status"] == "failed"
+    assert "No non-reference pre-period" in out["error"]
 
 
 def test_event_study_reference_period_outside_window_returns_failed_output():
@@ -162,6 +182,96 @@ def test_event_study_missing_reference_observation_returns_failed_output():
 
     assert out["status"] == "failed"
     assert "reference_period" in out["error"]
+
+
+def test_event_study_non_numeric_treated_cohort_returns_failed_output():
+    df = _panel()
+    df.loc[df["cohort"] == 2014, "cohort"] = "2014Q1"
+
+    out = estimate_pretrend_event_study(
+        df,
+        outcome_col="y",
+        unit_col="unit",
+        time_col="year",
+        cohort_col="cohort",
+        never_treated_col="never_treated",
+        treated_cohorts=("2014Q1",),
+        event_time_window=(-3, 3),
+        reference_period=-1,
+    )
+
+    assert out["status"] == "failed"
+    assert "treated cohort values must be numeric/year-like" in out["error"]
+
+
+def test_event_study_unrecognized_never_treated_values_return_failed_output():
+    out = estimate_pretrend_event_study(
+        _panel(never_values=("evet", "hayir")),
+        outcome_col="y",
+        unit_col="unit",
+        time_col="year",
+        cohort_col="cohort",
+        never_treated_col="never_treated",
+        treated_cohorts=(2014,),
+    )
+
+    assert out["status"] == "failed"
+    assert out["error"] == "never_treated_col contains unrecognized values."
+
+
+def test_event_study_requires_never_treated_controls():
+    out = estimate_pretrend_event_study(
+        _panel(never_values=(False, False)),
+        outcome_col="y",
+        unit_col="unit",
+        time_col="year",
+        cohort_col="cohort",
+        never_treated_col="never_treated",
+        treated_cohorts=(2014,),
+    )
+
+    assert out["status"] == "failed"
+    assert out["error"] == "No never-treated control observations remain after normalization."
+
+
+def test_event_study_existing_dummy_column_conflict_returns_failed_output():
+    df = _panel()
+    df["event_m2"] = 1.0
+
+    out = estimate_pretrend_event_study(
+        df,
+        outcome_col="y",
+        unit_col="unit",
+        time_col="year",
+        cohort_col="cohort",
+        never_treated_col="never_treated",
+        treated_cohorts=(2014,),
+        event_time_window=(-2, 0),
+        reference_period=-1,
+    )
+
+    assert out["status"] == "failed"
+    assert "Generated event-study dummy columns conflict" in out["error"]
+    assert "event_m2" in out["error"]
+
+
+def test_event_study_control_dummy_name_conflict_returns_failed_output():
+    out = estimate_pretrend_event_study(
+        _panel(),
+        outcome_col="y",
+        unit_col="unit",
+        time_col="year",
+        cohort_col="cohort",
+        never_treated_col="never_treated",
+        controls=("event_m2",),
+        treated_cohorts=(2014,),
+        event_time_window=(-2, 0),
+        reference_period=-1,
+    )
+
+    assert out["status"] == "failed"
+    assert "Generated event-study dummy columns conflict" in out["error"]
+    assert "event_m2" in out["error"]
 
 
 class _FakeFit:
