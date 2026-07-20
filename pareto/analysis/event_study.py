@@ -17,6 +17,13 @@ import pandas as pd
 
 DEFAULT_REFERENCE_PERIOD = -1
 DEFAULT_EVENT_TIME_WINDOW = (-4, 4)
+_RESERVED_COLUMNS = {
+    "_pareto_never_treated",
+    "_pareto_cohort_key",
+    "_pareto_time",
+    "_pareto_cohort",
+    "_pareto_event_time",
+}
 
 
 def estimate_pretrend_event_study(
@@ -62,11 +69,12 @@ def estimate_pretrend_event_study(
 
     dummy_times = [t for t in range(window_min, window_max + 1) if t != reference_period]
     dummy_cols = [_event_dummy_name(t) for t in dummy_times]
-    conflicts = sorted((set(df.columns) | set(controls)) & set(dummy_cols))
+    protected_cols = set(dummy_cols) | _RESERVED_COLUMNS
+    conflicts = sorted((set(df.columns) | set(controls)) & protected_cols)
     if conflicts:
         return _failed_result(
             base,
-            "Generated event-study dummy columns conflict with existing columns "
+            "Event-study generated or reserved columns conflict with existing columns "
             f"or controls: {conflicts}",
         )
 
@@ -216,6 +224,8 @@ def _build_working_frame(
     if not bool(work["_pareto_never_treated"].any()):
         return "No never-treated control observations remain after normalization."
     work["_pareto_cohort_key"] = work[cohort_col].map(_cohort_key)
+    if bool((work["_pareto_never_treated"] & work["_pareto_cohort_key"].notna()).any()):
+        return "Rows cannot be both treated cohort and never-treated control."
 
     if treated_cohort_keys:
         raw_treated_mask = work["_pareto_cohort_key"].isin(treated_cohort_keys)

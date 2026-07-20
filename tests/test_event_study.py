@@ -81,7 +81,7 @@ def test_event_study_pre_period_coefficients_are_produced():
     assert {point["event_time"] for point in pre_points} == {-3, -2}
     assert all(point["coefficient"] is not None for point in pre_points)
     assert all(abs(point["coefficient"]) < 0.25 for point in pre_points)
-    assert event_zero["coefficient"] > 0.25
+    assert abs(event_zero["coefficient"] - 0.5) < 0.1
 
 
 def test_event_study_committed_cohort_keeps_never_controls_and_excludes_other_cohorts():
@@ -234,6 +234,25 @@ def test_event_study_requires_never_treated_controls():
     assert out["error"] == "No never-treated control observations remain after normalization."
 
 
+def test_event_study_rejects_rows_that_are_treated_and_never_treated():
+    df = _panel()
+    never_index = df.index[df["never_treated"]][0]
+    df.loc[never_index, "cohort"] = 2014
+
+    out = estimate_pretrend_event_study(
+        df,
+        outcome_col="y",
+        unit_col="unit",
+        time_col="year",
+        cohort_col="cohort",
+        never_treated_col="never_treated",
+        treated_cohorts=(2014,),
+    )
+
+    assert out["status"] == "failed"
+    assert "Rows cannot be both treated cohort and never-treated control" in out["error"]
+
+
 def test_event_study_existing_dummy_column_conflict_returns_failed_output():
     df = _panel()
     df["event_m2"] = 1.0
@@ -251,7 +270,7 @@ def test_event_study_existing_dummy_column_conflict_returns_failed_output():
     )
 
     assert out["status"] == "failed"
-    assert "Generated event-study dummy columns conflict" in out["error"]
+    assert "Event-study generated or reserved columns conflict" in out["error"]
     assert "event_m2" in out["error"]
 
 
@@ -270,8 +289,44 @@ def test_event_study_control_dummy_name_conflict_returns_failed_output():
     )
 
     assert out["status"] == "failed"
-    assert "Generated event-study dummy columns conflict" in out["error"]
+    assert "Event-study generated or reserved columns conflict" in out["error"]
     assert "event_m2" in out["error"]
+
+
+def test_event_study_existing_reserved_column_conflict_returns_failed_output():
+    df = _panel()
+    df["_pareto_event_time"] = 0
+
+    out = estimate_pretrend_event_study(
+        df,
+        outcome_col="y",
+        unit_col="unit",
+        time_col="year",
+        cohort_col="cohort",
+        never_treated_col="never_treated",
+        treated_cohorts=(2014,),
+    )
+
+    assert out["status"] == "failed"
+    assert "Event-study generated or reserved columns conflict" in out["error"]
+    assert "_pareto_event_time" in out["error"]
+
+
+def test_event_study_control_reserved_column_conflict_returns_failed_output():
+    out = estimate_pretrend_event_study(
+        _panel(),
+        outcome_col="y",
+        unit_col="unit",
+        time_col="year",
+        cohort_col="cohort",
+        never_treated_col="never_treated",
+        controls=("_pareto_cohort_key",),
+        treated_cohorts=(2014,),
+    )
+
+    assert out["status"] == "failed"
+    assert "Event-study generated or reserved columns conflict" in out["error"]
+    assert "_pareto_cohort_key" in out["error"]
 
 
 class _FakeFit:
