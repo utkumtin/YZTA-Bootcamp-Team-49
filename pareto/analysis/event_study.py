@@ -273,7 +273,6 @@ def _build_working_frame(
         return "No observations found for the reference_period."
 
     dummy_times = [t for t in range(window_min, window_max + 1) if t != reference_period]
-    bin_counts: dict[int, int] = {}
     for event_time in dummy_times:
         dummy_col = _event_dummy_name(event_time)
         bin_mask = selected_treated & (work["_pareto_event_time"] == event_time)
@@ -281,29 +280,46 @@ def _build_working_frame(
         # Never-treated controls stay in sample with all event-time dummies set to 0.
         # Committed-baseline mode excludes other treated cohorts when pinned above.
         work[dummy_col] = bin_mask.astype(float)
-        bin_counts[event_time] = int(bin_mask.sum())
 
+    fit_cols_without_weight = [
+        outcome_col,
+        unit_col,
+        time_col,
+        *controls,
+        *[_event_dummy_name(t) for t in dummy_times],
+    ]
+    before = len(work)
+    work = work.dropna(subset=fit_cols_without_weight)
+    warnings: list[str] = []
+    if len(work) < before:
+        warnings.append(f"{before - len(work)} rows dropped due to missing model inputs.")
+    if work.empty:
+        return "No observations remain after dropping missing model inputs."
     if weight_col is not None:
         numeric_weights = pd.to_numeric(work[weight_col], errors="coerce")
         if bool(numeric_weights.isna().any()) or bool((numeric_weights <= 0).any()):
             return "weight_col must contain positive numeric weights."
         work[weight_col] = numeric_weights
 
-    fit_cols = [
-        outcome_col,
-        unit_col,
-        time_col,
-        *controls,
-        *([weight_col] if weight_col is not None else []),
-        *[_event_dummy_name(t) for t in dummy_times],
-    ]
-    before = len(work)
-    work = work.dropna(subset=fit_cols)
-    warnings: list[str] = []
-    if len(work) < before:
-        warnings.append(f"{before - len(work)} rows dropped due to missing model inputs.")
-    if work.empty:
-        return "No observations remain after dropping missing model inputs."
+    selected_treated = work["_pareto_cohort_key"].isin(used_cohort_keys)
+    if not bool(selected_treated.any()):
+        return "No treated cohort observations remain after dropping missing model inputs."
+    if not bool(work["_pareto_never_treated"].any()):
+        return "No never-treated control observations remain after dropping missing model inputs."
+    if not bool((selected_treated & (work["_pareto_event_time"] == reference_period)).any()):
+        return "No observations found for the reference_period."
+
+    in_window_treated = selected_treated & work["_pareto_event_time"].between(
+        window_min,
+        window_max,
+    )
+    non_reference_pre_period = (
+        in_window_treated
+        & (work["_pareto_event_time"] < 0)
+        & (work["_pareto_event_time"] != reference_period)
+    )
+    if not bool(non_reference_pre_period.any()):
+        return "No non-reference pre-period event-time observations available for diagnostic check."
 
     bin_counts = {
         event_time: int(

@@ -476,6 +476,91 @@ def test_event_study_missing_weight_returns_failed_output():
     assert out["error"] == "weight_col must contain positive numeric weights."
 
 
+def test_event_study_missing_weight_on_dropped_row_does_not_fail(monkeypatch):
+    monkeypatch.setattr(event_study, "_fit_model", lambda *_args, **_kwargs: _FakeFit())
+    df = _panel()
+    df.loc[df.index[0], "y"] = pd.NA
+    df.loc[df.index[0], "weight"] = pd.NA
+
+    out = estimate_pretrend_event_study(
+        df,
+        outcome_col="y",
+        unit_col="unit",
+        time_col="year",
+        cohort_col="cohort",
+        never_treated_col="never_treated",
+        weight_col="weight",
+        treated_cohorts=(2014,),
+        event_time_window=(-2, 0),
+        reference_period=-1,
+    )
+
+    assert out["status"] == "ok"
+    assert any("rows dropped due to missing model inputs" in warning for warning in out["warnings"])
+
+
+def test_event_study_fails_when_pre_period_dropped_after_missing_outcome():
+    df = _panel()
+    mask = (df["cohort"] == 2014) & df["year"].isin([2011, 2012])
+    df.loc[mask, "y"] = pd.NA
+
+    out = estimate_pretrend_event_study(
+        df,
+        outcome_col="y",
+        unit_col="unit",
+        time_col="year",
+        cohort_col="cohort",
+        never_treated_col="never_treated",
+        treated_cohorts=(2014,),
+        event_time_window=(-3, 3),
+        reference_period=-1,
+    )
+
+    assert out["status"] == "failed"
+    assert "No non-reference pre-period" in out["error"]
+
+
+def test_event_study_fails_when_reference_period_dropped_after_missing_outcome():
+    df = _panel()
+    mask = (df["cohort"] == 2014) & (df["year"] == 2013)
+    df.loc[mask, "y"] = pd.NA
+
+    out = estimate_pretrend_event_study(
+        df,
+        outcome_col="y",
+        unit_col="unit",
+        time_col="year",
+        cohort_col="cohort",
+        never_treated_col="never_treated",
+        treated_cohorts=(2014,),
+        event_time_window=(-3, 3),
+        reference_period=-1,
+    )
+
+    assert out["status"] == "failed"
+    assert "reference_period" in out["error"]
+
+
+def test_event_study_fails_when_never_treated_controls_dropped_after_missing_outcome():
+    df = _panel()
+    df.loc[df["never_treated"], "y"] = pd.NA
+
+    out = estimate_pretrend_event_study(
+        df,
+        outcome_col="y",
+        unit_col="unit",
+        time_col="year",
+        cohort_col="cohort",
+        never_treated_col="never_treated",
+        treated_cohorts=(2014,),
+        event_time_window=(-3, 3),
+        reference_period=-1,
+    )
+
+    assert out["status"] == "failed"
+    assert "No never-treated control observations remain" in out["error"]
+
+
 def test_event_study_normalizes_non_bool_never_treated_values():
     out = _estimate(_panel(never_values=("true", "false")), treated_cohorts=(2014,))
 
