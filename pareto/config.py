@@ -31,7 +31,6 @@ class ParetoSettings:
     # --- Model router. Gerçek model adları providers.py'de. ---
     judge_model: str = "gemini-3.5-flash"  # pinli yargı modeli (thinking ON)
     mechanical_model: str = "gemini-flash-lite"  # ucuz mekanik default
-    llm_max_tokens: int = 2000
     llm_temperature: float = 0.0  # deterministik → reprodüksiyon + cache
 
     # --- Privacy ---
