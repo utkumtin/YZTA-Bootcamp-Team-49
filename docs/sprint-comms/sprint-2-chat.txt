@@ -1,0 +1,77 @@
+[7/5/26, 9:15:24 PM] Utku M.: Arkadaşlar hem dev branch’ini hem de main branch’ini güncelledim
+[7/5/26, 9:15:34 PM] Utku M.: Projects kısmında görev atamaları da hazır
+[7/5/26, 9:16:00 PM] Utku M.: İnceleyip geliştirme sürecine devam edebiliriz
+[7/5/26, 9:47:10 PM] Ozan Celik: Süpersin eline sağlıkk
+[7/6/26, 8:02:09 PM] Ozan Celik: https://github.com/utkumtin/YZTA-Bootcamp-Team-49/pull/19
+[7/6/26, 8:02:09 PM] Ozan Celik: Arkadaşlar selam, ilk pr hayırlı olsun :) pr'ı inceleyip onlaylar mısınız
+[7/6/26, 8:08:55 PM] Ozan Celik: @⁨Utku M.⁩ müsaitsen hemen onaylar mısın pr ı diğer göreve başlayacağım conflict çıkmasın
+[7/6/26, 8:13:33 PM] Utku M.: Onayladım
+[7/6/26, 8:13:41 PM] Utku M.: PR’ları dev branch’ine açalım
+[7/6/26, 8:13:49 PM] Utku M.: main’i haftalık güncelleriz
+[7/6/26, 8:15:35 PM] Ozan Celik: Dev branchine pushlanmıyor yetkimiz yok
+[7/6/26, 8:16:00 PM] Ozan Celik: Normalde öyşe olabilir ama bence karışmasın task içine de açabiliriz yeni oluşturup benim yaptığım gibi
+[7/6/26, 8:16:27 PM] Utku M.: Kendi branch’inizden dev’e PR açabiliyor olmanız lazım
+[7/6/26, 8:17:40 PM] Ozan Celik: Ben direkt maine açtım bir daha dev'e açayım o zaman dediğin gibi yapalım
+[7/6/26, 9:19:43 PM] Ozan Celik: Selamlar, https://github.com/utkumtin/YZTA-Bootcamp-Team-49/pull/20
+[7/6/26, 9:20:16 PM] Ozan Celik: Ben backlogdan birkaç görev daha alıp yapacağım
+[7/6/26, 9:20:41 PM] Ozan Celik: @⁨Utku M.⁩ Onaylar mısın pr'ı yine
+‎[7/6/26, 9:36:12 PM] Ozan Celik: Buraya AI ekleyip API key'e bağladım iki türlü de karar verebiliyor artık ‎<attached: 00000107-PHOTO-2026-07-06-21-36-12.jpg>
+[7/6/26, 9:37:05 PM] Betul Bostan: Eline sağlık
+[7/6/26, 9:40:59 PM] Ozan Celik: Birazdan bir pr daha açacağım ana sayfadaki byok kısmı yani .env yerine oraya api yapıştırdığımızda çalışma kısmını da bağlıyorum
+[7/6/26, 9:41:50 PM] Utku M.: Onayladım
+[7/6/26, 9:41:56 PM] Utku M.: Tamamdır eline sağlık
+‎[7/6/26, 9:45:50 PM] Ozan Celik: Şuan bu mantık var ‎<attached: 00000112-PHOTO-2026-07-06-21-45-50.jpg>
+[7/6/26, 9:48:24 PM] Utku M.: Her ikisi de dolu ise BYOK kullanılmalı mantıken
+[7/6/26, 9:48:41 PM] Utku M.: BYOK’un anlamı olmaz yoksa production’da
+[7/6/26, 9:50:58 PM] Ozan Celik: Evet haklısın dikkatimden kaçmış düzeltiyorum şimdi
+[7/6/26, 9:51:23 PM] Ozan Celik: Bir cache ekliyoruö sayfa değiştirince değişiklik gidiyor çünkü
+[7/6/26, 9:58:38 PM] Utku M.: Nasıl bir cache ekliyorsun
+[7/6/26, 10:01:37 PM] Ozan Celik: Cleaning: yüklü veri banner’ı (clean_df korunur)
+Analysis: estimand, menü önerisi, spec listesi oturumda kalır
+Ana sayfa: oturum durumu özeti (veri / estimand / spec)
+[7/6/26, 10:01:44 PM] Ozan Celik: Tam cache mantığı değil
+[7/6/26, 10:04:53 PM] Utku M.: session storage iyidir ben de bu tarz bir şey ekleyelim diyecektim zaten
+[7/6/26, 10:05:47 PM] Ozan Celik: Evet ya diğer türlü sinir bozucu oluyor her sayfa değiştirince:d
+[7/6/26, 10:11:43 PM] Ozan Celik: https://github.com/utkumtin/YZTA-Bootcamp-Team-49/pull/21/
+‎[7/6/26, 10:17:33 PM] Ozan Celik: ‎<attached: 00000123-PHOTO-2026-07-06-22-17-33.jpg>
+‎[7/6/26, 10:17:59 PM] Ozan Celik: ‎<attached: 00000124-PHOTO-2026-07-06-22-17-59.jpg>
+‎[7/6/26, 10:18:28 PM] Ozan Celik: ‎<attached: 00000125-PHOTO-2026-07-06-22-18-28.jpg>
+[7/6/26, 10:18:49 PM] Ozan Celik: Son hali bu şekilde arkadaşlar
+[7/6/26, 10:24:30 PM] Utku M.: Eline sağlık
+[7/6/26, 10:29:50 PM] Ozan Celik: Teşekkür ederim
+[7/7/26, 1:49:04 PM] Utku M.: Arkadaslar projede gerekli olacak datasetleri iceren bir PR actim
+[7/7/26, 2:04:34 PM] Ozan Celik: Tamamdır
+[7/7/26, 2:04:43 PM] Ozan Celik: Eline sağlık
+[7/9/26, 3:48:06 PM] Utku M.: Arkadaşlar review’da 3 tane (biri dataset’ler) PR’ım var. Müsait olan bakıp onay ya da feedback verebilir mi?
+[7/9/26, 3:57:52 PM] Ozan Celik: Ben dataset olana bakabilirim bu akşam veya yarına kadar
+[7/9/26, 8:32:12 PM] Betul Bostan: S2-08’i tamamladım, PR #27 açık. https://github.com/utkumtin/YZTA-Bootcamp-Team-49/pull/27 bakabilir misiniz
+[7/9/26, 8:34:18 PM] Betul Bostan: PR #26 — “Feat/s2 01 02 combined tasks” için kısa bir review yaptım.
+pareto/cleaning/agent.py içinde _uncertainty_flag fonksiyonunda hâlâ raise NotImplementedError(...) kaldığını gördüm. Bu satırın altındaki mantık bu yüzden hiç çalışmayabilir ve cleaning agent akışında hata oluşturabilir. Bir de BaseModel importu iki kez yazılmış görünüyor.
+Bunlara bir bakabilir misin? Stub kaldırılıp ilgili test eklenirse tekrar kontrol edebilirim. pr#26 içinde chat böyle dedi azcık bende inceledim bakmak istersen diye söylemek istedim
+[7/9/26, 11:26:16 PM] Utku M.: Tamamdır bakacağım
+[7/11/26, 9:44:45 PM] Betul Bostan: Müsait olduğunuzda PR #27’ye bakabilir misin? S2-15 bu değişikliğe bağlı, o yüzden merge olmadan ilerleyemiyorum.
+[7/12/26, 12:03:43 AM] Utku M.: Kontrol ettim ve AI’a da kontrol ettirdim bu sorunlar mevcut değil. Gözden kaçırdığım bir nokta var ise ileride çıkar, o zaman çözeriz.
+[7/12/26, 12:04:42 AM] Utku M.: Comment’ler bıraktım. Aman aman şeyler yok ama merge etmeden önce çözüp öyle merge etsek daha iyi olur.
+[7/12/26, 12:05:19 AM] Utku M.: Açtığım PR onaylanınca ben de yeni task’a geçeceğim arkadaşlar. Müsait olduğunuz bir zaman ilgilenebilir misiniz?
+[7/12/26, 12:09:06 AM] Ozan Celik: Tamamdır ben bugün bakarım pr a
+[7/12/26, 12:09:14 AM] Ozan Celik: Eline sağlık bu arada :)
+[7/12/26, 4:04:29 AM] Ozan Celik: Arkadaşlar selam, ben yapılmayan bir görevimi üstüme aldım ve pr'ını açtım müsait olunca inceleyip feedback verirseniz sevinirim https://github.com/utkumtin/YZTA-Bootcamp-Team-49/pull/29/changes
+[7/12/26, 1:10:20 PM] Betul Bostan: teşekkür ederim. dediklerine baktım ve düzelttim. müsait olduğunda tekrar review edebilir misin?
+[7/12/26, 4:18:16 PM] Utku M.: Yorum bıraktım. Eline sağlık her şeyi çözmüşsün büyük oranda. Ufak iki şey kalmış onları da hallettikten sonra merge’leyebiliriz.
+[7/13/26, 8:39:50 PM] Ozan Celik: Selamlar, normalde birkaç tane daha yapılmayan maddeyi üstüme alıp tamamlayacaktım ancak işte yoğunluğum çıktığı ve farklı projeye baktığım için onlara daha sonra el atmaya çalışacağım, hepimizin eline sağlık gayet güzel ilerliyoruz :)
+[7/13/26, 9:05:00 PM] Utku M.: Senin de eline sağlık. Task’ları olabildiğince herkesin müsaitliğine göre ayarlamaya çalıştım. Üzerine ekstra task almana gerek yok ama müsaitliğin varsa da kimse hayır demez herhalde 🙂
+[7/13/26, 9:05:17 PM] Utku M.: Bir PR açtım arkadaşlar. Müsait olduğunuzda bakabilir misiniz?
+[7/13/26, 9:17:39 PM] Ozan Celik: Bakmaya çalışacağım ben 1 2 saat içinde
+[7/16/26, 5:21:48 PM] Utku M.: Arkadaşlar sprint 2’nin sonuna yaklaştık. Review’da bekleyen 1 PR var. 7 tane issue kaldı geriye sadece. Cumartesi gününe kadar bitirebilirsek pazar gününü pürüzleri giderme, readme’nin güncellenmesi ve sprint 3’ün planlamasına ayıralım diyorum. Bu yüzden pazar gününe kadar tüm issue’ları kapatabilirsek çok iyi olur.
+[7/18/26, 10:04:47 PM] Utku M.: Arkadaşlar sprint 3 (önümüzdeki 2 hafta) için müsaitlik durumunuzu belirtebilir misiniz? @⁨Betul Bostan⁩ @⁨Ozan Celik⁩ @⁨Utku Uzunhuseyin⁩
+[7/18/26, 10:06:00 PM] Betul Bostan: Ben daha önceden dediğim gibi çok müsait olamayacağım
+[7/18/26, 10:21:33 PM] Utku Uzunhuseyin: Selamlar arkadaşlar ben bayadır yazamadım. İş için sözleşme yapıyorum, ev falan arayışındayım o yüzden aktif olamadım bu hafta içi tüm her şeyi bitirip en kısa sürede aktif olmaya çalışacağım
+[7/18/26, 10:41:41 PM] Utku M.: Günlük ya da haftalık ayırabileceğiniz saati söyleyebilirseniz ona göre ayarlayacağım
+[7/18/26, 10:44:25 PM] Ozan Celik: Selamm, ben bu hafta şehir dışında olacağım bu hafta en erken cuma günü bakabilirim ve pazar, haftaya daha rahatım ama günlük 2 3 saat bakabilirim:)
+[7/19/26, 12:21:15 AM] Ozan Celik: Utku bu haftadan açık kalan issueları da önümüzdeki sprinte paylaştır istersen bir daha
+[7/19/26, 12:40:12 AM] Utku M.: Yarın ayarlıcam hepsini
+[7/19/26, 12:40:43 AM] Utku M.: PR review noktasında bir kilitlenmemiz var bunu da çözmemiz lazım
+[7/19/26, 12:43:31 AM] Ozan Celik: Evet evet onu konuşabilirix
+[7/19/26, 1:25:34 PM] Betul Bostan: Bu hafta 4 saat falan müsait olabilirim ondan sonraki hafta hiç müsaitliğim yok
+[7/19/26, 5:07:30 PM] Utku M.: Tamamdır sprint 3 için yeni issue açmayacağım sana. Sprint 2’den kalanları temizlersin. PR’ına comment bıraktım
+[7/19/26, 5:08:58 PM] Betul Bostan: 2 tane açabilirsin istersen çarşamba gününe kadar hepsini bitirmeye çalışırım

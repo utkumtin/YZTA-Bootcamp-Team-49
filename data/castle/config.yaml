@@ -1,0 +1,42 @@
+# Cheng-Hoekstra castle doctrine — ikincil flip/smoke seti (Sprint-1 de-risk spike).
+# Rol: `divorce`'un yedeği; kademeli yasalaşma + TWFE'nin sorunlu olduğu bilinen örnek
+# (Mixtape'in staggered-DiD bölümünün çalışma verisi). Temiz gelir, temizleme vitrini DEĞİL.
+
+dataset: castle
+description: >
+  Castle-doctrine (meşru müdafaa) yasalarının cinayet oranına etkisi
+  (Cheng & Hoekstra 2013; Cunningham Mixtape verisi). Eyalet-yıl paneli
+  2000-2010, kademeli yasalaşma (2005-2009 kohortları), 185 kolon
+  (zengin kontrol seti — kontrol-seti ekseni için iyi malzeme).
+
+sources:
+  castle:
+    file: raw/castle.csv                   # raw/castle.dta'dan tek-sefer export (fetch_data.py)
+    format: csv
+    note: >
+      Kaynak: github.com/scunning1975/mixtape (castle.dta). `effyear` = yasanın
+      yürürlük yılı; boş = never-treated (29 eyalet). Tam kolon listesi için CSV başlığı.
+    columns:                               # çekirdek roller; 185 kolonun tamamı değil
+      state: "state"
+      state_id: "sid"
+      year: "year"
+      effective_year: "effyear"            # tedavi kohortu (yıl); NA = never-treated
+      treated: "cdl"                       # yıl-içi ağırlıklı tedavi dummy'si
+      log_homicide: "l_homicide"           # sonuç: log cinayet oranı (100k başına)
+      population: "population"
+      unemployment_rate: "unemployrt"
+      income: "income"
+      poverty: "poverty"
+      police: "police"
+      prisoner: "prisoner"
+
+panel:
+  unit: state_id
+  time: year
+  outcome: [log_homicide]
+  covariates: [unemployment_rate, income, poverty, police, prisoner]
+  weight: population
+
+treatment:
+  cohort_from: effective_year
+  never_treated_when: { effective_year: null }

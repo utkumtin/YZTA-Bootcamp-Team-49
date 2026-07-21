@@ -1,0 +1,40 @@
+# Stevenson-Wolfers no-fault divorce — kanonik flip seti (Sprint-1 de-risk spike).
+# Rol: estimator-flip'in EN TEMİZ belgeli örneği (Goodman-Bacon 2021'in çalışma örneği):
+# TWFE ile Callaway-Sant'Anna/Bacon-ayrıştırması farklı işaret/büyüklük verir.
+# Veri-tesisatından bağımsız: temiz gelir, temizleme vitrini DEĞİL.
+
+dataset: divorce
+description: >
+  Tek-taraflı (no-fault) boşanma yasalarının kadın intihar oranına etkisi
+  (Stevenson & Wolfers 2006; Goodman-Bacon 2021 bacon_example verisi).
+  Eyalet-yıl paneli 1964-1996, kademeli (staggered) yasalaşma.
+
+sources:
+  bacon_example:
+    file: raw/divorce.csv                  # raw/bacon_example.dta'dan tek-sefer export (fetch_data.py)
+    format: csv
+    note: >
+      Goodman-Bacon'ın bacondecomp örnek verisi (http://pped.org/bacon_example.dta).
+      `_nfd` = no-fault yasasının yürürlük yılı; boş = never-treated.
+    columns:
+      state_fips: "stfips"
+      year: "year"
+      nfd_year: "_nfd"                     # tedavi kohortu (yıl); NA = never-treated
+      post: "post"                         # tedavi dummy'si (hazır türetilmiş)
+      suicide_rate_f: "asmrs"              # sonuç: kadın intihar oranı (yaş-düzeltilmiş, 1M başına)
+      per_capita_income: "pcinc"
+      homicide_rate: "asmrh"
+      afdc_cases: "cases"
+      weight: "weight"
+      pop_f: "copop"
+
+panel:
+  unit: state_fips
+  time: year
+  outcome: [suicide_rate_f]
+  covariates: [per_capita_income, homicide_rate, afdc_cases]
+  weight: weight
+
+treatment:
+  cohort_from: nfd_year
+  never_treated_when: { nfd_year: null }

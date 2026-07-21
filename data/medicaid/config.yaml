@@ -5,16 +5,18 @@
 
 dataset: medicaid
 description: >
-  ACA Medicaid genişlemesinin ilçe-yıl mortalitesine etkisi (DiD).
+  ACA Medicaid genişlemesinin ilçe-yıl mortalite ve sigortasızlık oranına etkisi (DiD).
+  Hero demonun iki yüzü: kapsam (sigortasızlık) etkisi robust, mortalite etkisi kırılgan.
   Committed baseline: 2014-genişleme kohortu vs never-treated (2-grup,
   TWFE-geçerli, kohort makinesi gerektirmez). Fast-follow tam-örneklem + Callaway-Sant'Anna açar.
 
 sources:
   cdc_mortality:
-    file: raw/cdc_wonder_mortality_1999_2020.tsv
+    file: raw/cdc_wonder_mortality_2009_2019.tsv
     format: tsv
     note: >
-      CDC WONDER, Multiple Cause of Death, 1999-2020. Dosya sonunda "---" işaretinden
+      CDC WONDER, Multiple Cause of Death. Export penceresi 2009-2019 (2020 COVID
+      nedeniyle bilerek dışarıda). Dosya sonunda "---" işaretinden
       sonra metadata footer'ı var (atlanmalı). Suppressed/Unreliable/Missing hücreler
       NA olarak ele alınır (DUA-uyumu; yeniden kurulmaz).
     read:
@@ -41,18 +43,70 @@ sources:
       status: "status"                       # "Adopted" / "Not Adopted"
       implementation_date: "implementation_date"
 
+  sahie_uninsured:
+    file: raw/sahie_uninsured_2009_2019.csv
+    format: csv
+    note: >
+      Census SAHIE (18-64, tüm gelirler; geocat=50/agecat=1/ırk-cinsiyet toplam
+      filtresi fetch_data.py'de). İkinci sonuç değişkeni — "robust" yüz.
+      FIPS iki parçalı (statefips+countyfips); WONDER'ın 5-haneli FIPS'iyle
+      birleşim temizleme aşamasının işi.
+    columns:
+      state_fips: "statefips"               # 2-haneli
+      county_fips_3: "countyfips"           # 3-haneli (eyalet-içi)
+      year: "year"
+      pct_uninsured: "pctui"                # sonuç: sigortasız % (18-64)
+      pct_uninsured_moe: "pctui_moe"
+      county_name: "county_name"
+
+  saipe_income_poverty:
+    file: raw/saipe_income_poverty_2009_2019.csv
+    format: csv
+    note: >
+      Census SAIPE (est{yy}all.txt'den türetildi, fetch_data.py). Kontrol
+      değişkenleri. '.' = suppressed → NA.
+    read:
+      na_markers: ["."]
+    columns:
+      state_fips: "statefips"               # 2-haneli
+      county_fips_3: "countyfips"           # 3-haneli (eyalet-içi)
+      year: "year"
+      median_hh_income: "median_hh_income"
+      poverty_rate: "poverty_pct_all_ages"
+
+  laus_unemployment:
+    file: raw/laus/laucnty*.xlsx            # yıl başına bir dosya (09..19) — glob
+    format: xlsx
+    note: >
+      BLS LAUS ilçe yıllık işsizlik (manuel edinim; BLS script'i 403'ler).
+      Kasıtlı ham bırakıldı — temizleme yakıtı: 2 başlık satırı, dosya sonunda
+      1 boş satır + 2 satır kaynak/tarih footer'ı, ilçe adı + eyalet kısaltması
+      tek kolonda ("Autauga County, AL"), yıl her dosyada sabit.
+    read:
+      header_row: 1                         # 0 = başlık metni; kolon adları 2. satırda
+      skipfooter: 2                         # "SOURCE: BLS, LAUS" + tarih
+      dtype: { "State FIPS Code": str, "County FIPS Code": str }   # zero-pad korunur
+    columns:
+      state_fips: "State FIPS Code"         # 2-haneli
+      county_fips_3: "County FIPS Code"     # 3-haneli (eyalet-içi)
+      county_name_state: "County Name/State Abbreviation"
+      year: "Year"
+      unemployment_rate: "Unemployment Rate (%)"
+
 merge:
   # ilçe FIPS'in ilk 2 hanesi = eyalet FIPS → KFF ile eşle (panel-merge)
+  # SAHIE/SAIPE: county_fips = statefips + countyfips (2+3 hane) × year ile eşle
   derive:
     state_fips: { from: county_fips, take_first: 2 }
-  on: state_fips
+    county_fips: { concat: [state_fips, county_fips_3] }   # SAHIE/SAIPE kaynakları için
+  "on": state_fips     # tırnak şart: YAML 1.1 çıplak `on`'u boolean True'ya çevirir
   how: left
 
 panel:                                       # CleanPanel manifest'e eşlenir
   unit: county_fips
   time: year
-  outcome: [crude_rate]                      # birincil sonuç
-  covariates: []                             # Census/ACS kontrolleri Sprint-2
+  outcome: [crude_rate, pct_uninsured]       # mortalite (kırılgan) + kapsam (robust)
+  covariates: [median_hh_income, poverty_rate, unemployment_rate]   # SAIPE + LAUS
   weight: population                         # nüfus-ağırlıklı (default)
 
 treatment:
