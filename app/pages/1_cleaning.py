@@ -105,7 +105,10 @@ if st.session_state.get("clean_df") is not None:
             st.rerun()
 
     entries = st.session_state.get("ledger")
-    if entries:
+    if entries is not None and len(entries) == 0:
+        st.info("JUDGE 0 karar üretti — veri temiz görünüyor.")
+
+    if entries is not None and len(entries) > 0:
         resolutions = st.session_state.setdefault("resolutions", {})
         run_id = st.session_state["run_id"]
 
