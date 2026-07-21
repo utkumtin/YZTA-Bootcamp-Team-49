@@ -62,7 +62,10 @@ def test_twfe_recovers_known_effect_same_lib():
 
 def test_none_clustering_runs_robust_se():
     # NEDEN: cluster_by=None sessizce bir kolona pinlenmemeli. Katsayı aynı kalır,
-    # SE değişir — clustered ile robust yol gerçekten ayrışıyor mu, onu ölçer.
+    # SE değişir — clustered ile robust yol gerçekten ayrışıyor mu, onu ölçer. Ayrıca
+    # robust yolun spesifik olarak HC1 kullandığını pinler: "iid" (klasik OLS SE) ile
+    # CRV1 arasındaki fark 1e-9 toleransının çok üzerinde olduğundan, vcov sessizce
+    # "iid"ye regrese olsa bile eski assertion'lar yine geçerdi.
     df = _cross(0.8)
     shared = {"outcome": "y", "treatment": "d", "controls": ("x1",), "estimator": "OLS"}
     robust = estimate_one(Specification(spec_id="robust", cluster_by=None, **shared), df)
@@ -71,6 +74,11 @@ def test_none_clustering_runs_robust_se():
     assert robust.status == "ok"
     assert robust.coefficient == pytest.approx(clustered.coefficient, abs=1e-9)
     assert robust.std_error != pytest.approx(clustered.std_error, abs=1e-9)
+
+    import pyfixest as pf
+
+    hc1_fit = pf.feols("y ~ d + x1", data=df, vcov="HC1")
+    assert robust.std_error == pytest.approx(float(hc1_fit.se()["d"]), abs=1e-9)
 
 
 def test_none_clustering_does_not_require_cluster_column():
@@ -84,6 +92,37 @@ def test_none_clustering_does_not_require_cluster_column():
     res = estimate_one(spec, df)
     assert res.status == "ok"
     assert res.n_obs == len(df)
+
+
+def test_twfe_none_clustering_overrides_fe_cluster_default():
+    # NEDEN: _feols_kwargs, OLSEstimator ve TWFEEstimator arasında paylaşılır ama yalnız
+    # OLS + cluster_by=None yolu test ediliyordu. FE'li modellerde vcov="hetero" açıkça
+    # geçilmezse, _feols_kwargs unit_fe üzerinden CRV1 kümelemeye (R fixest'in klasik
+    # davranışı) sessizce dönebilir ve "kümeleme yok" ekseni bir yalana dönüşür. Bu test
+    # override'ın TWFE yolunda da gerçekten gerçekleştiğini kanıtlar: SE, explicit HC1
+    # fit'iyle birebir eşleşmeli ve unit üzerinde açıkça kümelenmiş (CRV1) bir fit'ten
+    # farklı olmalı.
+    df = _panel(0.8)
+    spec = Specification(
+        spec_id="s",
+        outcome="y",
+        treatment="d",
+        cluster_by=None,
+        unit_fe="unit",
+        time_fe="year",
+        estimator="TWFE",
+    )
+    res = estimate_one(spec, df)
+    assert res.status == "ok"
+    assert res.coefficient == pytest.approx(0.8, abs=0.2)
+
+    import pyfixest as pf
+
+    hc1_fit = pf.feols("y ~ d | unit + year", data=df, vcov="HC1")
+    assert res.std_error == pytest.approx(float(hc1_fit.se()["d"]), abs=1e-9)
+
+    unit_clustered_fit = pf.feols("y ~ d | unit + year", data=df, vcov={"CRV1": "unit"})
+    assert res.std_error != pytest.approx(float(unit_clustered_fit.se()["d"]), abs=1e-9)
 
 
 def test_bad_spec_fails_soft_not_crash():

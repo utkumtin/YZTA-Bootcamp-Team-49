@@ -38,7 +38,7 @@ def _apply_sample(df: pd.DataFrame, spec: Specification) -> pd.DataFrame:
 
 def _fit_columns(spec: Specification) -> list[str]:
     cols = [spec.outcome, spec.treatment, *spec.controls]
-    if spec.cluster_by:
+    if spec.cluster_by is not None:
         cols.append(spec.cluster_by)
     if spec.weight_col:
         cols.append(spec.weight_col)
@@ -54,7 +54,7 @@ def _feols_kwargs(spec: Specification) -> dict:
     # Clustering ekseni: kolon verildiyse cluster-robust (CRV1), verilmediyse
     # heteroskedastisiteye dayanıklı SE (HC1). "Kümeleme yok" savunulabilir bir
     # seviyedir; sessizce bir kolona pinlenmez.
-    vcov: dict | str = {"CRV1": spec.cluster_by} if spec.cluster_by else "hetero"
+    vcov: dict | str = {"CRV1": spec.cluster_by} if spec.cluster_by is not None else "hetero"
     kwargs: dict = {"vcov": vcov}
     if spec.weight_col:
         kwargs["weights"] = spec.weight_col

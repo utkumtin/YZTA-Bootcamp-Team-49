@@ -222,7 +222,8 @@ def generate_spec_menu(
         "- control_set: 'none' for no controls, or 'col1+col2' for control sets\n"
         "- sample: 'none' for full sample, or a pandas query string\n"
         "- pre_period: 'none' or integer years (e.g. '3')\n"
-        "- clustering: column name, or 'none' for no clustering (heteroskedasticity-robust SE)\n"
+        "- clustering: column name, or 'none' for no clustering (heteroskedasticity-robust SE); "
+        "panel/DiD: cluster at treatment-assignment level; 'none' only if indefensible\n"
         "- never_treated: 'true' or 'false'\n"
         "- estimator: 'OLS' or 'TWFE'\n"
         f"- weighting: '{DEFAULT_WEIGHT_COL}' (population-weighted default) or 'none' for unweighted\n"
@@ -273,6 +274,11 @@ def _parse_never_treated(level: str) -> bool:
     return lowered == "true"
 
 
+def _parse_optional_column(level: str) -> str | None:
+    """'none' (büyük/küçük harf duyarsız) → kolon yok. Diğer her şey kolon adı."""
+    return None if level.strip().lower() == "none" else level
+
+
 T = TypeVar("T")
 
 
@@ -303,10 +309,10 @@ def spec_menu_proposal_to_menu(
     pre_period_windows = tuple(_dedupe_preserving_order([_parse_pre_period(v) for v in axis("pre_period")]))
     # weighting ile aynı normalizasyon: "none" savunulabilir bir seviye, hata değil
     clustering_levels = tuple(
-        _dedupe_preserving_order([None if v == "none" else v for v in axis("clustering")])
+        _dedupe_preserving_order([_parse_optional_column(v) for v in axis("clustering")])
     )
     never_treated_levels = tuple(_dedupe_preserving_order([_parse_never_treated(v) for v in axis("never_treated")]))
-    weighting_levels = tuple(_dedupe_preserving_order([None if v == "none" else v for v in axis("weighting")]))
+    weighting_levels = tuple(_dedupe_preserving_order([_parse_optional_column(v) for v in axis("weighting")]))
     estimator_levels_raw = _dedupe_preserving_order(axis("estimator"))
 
     for estimator in estimator_levels_raw:
