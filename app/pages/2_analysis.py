@@ -489,10 +489,16 @@ if state is None:
     with st.form("analysis_state_form"):
         unit_col_input = st.selectbox("Birim kolonu (unit)", options=columns, index=columns.index(guessed_unit))
         time_col_input = st.selectbox("Zaman kolonu (time)", options=columns, index=columns.index(guessed_time))
+        cluster_options = [None] + columns
         cluster_by_input = st.selectbox(
             "Kümeleme kolonu (cluster)",
-            options=columns,
-            index=columns.index(guessed_cluster),
+            options=cluster_options,
+            index=cluster_options.index(guessed_cluster),
+            format_func=lambda c: (
+                c
+                if c is not None
+                else "Kümeleme yok (heteroskedastisiteye dayanıklı SE)"
+            ),
         )
         controls_input = st.multiselect(
             "Kontrol kolonları",

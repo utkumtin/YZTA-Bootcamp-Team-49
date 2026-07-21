@@ -33,7 +33,7 @@ class Specification(BaseModel):
     unit_fe: str | None = None
     time_fe: str | None = None
     pre_period_window: int | None = None
-    cluster_by: str
+    cluster_by: str | None  # None → kümeleme yok, heteroskedastisiteye dayanıklı SE
     estimator: Estimator = "OLS"
 
     # Yeni eksenler (prototipte eksikti):
