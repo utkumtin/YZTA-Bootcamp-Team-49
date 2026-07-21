@@ -22,3 +22,19 @@ def test_content_hash_ignores_spec_id_but_reflects_content():
     c = Specification(spec_id="a", outcome="y", treatment="d", cluster_by="g", controls=("x",))
     assert a.content_hash() == b.content_hash()
     assert a.content_hash() != c.content_hash()
+
+
+def test_cluster_by_none_is_valid_and_distinct_from_clustered():
+    # NEDEN: "kümeleme yok" savunulabilir bir clustering seviyesi; JUDGE bunu önerebilmeli.
+    # Ayrı bir hash üretmeli, yoksa iki seviye multiverse'te aynı spec'e çöker.
+    unclustered = Specification(spec_id="s", outcome="y", treatment="d", cluster_by=None)
+    clustered = Specification(spec_id="s", outcome="y", treatment="d", cluster_by="g")
+    assert unclustered.cluster_by is None
+    assert unclustered.content_hash() != clustered.content_hash()
+
+
+def test_content_hash_stable_after_optional_cluster_by():
+    # NEDEN: cluster_by'ın opsiyonelleşmesi mevcut donmuş hash'leri KIRMAMALI.
+    # Altın değer, cluster_by'ın `str` olduğu sürümde üretildi.
+    spec = Specification(spec_id="a", outcome="y", treatment="d", cluster_by="g")
+    assert spec.content_hash() == "86a56fa79042cf0b"

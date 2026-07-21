@@ -14,6 +14,8 @@ from pareto.analysis.menu import (
 from pareto.llm.router import use_test_model
 from pareto.spec import Specification
 
+_MENU_COLUMNS = ["state", "year", "expanded", "uninsured_rate", "population", "unemployment_rate"]
+
 
 def _frozen(**kw):
     base: dict = {
@@ -182,6 +184,66 @@ def test_testmodel_proposes_expected_axes_and_levels():
     frozen_menu = freeze_spec_menu(proposal, available_columns=columns, approved=True)
     assert frozen_menu.menu.weighting_levels[0] == "population"
     assert frozen_menu.menu.estimators[0] == "TWFE"
+
+
+def test_menu_hash_stable_after_optional_clustering():
+    # NEDEN: clustering ekseninin None kabul etmesi mevcut donmuş menü hash'lerini KIRMAMALI.
+    # Altın değer, clustering_levels'ın `tuple[str, ...]` olduğu sürümde üretildi.
+    assert _frozen().menu_hash == "f6e3c64072312e2e"
+
+
+def test_clustering_none_level_freezes_instead_of_failing():
+    # NEDEN: JUDGE "none" önerdiğinde menü dondurulamıyor, LLM menü akışı fiilen
+    # kapanıyordu. "none" artık kümeleme-yok seviyesine normalize olmalı.
+    args = _menu_proposal_args()
+    clustering = next(a for a in args["axes"] if a["axis_name"] == "clustering")  # type: ignore[index]
+    clustering["baseline_level"] = "none"
+
+    proposal = SpecMenuProposal(**args)
+    frozen_menu = freeze_spec_menu(
+        proposal,
+        available_columns=_MENU_COLUMNS,
+        approved=True,
+    )
+    assert frozen_menu.menu.clustering_levels == (None,)
+
+
+def test_clustering_axis_expands_none_and_column_as_two_specs():
+    # NEDEN: kümeleme seçimi bir varyans ekseni; "none" ile kolon aynı spec'e çökerse
+    # panel bu ekseni hiç ölçemez.
+    args = _menu_proposal_args()
+    clustering = next(a for a in args["axes"] if a["axis_name"] == "clustering")  # type: ignore[index]
+    clustering["candidate_levels"] = ["none"]
+
+    frozen_menu = freeze_spec_menu(
+        SpecMenuProposal(**args),
+        available_columns=_MENU_COLUMNS,
+        approved=True,
+        active_axes=("clustering",),
+    )
+    specs = expand_to_specs(
+        frozen_menu,
+        outcome="uninsured_rate",
+        treatment="expanded",
+        unit_col="state",
+        time_col="year",
+    )
+    assert {s.cluster_by for s in specs} == {"state", None}
+    validate_spec_menu_to_specs(frozen_menu, specs)
+
+
+def test_unknown_clustering_column_still_fails_loud():
+    # NEDEN: "none" gevşemesi uydurma kolonlara kapı açmamalı; halüsinasyon hâlâ patlatır.
+    args = _menu_proposal_args()
+    clustering = next(a for a in args["axes"] if a["axis_name"] == "clustering")  # type: ignore[index]
+    clustering["baseline_level"] = "hayali_kolon"
+
+    with pytest.raises(ValueError, match="Invalid clustering column"):
+        freeze_spec_menu(
+            SpecMenuProposal(**args),
+            available_columns=_MENU_COLUMNS,
+            approved=True,
+        )
 
 
 def test_freeze_spec_menu_rejects_unapproved():

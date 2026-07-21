@@ -84,7 +84,7 @@ class SpecMenu(BaseModel):
     control_sets: list[list[str]]
     sample_filters: tuple[str | None, ...] = (None,)
     pre_period_windows: tuple[int | None, ...] = (None,)
-    clustering_levels: tuple[str, ...]
+    clustering_levels: tuple[str | None, ...]  # None seviyesi = kümeleme yok (robust SE)
     never_treated_levels: tuple[bool, ...] = (True,)
     estimators: tuple[SupportedEstimator, ...] = ("OLS", "TWFE")
     weighting_levels: tuple[str | None, ...] = (None,)
@@ -166,7 +166,7 @@ def _resolve_weighting_levels(
 def build_deterministic_menu(
     *,
     controls: list[str] | None,
-    cluster_by: str,
+    cluster_by: str | None,
     estimators: list[str],
     available_columns: list[str] | None = None,
     weight_col: str | None = None,
@@ -222,7 +222,7 @@ def generate_spec_menu(
         "- control_set: 'none' for no controls, or 'col1+col2' for control sets\n"
         "- sample: 'none' for full sample, or a pandas query string\n"
         "- pre_period: 'none' or integer years (e.g. '3')\n"
-        "- clustering: column name\n"
+        "- clustering: column name, or 'none' for no clustering (heteroskedasticity-robust SE)\n"
         "- never_treated: 'true' or 'false'\n"
         "- estimator: 'OLS' or 'TWFE'\n"
         f"- weighting: '{DEFAULT_WEIGHT_COL}' (population-weighted default) or 'none' for unweighted\n"
@@ -301,7 +301,10 @@ def spec_menu_proposal_to_menu(
     control_sets = _dedupe_preserving_order([_parse_control_set(v) for v in axis("control_set")])
     sample_filters = tuple(_dedupe_preserving_order([_parse_sample_filter(v) for v in axis("sample")]))
     pre_period_windows = tuple(_dedupe_preserving_order([_parse_pre_period(v) for v in axis("pre_period")]))
-    clustering_levels = tuple(_dedupe_preserving_order(axis("clustering")))
+    # weighting ile aynı normalizasyon: "none" savunulabilir bir seviye, hata değil
+    clustering_levels = tuple(
+        _dedupe_preserving_order([None if v == "none" else v for v in axis("clustering")])
+    )
     never_treated_levels = tuple(_dedupe_preserving_order([_parse_never_treated(v) for v in axis("never_treated")]))
     weighting_levels = tuple(_dedupe_preserving_order([None if v == "none" else v for v in axis("weighting")]))
     estimator_levels_raw = _dedupe_preserving_order(axis("estimator"))
@@ -312,7 +315,7 @@ def spec_menu_proposal_to_menu(
     estimator_levels = cast(tuple[SupportedEstimator, ...], tuple(estimator_levels_raw))
 
     for cluster in clustering_levels:
-        if cluster not in cols:
+        if cluster is not None and cluster not in cols:
             raise ValueError(f"Invalid clustering column: {cluster}")
 
     for control_set in control_sets:
