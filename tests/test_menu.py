@@ -6,6 +6,7 @@ from pareto.analysis.menu import (
     SpecMenu,
     SpecMenuAxis,
     SpecMenuProposal,
+    evaluate_menu_defensibility,
     expand_to_specs,
     freeze_spec_menu,
     generate_spec_menu,
@@ -244,6 +245,25 @@ def test_unknown_clustering_column_still_fails_loud():
             available_columns=_MENU_COLUMNS,
             approved=True,
         )
+
+
+def test_defensibility_gate_blocks_invalid_proposal():
+    args = _menu_proposal_args()
+    args["axes"][0]["baseline_level"] = ""
+
+    proposal = SpecMenuProposal(**args)
+    ok, reasons, spec_count = evaluate_menu_defensibility(
+        proposal,
+        available_columns=_MENU_COLUMNS,
+        outcome="uninsured_rate",
+        treatment="expanded",
+        unit_col="state",
+        time_col="year",
+    )
+
+    assert not ok
+    assert spec_count == 0
+    assert any("baseline" in reason.lower() for reason in reasons)
 
 
 def test_freeze_spec_menu_rejects_unapproved():
