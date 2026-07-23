@@ -706,6 +706,22 @@ if menu_source == "deterministic":
         available_columns=columns,
     )
 
+    try:
+        preview_specs = expand_to_specs(
+            menu.freeze(),
+            outcome=frozen_estimand.estimand.outcome,
+            treatment=frozen_estimand.estimand.treatment_coding,
+            unit_col=unit_col or cluster_by,
+            time_col=time_col or cluster_by,
+        )
+        menu_status_placeholder.success(
+            f"Canlı spec sayacı: {len(preview_specs)} spesifikasyon üretilebilir"
+        )
+    except ValueError as exc:
+        menu_status_placeholder.warning(
+            f"Canlı spec sayacı: kapıdan geçemiyor — {exc}"
+        )
+
 
 
 # -------------------------------------------------
@@ -808,9 +824,14 @@ else:
                     st.session_state[f"{axis.axis_name}_editing"] = True
                     st.rerun()
             with cols[2]:
-                if st.button("Çıkar", key=f"{axis.axis_name}_remove", use_container_width=True):
-                    if axis.candidate_levels:
-                        axis.candidate_levels = axis.candidate_levels[:-1]
+                if axis.candidate_levels:
+                    to_remove = st.selectbox(
+                        "Silinecek seviye",
+                        options=axis.candidate_levels,
+                        key=f"{axis.axis_name}_remove_select",
+                    )
+                    if st.button("Çıkar", key=f"{axis.axis_name}_remove", use_container_width=True):
+                        axis.candidate_levels = [level for level in axis.candidate_levels if level != to_remove]
                         st.session_state["menu_proposal"] = menu_proposal
                         st.rerun()
             with cols[3]:
@@ -882,6 +903,18 @@ else:
         for reason in reasons:
             st.caption(f"• {reason}")
 
+    axes_needing_approval = {
+        axis.axis_name for axis in menu_proposal.axes if axis.candidate_levels
+    }
+    all_approved = axes_needing_approval.issubset(approved_axes)
+
+    if not all_approved:
+        missing = axes_needing_approval - approved_axes
+        st.warning(
+            "Dondurmadan önce şu eksenleri onaylayın: "
+            + ", ".join(sorted(missing))
+        )
+
     proposed_active_axes = st.multiselect(
         "Dondurmadan önce aktif eksenler",
         options=list(ALL_AXES),
@@ -889,7 +922,7 @@ else:
         help="Seçilen eksenler dondurulan menünün parçası olur.",
     )
 
-    if defensibility_ok and st.button("Spesifikasyon menüsünü dondur"):
+    if defensibility_ok and all_approved and st.button("Spesifikasyon menüsünü dondur"):
 
         try:
             frozen_menu_obj = freeze_spec_menu(
@@ -899,11 +932,6 @@ else:
                 active_axes=tuple(proposed_active_axes),
             )
             st.session_state["frozen_spec_menu"] = frozen_menu_obj
-            _persist_frozen_menu(
-                frozen_estimand=frozen_estimand,
-                frozen_menu=frozen_menu_obj.menu.freeze(),
-                specs=[],
-            )
             st.success("Spesifikasyon menüsü donduruldu.")
             st.rerun()
 
