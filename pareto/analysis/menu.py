@@ -350,6 +350,143 @@ def spec_menu_proposal_to_menu(
 # -----------------------------
 
 
+def _collect_menu_proposal_reasons(
+    proposal: SpecMenuProposal,
+    *,
+    available_columns: list[str],
+    outcome: str | None = None,
+    treatment: str | None = None,
+    unit_col: str | None = None,
+    time_col: str | None = None,
+) -> list[str]:
+    reasons: list[str] = []
+
+    if proposal.needs_clarification:
+        reasons.append(proposal.clarification_question or "Menü için ek açıklama gerekiyor.")
+
+    if not available_columns:
+        reasons.append("En az bir mevcut kolon gereklidir.")
+
+    if outcome is not None and not (outcome or "").strip():
+        reasons.append("Outcome kolon adı zorunludur.")
+    if treatment is not None and not (treatment or "").strip():
+        reasons.append("Treatment kolon adı zorunludur.")
+    if unit_col is not None and not (unit_col or "").strip():
+        reasons.append("Unit kolonu zorunludur.")
+    if time_col is not None and not (time_col or "").strip():
+        reasons.append("Time kolonu zorunludur.")
+
+    axis_lookup = {axis.axis_name: axis for axis in proposal.axes}
+
+    for axis_name in ALL_AXES:
+        axis = axis_lookup.get(axis_name)
+        if axis is None:
+            reasons.append(f"{axis_name} ekseni eksik.")
+            continue
+
+        baseline = (axis.baseline_level or "").strip()
+        if not baseline:
+            reasons.append(f"{axis_name} baseline seviyesi boş olamaz.")
+            continue
+
+        try:
+            if axis_name == "control_set":
+                _parse_control_set(baseline)
+                for candidate in axis.candidate_levels:
+                    _parse_control_set(candidate)
+            elif axis_name == "sample":
+                _parse_sample_filter(baseline)
+                for candidate in axis.candidate_levels:
+                    _parse_sample_filter(candidate)
+            elif axis_name == "pre_period":
+                _parse_pre_period(baseline)
+                for candidate in axis.candidate_levels:
+                    _parse_pre_period(candidate)
+            elif axis_name == "clustering":
+                parsed = _parse_optional_column(baseline)
+                if parsed is not None and parsed not in set(available_columns):
+                    raise ValueError(f"Invalid clustering column: {parsed}")
+                for candidate in axis.candidate_levels:
+                    parsed_candidate = _parse_optional_column(candidate)
+                    if parsed_candidate is not None and parsed_candidate not in set(available_columns):
+                        raise ValueError(f"Invalid clustering column: {parsed_candidate}")
+            elif axis_name == "never_treated":
+                _parse_never_treated(baseline)
+                for candidate in axis.candidate_levels:
+                    _parse_never_treated(candidate)
+            elif axis_name == "estimator":
+                if baseline not in SUPPORTED_ESTIMATORS:
+                    raise ValueError(f"Unsupported estimator: {baseline}")
+                for candidate in axis.candidate_levels:
+                    if candidate not in SUPPORTED_ESTIMATORS:
+                        raise ValueError(f"Unsupported estimator: {candidate}")
+            elif axis_name == "weighting":
+                parsed = _parse_optional_column(baseline)
+                if parsed is not None and parsed not in set(available_columns):
+                    raise ValueError(f"Invalid weight column: {parsed}")
+                for candidate in axis.candidate_levels:
+                    parsed_candidate = _parse_optional_column(candidate)
+                    if parsed_candidate is not None and parsed_candidate not in set(available_columns):
+                        raise ValueError(f"Invalid weight column: {parsed_candidate}")
+        except ValueError as exc:
+            reasons.append(str(exc))
+
+    if reasons:
+        return reasons
+
+    if outcome is not None or treatment is not None or unit_col is not None or time_col is not None:
+        try:
+            menu = spec_menu_proposal_to_menu(proposal, available_columns=available_columns)
+            frozen = FrozenSpecMenu(menu=menu, menu_hash=_menu_hash(menu))
+            expand_to_specs(
+                frozen,
+                outcome=outcome or "",
+                treatment=treatment or "",
+                unit_col=unit_col or "",
+                time_col=time_col or "",
+            )
+        except ValueError as exc:
+            reasons.append(str(exc))
+
+    return reasons
+
+
+def evaluate_menu_defensibility(
+    proposal: SpecMenuProposal,
+    *,
+    available_columns: list[str],
+    outcome: str | None = None,
+    treatment: str | None = None,
+    unit_col: str | None = None,
+    time_col: str | None = None,
+) -> tuple[bool, list[str], int]:
+    """Menünün savunulabilirlik kapısından geçip geçmediğini değerlendirir."""
+    reasons = _collect_menu_proposal_reasons(
+        proposal,
+        available_columns=available_columns,
+        outcome=outcome,
+        treatment=treatment,
+        unit_col=unit_col,
+        time_col=time_col,
+    )
+    if reasons:
+        return False, reasons, 0
+
+    frozen_menu = freeze_spec_menu(
+        proposal,
+        available_columns=available_columns,
+        approved=True,
+    )
+    specs = expand_to_specs(
+        frozen_menu,
+        outcome=outcome or "",
+        treatment=treatment or "",
+        unit_col=unit_col or "",
+        time_col=time_col or "",
+    )
+    return True, [], len(specs)
+
+
 def freeze_spec_menu(
     proposal: SpecMenuProposal,
     *,
@@ -361,6 +498,13 @@ def freeze_spec_menu(
         raise ValueError(proposal.clarification_question or "Clarification required")
     if not approved:
         raise ValueError("User approval required to freeze spec menu")
+
+    reasons = _collect_menu_proposal_reasons(
+        proposal,
+        available_columns=available_columns,
+    )
+    if reasons:
+        raise ValueError("; ".join(reasons))
 
     menu = spec_menu_proposal_to_menu(proposal, available_columns=available_columns)
     if active_axes:

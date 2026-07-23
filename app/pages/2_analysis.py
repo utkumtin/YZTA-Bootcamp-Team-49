@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import time
+import uuid
+
 import pandas as pd
 import streamlit as st
 
+from pareto.analysis.runner import launch_multiverse
+from pareto.memory.store import ProjectStore
 from pareto.streamlit_ui import render_compact_sidebar
 
 from pareto.analysis.hypothesis import (
@@ -18,6 +23,7 @@ from pareto.analysis.menu import (
     ALL_AXES,
     SpecMenu,
     build_deterministic_menu,
+    evaluate_menu_defensibility,
     expand_to_specs,
     freeze_spec_menu,
     generate_spec_menu,
@@ -34,6 +40,53 @@ with st.sidebar:
 
 
 st.title("2 - Analiz (v2)")
+
+
+def _persist_frozen_menu(*, frozen_estimand, frozen_menu, specs, run_id: str | None = None) -> None:
+    store = ProjectStore(project_id="analysis")
+    store.save(
+        "frozen_menu",
+        {
+            "estimand_hash": frozen_estimand.freeze_hash,
+            "menu_hash": frozen_menu.menu_hash,
+            "spec_count": len(specs),
+            "run_id": run_id,
+            "estimand": frozen_estimand.estimand.model_dump(),
+            "menu": frozen_menu.model_dump(),
+        },
+    )
+
+
+def _preview_menu_status(proposal, *, available_columns, outcome, treatment, unit_col, time_col) -> tuple[bool, list[str], int]:
+    return evaluate_menu_defensibility(
+        proposal,
+        available_columns=available_columns,
+        outcome=outcome,
+        treatment=treatment,
+        unit_col=unit_col,
+        time_col=time_col,
+    )
+
+
+@st.fragment
+def _render_multiverse_progress(handle) -> None:
+    progress = handle.read_progress()
+    total = max(int(progress.get("total", 0) or 0), 1)
+    done = int(progress.get("done", 0) or 0)
+
+    with st.status("Multiverse çalışıyor…", expanded=True):
+        st.write(f"Run: {handle.run_dir.name}")
+        st.progress(done / total)
+        st.caption(f"{done}/{total} spesifikasyon işlendi")
+
+        if handle.is_done():
+            st.success("Multiverse tamamlandı.")
+            results_path = str(handle.results_path)
+            st.caption(f"Sonuçlar: {results_path}")
+            st.page_link("app/pages/3_variance_panel.py", label="Varyans panelini aç")
+        else:
+            time.sleep(1)
+            st.rerun()
 
 
 # -------------------------------------------------
@@ -619,7 +672,7 @@ st.subheader(
     "Spesifikasyon Menüsü"
 )
 
-
+menu_status_placeholder = st.empty()
 
 menu_source = st.radio(
     "Menü kaynağı",
@@ -720,29 +773,86 @@ else:
         menu_proposal.overall_rationale
     )
 
+    preview_ok, preview_reasons, preview_count = _preview_menu_status(
+        menu_proposal,
+        available_columns=columns,
+        outcome=frozen_estimand.estimand.outcome,
+        treatment=frozen_estimand.estimand.treatment_coding,
+        unit_col=unit_col or cluster_by,
+        time_col=time_col or cluster_by,
+    )
+
+    if preview_ok:
+        menu_status_placeholder.success(f"Canlı spec sayacı: {preview_count} spesifikasyon üretilebilir")
+    else:
+        menu_status_placeholder.warning("Canlı spec sayacı: kapıdan geçemiyor")
+        for reason in preview_reasons:
+            menu_status_placeholder.caption(f"• {reason}")
+
+    approved_axes = set(st.session_state.get("menu_approved_axes", []))
 
     for axis in menu_proposal.axes:
-
         with st.expander(
-            f"{axis.axis_name} "
-            f"(baseline: {axis.baseline_level})"
+            f"{axis.axis_name} (baseline: {axis.baseline_level})"
         ):
+            st.write(axis.rationale)
 
-            st.write(
-                axis.rationale
-            )
+            cols = st.columns(4)
+            with cols[0]:
+                if st.button("Onayla", key=f"{axis.axis_name}_approve", use_container_width=True):
+                    approved_axes.add(axis.axis_name)
+                    st.session_state["menu_approved_axes"] = approved_axes
+                    st.rerun()
+            with cols[1]:
+                if st.button("Düzenle", key=f"{axis.axis_name}_edit", use_container_width=True):
+                    st.session_state[f"{axis.axis_name}_editing"] = True
+                    st.rerun()
+            with cols[2]:
+                if st.button("Çıkar", key=f"{axis.axis_name}_remove", use_container_width=True):
+                    if axis.candidate_levels:
+                        axis.candidate_levels = axis.candidate_levels[:-1]
+                        st.session_state["menu_proposal"] = menu_proposal
+                        st.rerun()
+            with cols[3]:
+                candidate_level = st.text_input(
+                    "Yeni seviye",
+                    key=f"{axis.axis_name}_new_level",
+                    label_visibility="collapsed",
+                )
+                if st.button("Ekle", key=f"{axis.axis_name}_add", use_container_width=True):
+                    if candidate_level.strip():
+                        axis.candidate_levels = [*axis.candidate_levels, candidate_level.strip()]
+                        st.session_state["menu_proposal"] = menu_proposal
+                        st.rerun()
+
+            if axis.axis_name in approved_axes:
+                st.caption("✓ Onaylandı")
+
+            if st.session_state.get(f"{axis.axis_name}_editing", False):
+                baseline_value = st.text_input(
+                    "Baseline",
+                    value=axis.baseline_level,
+                    key=f"{axis.axis_name}_baseline",
+                )
+                candidate_text = st.text_area(
+                    "Aday seviyeler (virgülle)",
+                    value=", ".join(axis.candidate_levels),
+                    key=f"{axis.axis_name}_candidates",
+                )
+                if st.button("Kaydet", key=f"{axis.axis_name}_save"):
+                    axis.baseline_level = baseline_value.strip()
+                    axis.candidate_levels = [
+                        item.strip()
+                        for item in candidate_text.split(",")
+                        if item.strip()
+                    ]
+                    st.session_state["menu_proposal"] = menu_proposal
+                    st.session_state[f"{axis.axis_name}_editing"] = False
+                    st.rerun()
 
             if axis.candidate_levels:
-
-                st.write(
-                    "Aday seviyeler:"
-                )
-
-                st.write(
-                    axis.candidate_levels
-                )
-
-
+                st.write("Aday seviyeler:")
+                st.write(axis.candidate_levels)
 
     if menu_proposal.needs_clarification:
 
@@ -756,6 +866,22 @@ else:
 
 
 
+    defensibility_ok, reasons, spec_count = evaluate_menu_defensibility(
+        menu_proposal,
+        available_columns=columns,
+        outcome=frozen_estimand.estimand.outcome,
+        treatment=frozen_estimand.estimand.treatment_coding,
+        unit_col=unit_col or cluster_by,
+        time_col=time_col or cluster_by,
+    )
+
+    if defensibility_ok:
+        st.success(f"Savunulabilirlik kapısı geçti: {spec_count} spesifikasyon üretilebilir.")
+    else:
+        st.warning("Savunulabilirlik kapısı: bu menü dondurulamaz.")
+        for reason in reasons:
+            st.caption(f"• {reason}")
+
     proposed_active_axes = st.multiselect(
         "Dondurmadan önce aktif eksenler",
         options=list(ALL_AXES),
@@ -763,30 +889,26 @@ else:
         help="Seçilen eksenler dondurulan menünün parçası olur.",
     )
 
-    if st.button("Spesifikasyon menüsünü dondur"):
+    if defensibility_ok and st.button("Spesifikasyon menüsünü dondur"):
 
         try:
-
-            st.session_state[
-                "frozen_spec_menu"
-            ] = freeze_spec_menu(
+            frozen_menu_obj = freeze_spec_menu(
                 menu_proposal,
                 available_columns=columns,
                 approved=True,
                 active_axes=tuple(proposed_active_axes),
             )
-
-
-            st.success(
-                "Spesifikasyon menüsü donduruldu."
+            st.session_state["frozen_spec_menu"] = frozen_menu_obj
+            _persist_frozen_menu(
+                frozen_estimand=frozen_estimand,
+                frozen_menu=frozen_menu_obj.menu.freeze(),
+                specs=[],
             )
-
+            st.success("Spesifikasyon menüsü donduruldu.")
+            st.rerun()
 
         except ValueError as exc:
-
-            st.error(
-                str(exc)
-            )
+            st.error(str(exc))
 
 
 
@@ -943,6 +1065,16 @@ st.session_state[
 ] = frozen_menu
 
 
+persisted_run_id = None
+if frozen_estimand and frozen_menu:
+    persisted_run_id = f"{frozen_estimand.freeze_hash[:8]}-{frozen_menu.menu_hash[:8]}-{uuid.uuid4().hex[:6]}"
+
+_persist_frozen_menu(
+    frozen_estimand=frozen_estimand,
+    frozen_menu=frozen_menu,
+    specs=specs,
+    run_id=persisted_run_id,
+)
 
 st.subheader(
     "Spesifikasyon Seti"
@@ -973,3 +1105,15 @@ st.dataframe(
 st.success(
     f"{len(specs)} spesifikasyon üretildi."
 )
+
+st.subheader("Multiverse")
+
+if st.button("Multiverse başlat", type="primary"):
+    run_id = f"{frozen_estimand.freeze_hash[:8]}-{frozen_menu.menu_hash[:8]}-{uuid.uuid4().hex[:6]}"
+    handle = launch_multiverse(df, specs, run_id)
+    st.session_state["multiverse_handle"] = handle
+    st.session_state["multiverse_run_id"] = run_id
+    st.rerun()
+
+if st.session_state.get("multiverse_handle") is not None:
+    _render_multiverse_progress(st.session_state["multiverse_handle"])
