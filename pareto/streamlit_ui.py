@@ -7,8 +7,8 @@ import os
 import pandas as pd
 import streamlit as st
 
-from .config import get_api_key, get_api_key_source, resolve_setting
-from .llm.providers import JUDGE_PRIVATE_SLOT, JUDGE_SLOT
+from .config import PrivacyMode, get_api_key, get_api_key_source, resolve_setting
+from .llm.providers import JUDGE_PRIVATE_SLOT, JUDGE_SLOT, ModelOption, judge_slots_for, option_ids
 
 BYOK_WIDGET_KEYS: dict[str, str] = {
     "GEMINI_API_KEY": "byok_gemini_input",
@@ -79,30 +79,67 @@ def render_byok_panel() -> None:
 
 
 def _render_model_choice() -> None:
-    """Yargı modeli seçimi — küratörlü liste (serbest metin yok).
+    """Yargı: sağlayıcı seçimi -> o sağlayıcının küratörlü model listesi.
 
-    Seçim `os.environ`'a YAZILMAZ (anahtar akışının aksine): `GROQ_MECHANICAL_MODEL`
-    gibi değişkenler private zinciri de besliyor; env'e yazmak kullanıcı seçimini
-    private uçlara sızdırırdı. Widget değeri oturumda kalır, zincir kurulurken
-    yalnız public modda okunur (`llm/providers.py: chain_for`).
+    Hem PUBLIC hem PRIVATE modda geçerlidir (bkz. `llm/providers.py: chain_for`).
+    Seçim `os.environ`'a YAZILMAZ: widget değerleri yalnız oturumda kalır,
+    `provider`/`api_key_env`/`no_train` her zaman kodda pinli kalır — kullanıcı
+    yalnız küratörlü slot kümesi içinden seçer, serbest kombinasyon üretemez.
     """
-    pinned = resolve_setting(JUDGE_SLOT.model_env, JUDGE_SLOT.default_model)
-    options = list(JUDGE_SLOT.options)
-    if pinned not in options:  # operatörün .env pini listede yoksa da görünsün
-        options.insert(0, pinned)
+    raw_mode = str(st.session_state.get("privacy_mode", PrivacyMode.PUBLIC.value))
+    privacy = PrivacyMode.PRIVATE if raw_mode == PrivacyMode.PRIVATE.value else PrivacyMode.PUBLIC
+    slots_by_provider = judge_slots_for(privacy)
+    default_provider = (
+        JUDGE_PRIVATE_SLOT.provider if privacy is PrivacyMode.PRIVATE else JUDGE_SLOT.provider
+    )
+    provider_names = list(slots_by_provider)
 
-    st.subheader("Model seçimi")
-    st.selectbox(
-        "Yargı modeli",
-        options=options,
-        index=options.index(pinned),
-        key=f"model_choice_{JUDGE_SLOT.key}",
+    st.subheader("Model seçimi (Yargı)")
+    provider_choice = st.selectbox(
+        "Sağlayıcı",
+        options=provider_names,
+        index=provider_names.index(default_provider),
+        key="judge_provider_choice",
         help=(
-            "Estimand, spec menüsü, temizleme önerisi ve varyans anlatısı bu modelle üretilir. "
-            "Yalnız **public** modu etkiler; private mod modeli deploy sahibinin "
-            f"`{JUDGE_PRIVATE_SLOT.model_env}` ayarına bağlıdır."
+            "Estimand, spec menüsü, temizleme önerisi ve varyans anlatısı bu sağlayıcı/modelle "
+            "üretilir. Hem **public** hem **private** modda geçerlidir."
         ),
     )
+
+    if privacy is PrivacyMode.PRIVATE and provider_choice == "groq":
+        st.warning(
+            "Groq'ta no-train (Zero Data Retention) garantisi bu uygulama tarafından "
+            "zorlanamaz; bir hesap ayarıdır. Private moda geçmeden önce "
+            "[buradan](https://console.groq.com/settings/data-controls) etkinleştirin. "
+            "Bu ayarın açık kalmasının sorumluluğu size aittir."
+        )
+
+    slot = slots_by_provider[provider_choice]
+    pinned = resolve_setting(slot.model_env, slot.default_model)
+    options = list(slot.options)
+    if pinned not in option_ids(slot):  # operatörün .env pini listede yoksa da görünsün
+        options.insert(0, ModelOption(model_id=pinned))
+    ids = [o.model_id for o in options]
+
+    def _label(model_id: str) -> str:
+        opt = next(o for o in options if o.model_id == model_id)
+        return f"{model_id} — {opt.performance_note}" if opt.performance_note else model_id
+
+    st.selectbox(
+        "Model",
+        options=ids,
+        index=ids.index(pinned),
+        key=f"model_choice_{slot.key}",
+        format_func=_label,
+        help=f"Kalıcı pin: `{slot.model_env}` (.env). Bu seçim yalnız oturumda kalır.",
+    )
+
+    chosen_id = str(st.session_state.get(f"model_choice_{slot.key}", pinned))
+    chosen = next((o for o in options if o.model_id == chosen_id), options[0])
+    if chosen.input_cost_note or chosen.output_cost_note:
+        giris = chosen.input_cost_note or "—"
+        cikis = chosen.output_cost_note or "—"
+        st.caption(f"Maliyet — giriş: {giris} · çıkış: {cikis}")
 
 
 def render_session_overview() -> None:

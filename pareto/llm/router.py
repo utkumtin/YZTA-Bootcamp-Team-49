@@ -46,7 +46,18 @@ def _model_from_provider(pm: ProviderModel) -> Any:
             pm.model_id,
             provider=GoogleProvider(api_key=get_api_key(pm.api_key_env)),
         )
-    # Google dışı sağlayıcılarda da BYOK/.env anahtarını ortama pinle.
+    if pm.provider == "openrouter":
+        from pydantic_ai.models.openrouter import OpenRouterModel
+        from pydantic_ai.providers.openrouter import OpenRouterProvider
+
+        # get_api_key() ÖNCE çağrılır: eksik anahtar burada fail-loud OSError
+        # olarak yükselsin (_chain_model'in yakaladığı hata), OpenRouterProvider'ın
+        # kendi UserError'ına düşmesin — o hata _chain_model'de yakalanmaz.
+        return OpenRouterModel(
+            pm.model_id,
+            provider=OpenRouterProvider(api_key=get_api_key(pm.api_key_env)),
+        )
+    # Google/OpenRouter dışı sağlayıcılarda da BYOK/.env anahtarını ortama pinle.
     os.environ[pm.api_key_env] = get_api_key(pm.api_key_env)
     # Diğer sağlayıcılar: "<provider>:<model_id>" (groq vb. optional extra gerekir)
     return f"{pm.provider}:{pm.model_id}"
@@ -93,17 +104,23 @@ def _chain_model(chain: tuple[ProviderModel, ...]) -> Any:
     return FallbackModel(*models)
 
 
-def _resolve_model(role: ModelRole) -> Any:
-    """Test modeli varsa onu; yoksa cache'li failover zincirini döndürür.
+def _resolve_model(role: ModelRole) -> tuple[Any, dict[str, Any]]:
+    """Test modeli varsa onu; yoksa cache'li failover zincirini + ekstra model_settings'i döndürür.
 
     JUDGE zinciri tek üyelidir, dolayısıyla pinli kalır (failover yalnız mekanikte).
+    İkinci eleman (`extra_model_settings`), zincirin tek üyeli olduğu durumda o üyenin
+    `ProviderModel.extra_model_settings`'i (örn. OpenRouter ZDR zorlaması) — çok üyeli
+    zincirlerde (yalnız MECHANICAL) hiçbir slot bu alanı kullanmadığı için her zaman
+    boş; ileride çok üyeli bir slot bu alanı kullanırsa yanlış üyeye uygulanmasın diye
+    burada bilinçli olarak atlanır.
     """
     if _TEST_MODEL is not None:
-        return _TEST_MODEL
+        return _TEST_MODEL, {}
     from .cache import wrap_with_cache
 
     chain = chain_for(role, _get_effective_privacy_mode())
-    return wrap_with_cache(_chain_model(chain))
+    extra_model_settings = chain[0].extra_model_settings or {} if len(chain) == 1 else {}
+    return wrap_with_cache(_chain_model(chain)), extra_model_settings
 
 
 def build_agent(role: ModelRole, *, system_prompt: str, output_type: Any | None = None):
@@ -115,11 +132,13 @@ def build_agent(role: ModelRole, *, system_prompt: str, output_type: Any | None 
             "pydantic-ai kurulu değil. `uv sync` / `pip install pydantic-ai` gerekli."
         ) from exc
 
-    model = _resolve_model(role)
+    model, extra_model_settings = _resolve_model(role)
     kwargs: dict[str, Any] = {
         "system_prompt": system_prompt,
-        # Determinizm pini: temp=0 → tekrarlanabilir yanıt + cache isabeti
-        "model_settings": {"temperature": SETTINGS.llm_temperature},
+        # Determinizm pini: temp=0 → tekrarlanabilir yanıt + cache isabeti.
+        # extra_model_settings genelde boş; yalnız OpenRouter ZDR gibi slota özgü
+        # ayarlar taşıyan zincirlerde dolu (bkz. providers.py: ProviderModel).
+        "model_settings": {"temperature": SETTINGS.llm_temperature, **extra_model_settings},
     }
     if output_type is not None:
         kwargs["output_type"] = output_type

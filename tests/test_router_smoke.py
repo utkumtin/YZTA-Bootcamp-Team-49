@@ -22,11 +22,15 @@ from pareto.llm.cache import CachedModel, cache_enabled
 from pareto.llm.providers import (
     _PRIVATE_JUDGE_SLOTS,
     _PRIVATE_MECHANICAL_SLOTS,
+    JUDGE_GROQ_PRIVATE_SLOT,
+    JUDGE_GROQ_SLOT,
+    JUDGE_OPENROUTER_PRIVATE_SLOT,
+    JUDGE_OPENROUTER_SLOT,
     JUDGE_SLOT,
     _resolve,
     chain_for,
 )
-from pareto.llm.router import _chain_model, _model_from_provider
+from pareto.llm.router import _chain_model, _model_from_provider, _resolve_model
 
 # BYOK anahtarları .env'de durabilir; canlı testlerin skip kararı öncesi yükle.
 load_dotenv_file()
@@ -167,12 +171,13 @@ def test_bos_env_koddaki_defaulta_duser(monkeypatch):
 def test_ui_secimi_env_pinini_gecer(monkeypatch):
     monkeypatch.setenv(JUDGE_SLOT.model_env, "env-pinli-model")
     monkeypatch.setattr(
-        "streamlit.session_state", {f"model_choice_{JUDGE_SLOT.key}": JUDGE_SLOT.options[0]}
+        "streamlit.session_state",
+        {f"model_choice_{JUDGE_SLOT.key}": JUDGE_SLOT.options[0].model_id},
     )
 
     chain = chain_for(ModelRole.JUDGE, PrivacyMode.PUBLIC)
 
-    assert chain[0].model_id == JUDGE_SLOT.options[0]
+    assert chain[0].model_id == JUDGE_SLOT.options[0].model_id
 
 
 def test_listede_olmayan_oturum_secimi_yok_sayilir(monkeypatch):
@@ -186,22 +191,135 @@ def test_listede_olmayan_oturum_secimi_yok_sayilir(monkeypatch):
     assert chain[0].model_id == JUDGE_SLOT.default_model
 
 
-def test_oturum_secimi_yalnizca_izin_verilen_cagride_okunur(monkeypatch):
-    """`allow_session=False` (private mod) oturum seçimini görmezden gelmeli."""
+def test_resolve_allow_session_false_hala_gormezden_gelir(monkeypatch):
+    """`_resolve(..., allow_session=False)` mekanizması değişmedi — session'ı görmezden gelir.
+
+    Bu, MECHANICAL private zincirinin (ve JUDGE'ın PUBLIC'te kapalı, private'ta artık
+    True ile çağrıldığı — bkz. `test_judge_private_modda_oturum_secimi_artik_okunur`)
+    dayandığı temel davranış; `allow_session` parametresinin kendisi değişmedi, yalnız
+    JUDGE artık private modda `True` ile çağrılıyor.
+    """
     monkeypatch.setenv(JUDGE_SLOT.model_env, "env-pinli-model")
     monkeypatch.setattr(
-        "streamlit.session_state", {f"model_choice_{JUDGE_SLOT.key}": JUDGE_SLOT.options[0]}
+        "streamlit.session_state",
+        {f"model_choice_{JUDGE_SLOT.key}": JUDGE_SLOT.options[0].model_id},
     )
 
-    assert _resolve(JUDGE_SLOT, allow_session=True).model_id == JUDGE_SLOT.options[0]
+    assert _resolve(JUDGE_SLOT, allow_session=True).model_id == JUDGE_SLOT.options[0].model_id
     assert _resolve(JUDGE_SLOT, allow_session=False).model_id == "env-pinli-model"
 
 
-def test_private_zincirdeki_slotlar_ui_secimine_kapali():
-    """Private uçlar kullanıcı seçimine açılmaz: no-train garantisi ve paid anahtar
-    deploy sahibinin kontrolünde kalır. (Groq slotu her iki zincirde de kullanılıyor.)"""
-    for slot in _PRIVATE_JUDGE_SLOTS + _PRIVATE_MECHANICAL_SLOTS:
-        assert slot.options == (), f"{slot.key} private zincirde ama UI'da seçilebilir"
+def test_judge_private_modda_oturum_secimi_artik_okunur(monkeypatch):
+    """JUDGE private modda artık UI seçimini okur (bilinçli gevşetme, bkz. ADR 0004 2026-07-24)."""
+    monkeypatch.setattr(
+        "streamlit.session_state",
+        {
+            "judge_provider_choice": "groq",
+            f"model_choice_{JUDGE_GROQ_PRIVATE_SLOT.key}": (
+                JUDGE_GROQ_PRIVATE_SLOT.options[0].model_id
+            ),
+        },
+    )
+
+    chain = chain_for(ModelRole.JUDGE, PrivacyMode.PRIVATE)
+
+    assert chain[0].provider == "groq"
+    assert chain[0].model_id == JUDGE_GROQ_PRIVATE_SLOT.options[0].model_id
+    assert chain[0].no_train is True
+
+
+def test_private_mekanik_slotlar_ui_secimine_kapali():
+    """Private MECHANICAL uçları kullanıcı seçimine açılmaz: no-train garantisi ve paid
+    anahtar deploy sahibinin kontrolünde kalır. Bu kapsamda JUDGE'ın davranışı değişti
+    (bkz. yukarısı); MECHANICAL değişmedi."""
+    for slot in _PRIVATE_MECHANICAL_SLOTS:
+        assert slot.options == (), f"{slot.key} private mekanik zincirde ama UI'da seçilebilir"
+
+
+def test_private_judge_slotlari_kuratorlu_secenek_tasir():
+    """JUDGE private slotları artık UI'da seçilebilir olmalı — boş `options` bir regresyon olur."""
+    for slot in _PRIVATE_JUDGE_SLOTS:
+        assert slot.options != (), f"{slot.key} private judge ama küratörlü liste boş"
+
+
+def test_judge_provider_secimi_farkli_slota_yonlendirir(monkeypatch):
+    monkeypatch.setattr("streamlit.session_state", {"judge_provider_choice": "openrouter"})
+
+    chain = chain_for(ModelRole.JUDGE, PrivacyMode.PUBLIC)
+
+    assert chain[0].provider == "openrouter"
+    assert chain[0].api_key_env == JUDGE_OPENROUTER_SLOT.api_key_env
+
+
+def test_listede_olmayan_provider_secimi_yok_sayilir(monkeypatch):
+    """Seçenek listesinde olmayan sağlayıcı seçimi varsayılan sağlayıcıya düşer."""
+    monkeypatch.setattr("streamlit.session_state", {"judge_provider_choice": "uydurma-saglayici"})
+
+    chain = chain_for(ModelRole.JUDGE, PrivacyMode.PUBLIC)
+
+    assert chain[0].provider == JUDGE_SLOT.provider
+
+
+def test_provider_secimi_kimlik_alanlarini_asamaz():
+    """Sağlayıcı seçilebilir olsa da provider/api_key_env/no_train hep koddaki slottan gelir."""
+    for slot in (JUDGE_SLOT, JUDGE_GROQ_SLOT, JUDGE_OPENROUTER_SLOT):
+        uc = _resolve(slot, allow_session=False)
+        assert uc.provider == slot.provider
+        assert uc.api_key_env == slot.api_key_env
+        assert uc.no_train == slot.no_train
+
+
+def test_judge_private_her_saglayicida_no_train_true(monkeypatch):
+    for provider in ("google", "groq", "openrouter"):
+        monkeypatch.setattr("streamlit.session_state", {"judge_provider_choice": provider})
+
+        chain = chain_for(ModelRole.JUDGE, PrivacyMode.PRIVATE)
+
+        assert chain[0].no_train is True, f"{provider}: private judge no_train=False olamaz"
+
+
+def test_openrouter_private_judge_zdr_deklare_edilir():
+    """ZDR deklarasyonu slotta tanımlı olmalı ve `_resolve` sonrasında da hayatta kalmalı."""
+    zdr = {"openrouter_provider": {"zdr": True}}
+    assert JUDGE_OPENROUTER_PRIVATE_SLOT.extra_model_settings == zdr
+
+    uc = _resolve(JUDGE_OPENROUTER_PRIVATE_SLOT, allow_session=False)
+
+    assert uc.extra_model_settings == zdr
+
+
+def test_model_from_provider_openrouter_dogru_sinifi_kurar(monkeypatch):
+    """`_model_from_provider` artık OpenRouter için genel string yerine tipli OpenRouterModel kurar
+    (network çağrısı yok, yalnız construction — ZDR'ın taşınabilmesi buna dayanıyor)."""
+    from pydantic_ai.models.openrouter import OpenRouterModel
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-anahtar")
+
+    pm = _resolve(JUDGE_OPENROUTER_SLOT, allow_session=False)
+    model = _model_from_provider(pm)
+
+    assert isinstance(model, OpenRouterModel)
+
+
+def test_resolve_model_extra_settings_openrouter_private_icin_dolu(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-anahtar")
+    monkeypatch.setattr(
+        "streamlit.session_state",
+        {"privacy_mode": "private", "judge_provider_choice": "openrouter"},
+    )
+
+    _model, extra = _resolve_model(ModelRole.JUDGE)
+
+    assert extra == {"openrouter_provider": {"zdr": True}}
+
+
+def test_resolve_model_extra_settings_diger_slotlarda_bos(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-anahtar")
+    monkeypatch.setattr("streamlit.session_state", {"privacy_mode": "public"})
+
+    _model, extra = _resolve_model(ModelRole.JUDGE)
+
+    assert extra == {}
 
 
 def test_env_override_private_no_train_garantisini_bozmaz(monkeypatch):
