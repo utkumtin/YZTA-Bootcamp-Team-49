@@ -28,9 +28,7 @@ class ModelRole(StrEnum):
 
 @dataclass(frozen=True)
 class ParetoSettings:
-    # --- Model router. Gerçek model adları providers.py'de. ---
-    judge_model: str = "gemini-3.5-flash"  # pinli yargı modeli (thinking ON)
-    mechanical_model: str = "gemini-flash-lite"  # ucuz mekanik default
+    # --- Model router. Model adları/slotları providers.py'de (tek kaynak). ---
     llm_temperature: float = 0.0  # deterministik → reprodüksiyon + cache
 
     # --- Privacy ---
@@ -83,6 +81,9 @@ def _from_env(candidates: tuple[str, ...]) -> str:
     return ""
 
 
+_secrets_warned = False
+
+
 def _from_secrets(candidates: tuple[str, ...]) -> str:
     try:
         import streamlit as st
@@ -95,7 +96,12 @@ def _from_secrets(candidates: tuple[str, ...]) -> str:
                 if key:
                     return key
     except Exception as exc:
-        logger.warning("st.secrets okunamadı: %s", exc)
+        # Süreç başına bir kez uyar: her anahtar/model slotu için tekrarlanırsa
+        # (zincir kurulumu başına 5+) log okunmaz hale gelir.
+        global _secrets_warned
+        if not _secrets_warned:
+            logger.warning("st.secrets okunamadı: %s", exc)
+            _secrets_warned = True
     return ""
 
 
@@ -129,3 +135,14 @@ def get_api_key_source(provider_env: str) -> str:
     """Anahtar kaynağını döndür: env | secrets | none."""
     _key, source = resolve_api_key(provider_env)
     return source
+
+
+def resolve_setting(env_name: str, default: str) -> str:
+    """Sır olmayan bir ayarı çöz: env → `st.secrets` → kod defaultu.
+
+    `resolve_api_key`'in kardeşi; aynı arama sırasını kullanır ama eksiklik
+    hata değildir — model ID'si gibi ayarlarda defaulta düşmek doğru davranış.
+    Boş/whitespace değer "tanımsız" sayılır.
+    """
+    candidates = (env_name,)
+    return _from_env(candidates) or _from_secrets(candidates) or default

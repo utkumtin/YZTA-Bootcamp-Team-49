@@ -7,7 +7,8 @@ import os
 import pandas as pd
 import streamlit as st
 
-from .config import get_api_key, get_api_key_source
+from .config import get_api_key, get_api_key_source, resolve_setting
+from .llm.providers import JUDGE_PRIVATE_SLOT, JUDGE_SLOT
 
 BYOK_WIDGET_KEYS: dict[str, str] = {
     "GEMINI_API_KEY": "byok_gemini_input",
@@ -73,7 +74,35 @@ def render_byok_panel() -> None:
             st.session_state.pop(widget_key, None)
         st.rerun()
 
+    _render_model_choice()
     _render_api_key_status(detailed=True)
+
+
+def _render_model_choice() -> None:
+    """Yargı modeli seçimi — küratörlü liste (serbest metin yok).
+
+    Seçim `os.environ`'a YAZILMAZ (anahtar akışının aksine): `GROQ_MECHANICAL_MODEL`
+    gibi değişkenler private zinciri de besliyor; env'e yazmak kullanıcı seçimini
+    private uçlara sızdırırdı. Widget değeri oturumda kalır, zincir kurulurken
+    yalnız public modda okunur (`llm/providers.py: chain_for`).
+    """
+    pinned = resolve_setting(JUDGE_SLOT.model_env, JUDGE_SLOT.default_model)
+    options = list(JUDGE_SLOT.options)
+    if pinned not in options:  # operatörün .env pini listede yoksa da görünsün
+        options.insert(0, pinned)
+
+    st.subheader("Model seçimi")
+    st.selectbox(
+        "Yargı modeli",
+        options=options,
+        index=options.index(pinned),
+        key=f"model_choice_{JUDGE_SLOT.key}",
+        help=(
+            "Estimand, spec menüsü, temizleme önerisi ve varyans anlatısı bu modelle üretilir. "
+            "Yalnız **public** modu etkiler; private mod modeli deploy sahibinin "
+            f"`{JUDGE_PRIVATE_SLOT.model_env}` ayarına bağlıdır."
+        ),
+    )
 
 
 def render_session_overview() -> None:

@@ -17,9 +17,15 @@ from pydantic_ai.models.fallback import FallbackModel
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.test import TestModel
 
-from pareto.config import SETTINGS, ModelRole, PrivacyMode, load_dotenv_file
+from pareto.config import ModelRole, PrivacyMode, load_dotenv_file
 from pareto.llm.cache import CachedModel, cache_enabled
-from pareto.llm.providers import chain_for
+from pareto.llm.providers import (
+    _PRIVATE_JUDGE_SLOTS,
+    _PRIVATE_MECHANICAL_SLOTS,
+    JUDGE_SLOT,
+    _resolve,
+    chain_for,
+)
 from pareto.llm.router import _chain_model, _model_from_provider
 
 # BYOK anahtarları .env'de durabilir; canlı testlerin skip kararı öncesi yükle.
@@ -129,7 +135,83 @@ def test_failover_birincil_dusunce_yedege_gecer():
 def test_judge_zinciri_tek_uyeli_ve_pinli():
     chain = chain_for(ModelRole.JUDGE, PrivacyMode.PUBLIC)
     assert len(chain) == 1, "JUDGE failover'a girmez, pinli tek model olmalı"
-    assert chain[0].model_id == SETTINGS.judge_model
+    assert chain[0].model_id == JUDGE_SLOT.default_model
+
+
+# ---------------------------------------------------------------------------
+# Model seçimi — .env / st.secrets / UI override'ları
+# ---------------------------------------------------------------------------
+
+
+def test_env_model_idyi_override_eder_kimligi_etmez(monkeypatch):
+    """Yeni model çıkınca kod değil .env değişsin; ama sağlayıcı/anahtar/no-train
+    env'e AÇILMAZ — bunlar gizlilik ve kimlik-doğrulama garantileri."""
+    monkeypatch.setenv(JUDGE_SLOT.model_env, "gemini-test-9")
+
+    uc = chain_for(ModelRole.JUDGE, PrivacyMode.PUBLIC)[0]
+
+    assert uc.model_id == "gemini-test-9"
+    assert uc.provider == JUDGE_SLOT.provider
+    assert uc.api_key_env == JUDGE_SLOT.api_key_env
+    assert uc.no_train is JUDGE_SLOT.no_train
+
+
+def test_bos_env_koddaki_defaulta_duser(monkeypatch):
+    monkeypatch.setenv(JUDGE_SLOT.model_env, "   ")
+
+    chain = chain_for(ModelRole.JUDGE, PrivacyMode.PUBLIC)
+
+    assert chain[0].model_id == JUDGE_SLOT.default_model
+
+
+def test_ui_secimi_env_pinini_gecer(monkeypatch):
+    monkeypatch.setenv(JUDGE_SLOT.model_env, "env-pinli-model")
+    monkeypatch.setattr(
+        "streamlit.session_state", {f"model_choice_{JUDGE_SLOT.key}": JUDGE_SLOT.options[0]}
+    )
+
+    chain = chain_for(ModelRole.JUDGE, PrivacyMode.PUBLIC)
+
+    assert chain[0].model_id == JUDGE_SLOT.options[0]
+
+
+def test_listede_olmayan_oturum_secimi_yok_sayilir(monkeypatch):
+    """Seçenek listesi daraltıldığında eski oturum değeri uygulamayı çökertmemeli."""
+    monkeypatch.setattr(
+        "streamlit.session_state", {f"model_choice_{JUDGE_SLOT.key}": "uydurma-model-id"}
+    )
+
+    chain = chain_for(ModelRole.JUDGE, PrivacyMode.PUBLIC)
+
+    assert chain[0].model_id == JUDGE_SLOT.default_model
+
+
+def test_oturum_secimi_yalnizca_izin_verilen_cagride_okunur(monkeypatch):
+    """`allow_session=False` (private mod) oturum seçimini görmezden gelmeli."""
+    monkeypatch.setenv(JUDGE_SLOT.model_env, "env-pinli-model")
+    monkeypatch.setattr(
+        "streamlit.session_state", {f"model_choice_{JUDGE_SLOT.key}": JUDGE_SLOT.options[0]}
+    )
+
+    assert _resolve(JUDGE_SLOT, allow_session=True).model_id == JUDGE_SLOT.options[0]
+    assert _resolve(JUDGE_SLOT, allow_session=False).model_id == "env-pinli-model"
+
+
+def test_private_zincirdeki_slotlar_ui_secimine_kapali():
+    """Private uçlar kullanıcı seçimine açılmaz: no-train garantisi ve paid anahtar
+    deploy sahibinin kontrolünde kalır. (Groq slotu her iki zincirde de kullanılıyor.)"""
+    for slot in _PRIVATE_JUDGE_SLOTS + _PRIVATE_MECHANICAL_SLOTS:
+        assert slot.options == (), f"{slot.key} private zincirde ama UI'da seçilebilir"
+
+
+def test_env_override_private_no_train_garantisini_bozmaz(monkeypatch):
+    for slot in _PRIVATE_JUDGE_SLOTS + _PRIVATE_MECHANICAL_SLOTS:
+        monkeypatch.setenv(slot.model_env, "baska-bir-model")
+
+    for role in (ModelRole.JUDGE, ModelRole.MECHANICAL):
+        chain = chain_for(role, PrivacyMode.PRIVATE)
+        assert chain, "private zincir boş olamaz"
+        assert all(uc.no_train for uc in chain)
 
 
 def test_mekanik_zincir_fallback_modele_indirgenir(monkeypatch):

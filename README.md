@@ -449,7 +449,7 @@ GitHub Actions. Independent validation via R (`did` / `differences`) in `noteboo
 
 ```bash
 uv sync --extra dev          # veya: pip install -e ".[dev]"
-cp .env.example .env         # BYOK anahtarlarını doldur (opsiyonel; demo canned)
+cp .env.example .env         # BYOK anahtarları + model seçimleri (her slot bir değişken)
 streamlit run app/main.py
 ```
 
