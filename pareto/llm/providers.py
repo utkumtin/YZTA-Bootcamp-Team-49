@@ -22,11 +22,17 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from ..config import ModelRole, PrivacyMode, resolve_setting
 
 logger = logging.getLogger(__name__)
+
+# Küratörlü thinking/reasoning derinliği — pydantic-ai'nin tam skalası
+# ('minimal'..'xhigh') değil, mevcut "serbest metin yok, küratörlü liste" ile
+# tutarlı bir alt küme. router.py:_resolve_model bunu pydantic-ai'nin cross-
+# provider `ModelSettings.thinking` alanına taşır; "off" hiç key eklemez.
+ThinkingChoice = Literal["off", "low", "medium", "high"]
 
 
 @dataclass(frozen=True)
@@ -35,7 +41,7 @@ class ProviderModel:
     model_id: str
     api_key_env: str  # BYOK env değişkeni
     no_train: bool  # PRIVATE modda yalnız True seçilebilir
-    thinking: bool = False
+    thinking: ThinkingChoice = "off"
     # Sağlayıcıya özgü ekstra model_settings (örn. OpenRouter ZDR zorlaması).
     # Yalnız ihtiyaç duyan slotlarda dolu; build_agent() temperature ile birleştirir.
     extra_model_settings: dict[str, Any] | None = None
@@ -69,7 +75,8 @@ class ModelSlot:
     model_env: str  # .env değişkeni
     default_model: str
     options: tuple[ModelOption, ...] = ()  # UI selectbox seçenekleri (küratörlü)
-    thinking: bool = False
+    default_thinking: ThinkingChoice = "off"
+    thinking_options: tuple[ThinkingChoice, ...] = ()  # boşsa UI'da gösterilmez
     extra_model_settings: dict[str, Any] | None = None
 
 
@@ -88,6 +95,9 @@ _JUDGE_OPENROUTER_OPTIONS: tuple[ModelOption, ...] = (
 _JUDGE_OPENROUTER_PRIVATE_OPTIONS: tuple[ModelOption, ...] = (
     ModelOption(model_id="deepseek/deepseek-r1"),
 )
+# Tüm JUDGE slotlarında aynı küratörlü thinking seçenekleri (bkz. ADR 0004,
+# 2026-07-24 notu #2) — hangi sağlayıcı seçilirse seçilsin aynı seçenekler sunulur.
+_JUDGE_THINKING_OPTIONS: tuple[ThinkingChoice, ...] = ("off", "low", "medium", "high")
 
 JUDGE_SLOT = ModelSlot(
     key="judge",
@@ -97,7 +107,8 @@ JUDGE_SLOT = ModelSlot(
     model_env="GEMINI_JUDGE_MODEL",
     default_model=_JUDGE_GEMINI_OPTIONS[0].model_id,
     options=_JUDGE_GEMINI_OPTIONS,
-    thinking=True,
+    default_thinking="medium",
+    thinking_options=_JUDGE_THINKING_OPTIONS,
 )
 JUDGE_PRIVATE_SLOT = ModelSlot(
     key="judge_private",
@@ -107,7 +118,8 @@ JUDGE_PRIVATE_SLOT = ModelSlot(
     model_env="GEMINI_JUDGE_PRIVATE_MODEL",
     default_model=_JUDGE_GEMINI_PRIVATE_OPTIONS[0].model_id,
     options=_JUDGE_GEMINI_PRIVATE_OPTIONS,
-    thinking=True,
+    default_thinking="medium",
+    thinking_options=_JUDGE_THINKING_OPTIONS,
 )
 JUDGE_GROQ_SLOT = ModelSlot(
     key="judge_groq",
@@ -117,6 +129,7 @@ JUDGE_GROQ_SLOT = ModelSlot(
     model_env="GROQ_JUDGE_MODEL",
     default_model=_JUDGE_GROQ_OPTIONS[0].model_id,
     options=_JUDGE_GROQ_OPTIONS,
+    thinking_options=_JUDGE_THINKING_OPTIONS,
 )
 JUDGE_GROQ_PRIVATE_SLOT = ModelSlot(
     key="judge_groq_private",
@@ -126,6 +139,7 @@ JUDGE_GROQ_PRIVATE_SLOT = ModelSlot(
     model_env="GROQ_JUDGE_PRIVATE_MODEL",
     default_model=_JUDGE_GROQ_OPTIONS[0].model_id,
     options=_JUDGE_GROQ_OPTIONS,
+    thinking_options=_JUDGE_THINKING_OPTIONS,
 )
 JUDGE_OPENROUTER_SLOT = ModelSlot(
     key="judge_openrouter",
@@ -135,6 +149,7 @@ JUDGE_OPENROUTER_SLOT = ModelSlot(
     model_env="OPENROUTER_JUDGE_MODEL",
     default_model=_JUDGE_OPENROUTER_OPTIONS[0].model_id,
     options=_JUDGE_OPENROUTER_OPTIONS,
+    thinking_options=_JUDGE_THINKING_OPTIONS,
 )
 JUDGE_OPENROUTER_PRIVATE_SLOT = ModelSlot(
     key="judge_openrouter_private",
@@ -144,6 +159,7 @@ JUDGE_OPENROUTER_PRIVATE_SLOT = ModelSlot(
     model_env="OPENROUTER_JUDGE_PRIVATE_MODEL",
     default_model=_JUDGE_OPENROUTER_PRIVATE_OPTIONS[0].model_id,
     options=_JUDGE_OPENROUTER_PRIVATE_OPTIONS,
+    thinking_options=_JUDGE_THINKING_OPTIONS,
     # İstek-bazlı ZDR zorlaması (hesap-seviyesi değil) — router.py: _model_from_provider
     # bunu OpenRouterModel'in model_settings'ine taşır. Bkz. openrouter.ai/docs/features/
     # provider-routing#zero-data-retention-enforcement
@@ -235,6 +251,28 @@ def _session_choice(slot: ModelSlot) -> str:
     return choice
 
 
+def _session_thinking_choice(slot: ModelSlot) -> str:
+    """UI'dan seçilen thinking seviyesi; yoksa boş string.
+
+    `_session_choice` ile aynı desen: Streamlit yoksa veya listede olmayan bir
+    değer varsa sessizce (uyarıyla) yok sayılır, uygulama çökmez.
+    """
+    try:
+        import streamlit as st
+
+        choice = str(st.session_state.get(f"thinking_choice_{slot.key}", "")).strip()
+    except Exception:
+        return ""
+    if not choice:
+        return ""
+    if choice not in slot.thinking_options:
+        logger.warning(
+            "Oturumdaki thinking seçimi listede yok, yok sayıldı: %s=%s", slot.key, choice
+        )
+        return ""
+    return choice
+
+
 def _session_provider_choice(*, privacy: PrivacyMode) -> str:
     """UI'dan seçilen JUDGE sağlayıcısı; yoksa/listede yoksa boş string.
 
@@ -256,16 +294,18 @@ def _session_provider_choice(*, privacy: PrivacyMode) -> str:
 
 
 def _resolve(slot: ModelSlot, *, allow_session: bool) -> ProviderModel:
-    """Slotu somut bir uca indirger. Yalnız `model_id` ayarlanabilir."""
+    """Slotu somut bir uca indirger. `model_id` ve `thinking` oturumdan seçilebilir;
+    kimlik alanları (`provider`/`api_key_env`/`no_train`) hep koddan gelir."""
     model_id = (_session_choice(slot) if allow_session else "") or resolve_setting(
         slot.model_env, slot.default_model
     )
+    thinking = (_session_thinking_choice(slot) if allow_session else "") or slot.default_thinking
     return ProviderModel(
         provider=slot.provider,
         model_id=model_id,
         api_key_env=slot.api_key_env,
         no_train=slot.no_train,
-        thinking=slot.thinking,
+        thinking=thinking,
         extra_model_settings=slot.extra_model_settings,
     )
 

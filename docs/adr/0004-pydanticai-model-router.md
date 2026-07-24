@@ -62,3 +62,54 @@ stabilitesinden değil. Paid-frontier escalation provize-kapalı.
   maliyet hesaplama/analiz-başı fatura tahmini altyapısı bilinçli olarak bu turun kapsamı dışında.
 - Groq/OpenRouter judge slotlarındaki model ID'leri şu an yer tutucu — merge öncesi ekibin gerçek
   küratörlü listesiyle değiştirilmeli (bkz. `providers.py` içindeki `TODO(ekip)` notu).
+
+## Notlar (2026-07-24 güncellemesi #2) — thinking parametresi (planned-issues.md madde 2a/4)
+
+- **Tespit edilen boşluk:** `ProviderModel.thinking`/`ModelSlot.thinking` alanı hiçbir yerde
+  tüketilmiyordu — `router.py:_model_from_provider` bu bayrağı hiç okumuyordu. Bu ADR'nin ve
+  `dev-docs/SCOPE.md:21,114`'ün "yargı modeli thinking ON" iddiası kodda karşılıksızdı.
+- **Araştırma** (kurulu `pydantic-ai==2.5.0` kaynağı + `ai.pydantic.dev/thinking`): pydantic-ai'de
+  cross-provider birleşik bir `ModelSettings.thinking` alanı var (`settings.py:291`) — Google, Groq
+  ve OpenRouter'ın hepsi destekliyor. Her sağlayıcının model sınıfı bunu kendi native parametresine
+  çeviriyor (Google: `google_thinking_config`/`include_thoughts`/`thinking_level`/`thinking_budget`;
+  Groq: `reasoning_format`/`reasoning_effort`; OpenRouter: `reasoning`). Model profili thinking
+  desteklemiyorsa ayar sessizce elenir (`models/__init__.py:prepare_request`) — reasoning yapmayan
+  modellere (ör. Groq mekanik) göndermek zararsız, no-op.
+- **Kritik bulgu — neden salt bool yetmiyordu:** Gemini'de salt `thinking=True` yalnız
+  `include_thoughts=True` üretiyor (`models/google.py:_translate_thinking`), `thinking_budget`/
+  `thinking_level` set ETMİYOR. Flash-tier bir model varsayılan olarak reasoning yapmıyorsa, bool
+  `True` reasoning'i açmaz — yalnız "varsa" izini response'a dahil eder. Orijinal `thinking: bool`
+  tasarımı "thinking ON" iddiasını garanti etmiyordu.
+- **Karar:** alan `bool`'dan küratörlü bir effort seviyesine (`ThinkingChoice = "off"|"low"|"medium"|
+  "high"`) genişletildi — pydantic-ai'nin tam skalası (`minimal`..`xhigh`) değil, mevcut "serbest
+  metin yok, küratörlü liste" felsefesiyle tutarlı bir alt küme. `ModelSlot.default_thinking` +
+  `thinking_options` (boşsa UI'da gösterilmez) `options`/`_session_choice` deseninin birebir aynısı.
+  `router.py:_resolve_model`, tek üyeli zincirde `pm.thinking != "off"` olduğunda `extra_model_settings
+  ["thinking"]`'e yazıyor — `"off"` hiç key eklemiyor, model kendi varsayılanını kullanıyor.
+- **Kullanıcıya açıldı:** mekanizma sağlayıcıdan bağımsız çalıştığı için, JUDGE'ın **6 slotunun**
+  hepsinde (Gemini/Groq/OpenRouter × public/private) BYOK panelinden ("Thinking" selectbox,
+  `streamlit_ui.py:_render_model_choice`) kullanıcı thinking seviyesini seçebiliyor. Kimlik alanları
+  (`provider`/`api_key_env`/`no_train`) yine pinli, yalnız bir davranış tercihi eklendi.
+  Varsayılanlar: Gemini judge (public+private) `"medium"` (iddiayı fiilen karşılamak için); Groq/
+  OpenRouter judge `"off"` (önceki davranış korunuyor — bu sağlayıcılar için hiçbir zaman "thinking
+  ON" iddiası yoktu). MECHANICAL dokunulmadı — UI'da hâlâ gösterilmiyor.
+- **Canlı doğrulama:** `tests/test_router_smoke.py::test_gemini_canli_thinking_ile_yapili_cikti_uretir`
+  gerçek pinli modelle (`gemini-3.5-flash`) denendi; bu oturumda Google tarafında geçici bir `503
+  UNAVAILABLE` ("high demand") ile karşılaşıldı — pydantic-ai'yi tamamen atlayan çıplak bir
+  `google-genai` çağrısıyla da aynı hata doğrulandı, yani bizim koddan kaynaklanmıyor. Mekanizmanın
+  kendisi (thinking + `output_type` birlikte, GH pydantic/pydantic-ai#793/#2293 riskine karşı) aynı
+  hesap/anahtarla erişilebilen başka güncel modellerde (`gemini-3-flash-preview`,
+  `gemini-3.1-flash-lite`) ayrıca doğrulandı: `ThinkingPart` üretiliyor ve yapılı çıktı doğru
+  parse ediliyor. Test suit'te kalıcı — CI'da anahtar yoksa zaten skip olur, pinli model tekrar
+  erişilebilir olduğunda gerçek bir regresyon sinyali verir.
+- Madde 4'ün bullet 2'si (no_train doğrulanabilirliği) ve bullet 3'ü (kimlik alanlarının .env'e
+  açılmaması) zaten yukarıdaki 2026-07-24 notunda cevaplanmıştı; bu güncelleme yalnız bullet 1'i
+  (thinking parametre eşlemesi) kapatıyor.
+- **Cache anahtarı kontrolü:** `thinking` artık kullanıcı tarafından oturum içinde değiştirilebilen
+  bir eksen olduğu için, `CachedModel`'in (`cache.py:105-125`) anahtarının bunu içerip içermediği
+  ayrıca doğrulandı — içermeseydi, kullanıcı thinking seviyesini değiştirip aynı prompt'u tekrar
+  çalıştırdığında eski seviyenin cache'lenmiş yanıtı sessizce geri dönerdi (savunulabilirlik
+  tezine doğrudan aykırı). `CachedModel` ham `model_settings` sözlüğünü (pydantic-ai'nin
+  `prepare_request()`'i `thinking`'i ayıklamadan ÖNCE) hash'lediği için anahtar zaten `thinking`'i
+  içeriyor — hem koda bakarak hem `FunctionModel` ile canlı bir denemeyle doğrulandı
+  (`tests/test_router_smoke.py::test_cache_farkli_thinking_ayri_girdi_olur`).

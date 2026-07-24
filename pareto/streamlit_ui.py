@@ -79,7 +79,7 @@ def render_byok_panel() -> None:
 
 
 def _render_model_choice() -> None:
-    """Yargı: sağlayıcı seçimi -> o sağlayıcının küratörlü model listesi.
+    """Yargı: sağlayıcı seçimi -> o sağlayıcının küratörlü model + thinking listesi.
 
     Hem PUBLIC hem PRIVATE modda geçerlidir (bkz. `llm/providers.py: chain_for`).
     Seçim `os.environ`'a YAZILMAZ: widget değerleri yalnız oturumda kalır,
@@ -133,6 +133,21 @@ def _render_model_choice() -> None:
         format_func=_label,
         help=f"Kalıcı pin: `{slot.model_env}` (.env). Bu seçim yalnız oturumda kalır.",
     )
+
+    if slot.thinking_options:
+        thinking_labels = {"off": "Kapalı", "low": "Düşük", "medium": "Orta", "high": "Yüksek"}
+        thinking_ids = list(slot.thinking_options)
+        st.selectbox(
+            "Thinking (reasoning derinliği)",
+            options=thinking_ids,
+            index=thinking_ids.index(slot.default_thinking),
+            key=f"thinking_choice_{slot.key}",
+            format_func=lambda v: thinking_labels.get(v, v),
+            help=(
+                "Model yanıt vermeden önce ne kadar 'düşünsün'. Derinlik arttıkça "
+                "gecikme ve maliyet artar. Bu seçim yalnız oturumda kalır."
+            ),
+        )
 
     chosen_id = str(st.session_state.get(f"model_choice_{slot.key}", pinned))
     chosen = next((o for o in options if o.model_id == chosen_id), options[0])

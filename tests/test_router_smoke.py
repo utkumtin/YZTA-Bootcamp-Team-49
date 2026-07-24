@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 
 import pytest
+from pydantic import BaseModel
 from pydantic_ai import Agent
 from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.messages import ModelResponse, TextPart
@@ -20,6 +21,8 @@ from pydantic_ai.models.test import TestModel
 from pareto.config import ModelRole, PrivacyMode, load_dotenv_file
 from pareto.llm.cache import CachedModel, cache_enabled
 from pareto.llm.providers import (
+    _JUDGE_SLOTS,
+    _MECHANICAL_SLOTS,
     _PRIVATE_JUDGE_SLOTS,
     _PRIVATE_MECHANICAL_SLOTS,
     JUDGE_GROQ_PRIVATE_SLOT,
@@ -82,6 +85,21 @@ def test_cache_farkli_promptlar_ayri_girdi_olur(tmp_path):
 
     assert counter["n"] == 2
     assert len(list(tmp_path.glob("*.json"))) == 2
+
+
+def test_cache_farkli_thinking_ayri_girdi_olur(tmp_path):
+    """thinking artık model_settings'in bir parçası; cache anahtarı bunu da içermeli —
+    aksi halde bir kullanıcı thinking seviyesini değiştirdiğinde eski seviyenin
+    cache'lenmiş yanıtı sessizce geri döner (bkz. ADR 0004, 2026-07-24 notu #2)."""
+    counter = {"n": 0}
+    agent = Agent(CachedModel(_counting_model(counter), tmp_path))
+
+    agent.run_sync("merhaba", model_settings={"temperature": 0.0, "thinking": "low"})
+    agent.run_sync("merhaba", model_settings={"temperature": 0.0, "thinking": "high"})
+    agent.run_sync("merhaba", model_settings={"temperature": 0.0, "thinking": "low"})
+
+    assert counter["n"] == 2, "farklı thinking seviyeleri ayrı model çağrısı üretmeli"
+    assert len(list(tmp_path.glob("*.json"))) == 2, "thinking cache anahtarının parçası olmalı"
 
 
 def test_cache_deterministik_olmayan_istegi_atlar(tmp_path):
@@ -314,12 +332,82 @@ def test_resolve_model_extra_settings_openrouter_private_icin_dolu(monkeypatch):
 
 
 def test_resolve_model_extra_settings_diger_slotlarda_bos(monkeypatch):
+    """Groq judge'ın `default_thinking="off"` olması + extra_model_settings'i olmaması
+    nedeniyle özel bir ayarı yok — bu, Gemini judge'ın thinking taşıdığı yeni
+    davranıştan (bkz. aşağıdaki thinking testleri) ayrı, kasıtlı bir karşılaştırma."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-anahtar")
+    monkeypatch.setattr(
+        "streamlit.session_state",
+        {"privacy_mode": "public", "judge_provider_choice": "groq"},
+    )
+
+    _model, extra = _resolve_model(ModelRole.JUDGE)
+
+    assert extra == {}
+
+
+def test_resolve_model_thinking_gemini_judge_icin_medium_akar(monkeypatch):
+    """2a fix: JUDGE_SLOT.default_thinking="medium" artık extra_model_settings'e taşınıyor."""
     monkeypatch.setenv("GEMINI_API_KEY", "test-anahtar")
     monkeypatch.setattr("streamlit.session_state", {"privacy_mode": "public"})
 
     _model, extra = _resolve_model(ModelRole.JUDGE)
 
+    assert extra == {"thinking": "medium"}
+
+
+def test_resolve_model_thinking_gemini_private_judge_icin_medium_akar(monkeypatch):
+    monkeypatch.setenv("GEMINI_PAID_API_KEY", "test-anahtar")
+    monkeypatch.setattr("streamlit.session_state", {"privacy_mode": "private"})
+
+    _model, extra = _resolve_model(ModelRole.JUDGE)
+
+    assert extra == {"thinking": "medium"}
+
+
+def test_resolve_model_thinking_session_secimi_override_eder(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-anahtar")
+    monkeypatch.setattr(
+        "streamlit.session_state",
+        {"privacy_mode": "public", f"thinking_choice_{JUDGE_SLOT.key}": "high"},
+    )
+
+    _model, extra = _resolve_model(ModelRole.JUDGE)
+
+    assert extra == {"thinking": "high"}
+
+
+def test_resolve_model_thinking_off_secilirse_key_eklenmez(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-anahtar")
+    monkeypatch.setattr(
+        "streamlit.session_state",
+        {"privacy_mode": "public", f"thinking_choice_{JUDGE_SLOT.key}": "off"},
+    )
+
+    _model, extra = _resolve_model(ModelRole.JUDGE)
+
     assert extra == {}
+
+
+def test_thinking_session_secimi_gecersizse_yok_sayilir(monkeypatch):
+    """Seçenek listesinde olmayan bir thinking değeri uygulamayı çökertmemeli."""
+    monkeypatch.setattr(
+        "streamlit.session_state", {f"thinking_choice_{JUDGE_SLOT.key}": "uydurma-seviye"}
+    )
+
+    chain = chain_for(ModelRole.JUDGE, PrivacyMode.PUBLIC)
+
+    assert chain[0].thinking == JUDGE_SLOT.default_thinking
+
+
+def test_judge_slotlari_thinking_secenegi_tasir():
+    for slot in _JUDGE_SLOTS + _PRIVATE_JUDGE_SLOTS:
+        assert slot.thinking_options != (), f"{slot.key} JUDGE ama thinking seçeneği boş"
+
+
+def test_mekanik_slotlarda_thinking_secimi_kapali():
+    for slot in _MECHANICAL_SLOTS + _PRIVATE_MECHANICAL_SLOTS:
+        assert slot.thinking_options == (), f"{slot.key} MECHANICAL ama thinking UI'da açık"
 
 
 def test_env_override_private_no_train_garantisini_bozmaz(monkeypatch):
@@ -385,6 +473,29 @@ def test_gemini_canli_smoke_deterministik(tmp_path):
     assert "PARETO" in first.output.upper()
     assert first.output == second.output, "temp=0 + cache → birebir aynı yanıt"
     assert len(list(tmp_path.glob("*.json"))) == 1, "ikinci çağrı cache'ten dönmeli"
+
+
+@pytest.mark.live
+@pytest.mark.skipif(not _gemini_key_var, reason="GEMINI_API_KEY tanımlı değil")
+def test_gemini_canli_thinking_ile_yapili_cikti_uretir():
+    """2a doğrulaması: JUDGE'ın gerçek kullanım şekli — `output_type` + `thinking`
+    birlikte. pydantic-ai'nin bilinen thinking/structured-output uyumsuzluk
+    raporlarına karşı gerçek bir güvence (bkz. GH pydantic/pydantic-ai#793, #2293)."""
+
+    class _Cevap(BaseModel):
+        kelime: str
+
+    pm = chain_for(ModelRole.JUDGE, PrivacyMode.PUBLIC)[0]
+    agent = Agent(
+        _model_from_provider(pm),
+        system_prompt="Kullanıcının verdiği kelimeyi `kelime` alanına aynen yaz.",
+        model_settings={"temperature": 0.0, "thinking": "medium"},
+        output_type=_Cevap,
+    )
+
+    result = agent.run_sync("PARETO")
+
+    assert result.output.kelime.strip().upper() == "PARETO"
 
 
 @pytest.mark.live

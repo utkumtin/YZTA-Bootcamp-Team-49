@@ -112,14 +112,23 @@ def _resolve_model(role: ModelRole) -> tuple[Any, dict[str, Any]]:
     `ProviderModel.extra_model_settings`'i (örn. OpenRouter ZDR zorlaması) — çok üyeli
     zincirlerde (yalnız MECHANICAL) hiçbir slot bu alanı kullanmadığı için her zaman
     boş; ileride çok üyeli bir slot bu alanı kullanırsa yanlış üyeye uygulanmasın diye
-    burada bilinçli olarak atlanır.
+    burada bilinçli olarak atlanır. Aynı gerekçeyle `ProviderModel.thinking` de yalnız
+    tek üyeli zincirde okunur ve (`"off"` hariç) buraya eklenir — pydantic-ai'nin
+    cross-provider `ModelSettings.thinking` alanına `build_agent()` üzerinden taşınır;
+    "off" hiç key eklemez, model kendi varsayılanını kullanır (bkz. ADR 0004, 2026-07-24
+    notu #2).
     """
     if _TEST_MODEL is not None:
         return _TEST_MODEL, {}
     from .cache import wrap_with_cache
 
     chain = chain_for(role, _get_effective_privacy_mode())
-    extra_model_settings = chain[0].extra_model_settings or {} if len(chain) == 1 else {}
+    extra_model_settings: dict[str, Any] = {}
+    if len(chain) == 1:
+        pm = chain[0]
+        extra_model_settings = dict(pm.extra_model_settings or {})
+        if pm.thinking != "off":
+            extra_model_settings["thinking"] = pm.thinking
     return wrap_with_cache(_chain_model(chain)), extra_model_settings
 
 
