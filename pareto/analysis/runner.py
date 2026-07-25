@@ -102,7 +102,7 @@ def _mirror_latest_run(run_dir: Path, *, include_panel: bool = True) -> None:
     latest_dir = Path(SETTINGS.runs_dir) / "latest"
     latest_dir.parent.mkdir(parents=True, exist_ok=True)
     temp_dir = Path(mkdtemp(prefix=".latest-", dir=latest_dir.parent))
-    
+
     # Z8: "latest/progress.json"ı hiç kimse okumuyor; kopyalamaya dahil edilmedi.
     # Ancak run_id.txt okuyan katman (varyans paneli) için kritik, aksi halde
     # koşu "latest" sanılır ve run_id'ye bağlı artefaktlar bulunamaz.
@@ -146,6 +146,7 @@ def _mirror_latest_run(run_dir: Path, *, include_panel: bool = True) -> None:
 def _cleanup_panel_pickle(run_dir: Path) -> None:
     """Drop the raw panel once the run directory no longer needs it."""
     (run_dir / "panel.pkl").unlink(missing_ok=True)
+
 
 def launch_multiverse(df: pd.DataFrame, specs: list[Specification], run_id: str) -> RunHandle:
     """Worker'ı ayrı süreçte başlatır. Determinizm env pinlenir."""

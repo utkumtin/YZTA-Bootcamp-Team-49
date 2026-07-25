@@ -94,6 +94,8 @@ package_figures: dict[str, str] = {}
 def _capture_figure(name: str, figure: go.Figure) -> None:
     """Figürü paket için saklar. Render kuralları `pareto.repro.figure_html`te."""
     package_figures[name] = figure_html(name, figure)
+
+
 def _render_run_provenance(results_path: str) -> None:
     run_id = st.session_state.get("multiverse_run_id") or Path(results_path).parent.name
     record = _load_frozen_menu_record(run_id)
