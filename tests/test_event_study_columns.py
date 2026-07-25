@@ -1,10 +1,10 @@
 from __future__ import annotations
-from pareto.analysis.event_study_columns import build_event_study_payload
 
 import pandas as pd
 
 from pareto.analysis.event_study_columns import (
     EventStudyPayload,
+    build_event_study_payload,
     event_study_cache_key,
     infer_column,
 )

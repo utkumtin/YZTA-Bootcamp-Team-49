@@ -22,6 +22,8 @@ import streamlit as st
 from pareto.analysis.event_study import estimate_pretrend_event_study
 from pareto.analysis.event_study_columns import (
     build_event_study_payload,
+)
+from pareto.analysis.event_study_columns import (
     event_study_cache_key as _event_study_cache_key,
 )
 from pareto.analysis.variance import ROBUST_RULE_TEXT, diagnose_axes, summarize

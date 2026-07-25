@@ -14,7 +14,6 @@ from typing import Any
 
 import pandas as pd
 
-
 DEFAULT_REFERENCE_PERIOD = -1
 DEFAULT_EVENT_TIME_WINDOW = (-4, 4)
 _RESERVED_COLUMNS = {
