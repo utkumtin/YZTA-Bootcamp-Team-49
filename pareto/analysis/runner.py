@@ -89,12 +89,32 @@ class RunHandle:
 
 
 def _mirror_latest_run(run_dir: Path) -> None:
+    """`runs/latest`i koşunun o anki hâlinin TAM aynası yapar.
+
+    `run_id.txt` aynaya da kopyalanır: `runs/latest` dizin adında run_id taşımaz,
+    onu okuyan katman (varyans paneli) koşuyu aksi hâlde "latest" sanır ve
+    run_id'ye bağlı artefaktları (donmuş menü) bulamaz.
+
+    Kaynakta olmayan dosya aynadan SİLİNİR. Yalnız kopyalasaydık ayna iki koşuyu
+    birden taşırdı: `results.json` koşunun en sonunda yazılır, dolayısıyla B
+    başlarken aynada hâlâ A'nın sonuçları durur ve B'nin kimlik damgasıyla
+    eşleşirdi. O pencerede kurulan reprodüksiyon paketi A'nın sonuçlarını B'nin
+    donmuş menüsüyle çiftler; hiçbir artefakt eksik görünmediği için de paket
+    "eksiksiz" damgası yer.
+
+    Kimlik damgası EN SONA kopyalanır. Kopyalama atomik değildir; ortada kesilen
+    bir aynalama, damga başta olsaydı yeni koşunun kimliğini eski koşunun
+    sonuçlarının yanına bırakırdı. Sona alındığında yarım ayna eski kimliği ve
+    silinmiş sonuçları taşır: eksik, ama kendi içinde tutarlı.
+    """
     latest_dir = Path(SETTINGS.runs_dir) / "latest"
     latest_dir.mkdir(parents=True, exist_ok=True)
-    for name in ("panel.pkl", "specs.json", "progress.json", "results.json"):
+    for name in ("panel.pkl", "specs.json", "progress.json", "results.json", "run_id.txt"):
         source = run_dir / name
         if source.exists():
             copy2(source, latest_dir / name)
+        else:
+            (latest_dir / name).unlink(missing_ok=True)
 
 
 def launch_multiverse(df: pd.DataFrame, specs: list[Specification], run_id: str) -> RunHandle:
@@ -102,6 +122,7 @@ def launch_multiverse(df: pd.DataFrame, specs: list[Specification], run_id: str)
     run_dir = Path(SETTINGS.runs_dir) / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    (run_dir / "run_id.txt").write_text(run_id, encoding="utf-8")
     (run_dir / "panel.pkl").write_bytes(pickle.dumps(df))
     (run_dir / "specs.json").write_text(
         json.dumps([s.model_dump() for s in specs], ensure_ascii=False), encoding="utf-8"
