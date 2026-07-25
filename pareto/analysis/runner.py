@@ -104,22 +104,38 @@ def _mirror_latest_run(run_dir: Path, *, include_panel: bool = True) -> None:
     latest_dir = Path(SETTINGS.runs_dir) / "latest"
     latest_dir.parent.mkdir(parents=True, exist_ok=True)
     temp_dir = Path(mkdtemp(prefix=".latest-", dir=latest_dir.parent))
-    names = ["specs.json", "progress.json", "results.json"]
+    # Z8: "latest/progress.json"ı hiç kimse okumuyor (yalnız RunHandle.progress_path,
+    # yani run_dir'in kendisi okunuyor); mirror'a dahil etmenin bir faydası yok.
+    names = ["specs.json", "results.json"]
     if include_panel:
         names.insert(0, "panel.pkl")
-    for name in names:
-        source = run_dir / name
-        if source.exists():
-            copy2(source, temp_dir / name)
 
-    if not latest_dir.exists():
-        # İlk run: hedef yok, doğrudan atomik takas yeterli.
-        os.replace(temp_dir, latest_dir)
-        return
+    # Z6: copy2 sırasında bir hata (örn. disk dolması) temp_dir'i try/finally
+    # dışında bırakıyordu → "runs/.latest-xxxx" kalıcı sızıntı. Artık kopyalama
+    # başarısız olursa temp_dir hemen temizlenip istisna yeniden fırlatılıyor.
+    try:
+        for name in names:
+            source = run_dir / name
+            if source.exists():
+                copy2(source, temp_dir / name)
+
+        if not latest_dir.exists():
+            # İlk run: hedef yok, doğrudan atomik takas yeterli.
+            os.replace(temp_dir, latest_dir)
+            return
+    except Exception:
+        if temp_dir.exists():
+            rmtree(temp_dir, ignore_errors=True)
+        raise
 
     # latest_dir zaten var (ilk run'dan sonra her zaman non-empty). Eskisini
     # kenara taşı, yenisini yerine koy, sonra eskisini sil. Ara adımlarda bile
     # latest_dir ya eski ya da yeni tam snapshot'ı gösterir.
+    #
+    # NOT (Z6, kalan risk): iki run'ın mirror'ı eşzamanlı koşarsa dar bir
+    # pencerede biri latest_dir'i bulamayıp OSError alabilir. Bu düzeltme
+    # yalnızca temp_dir sızıntısını kapatıyor; eşzamanlılık için kilit dosyası
+    # ya da "latest.json" işaretçisi ayrı bir karar gerektiriyor (kapsam dışı).
     backup_dir = Path(mkdtemp(prefix=".latest-old-", dir=latest_dir.parent))
     backup_dir.rmdir()
     os.replace(latest_dir, backup_dir)
@@ -136,8 +152,8 @@ def _mirror_latest_run(run_dir: Path, *, include_panel: bool = True) -> None:
             rmtree(temp_dir, ignore_errors=True)
 
 
-def _cleanup_panel_pickles(run_dir: Path) -> None:
-    """Drop the raw panel once the completed run no longer needs it."""
+def _cleanup_panel_pickle(run_dir: Path) -> None:
+    """Drop the raw panel once the run directory no longer needs it."""
     (run_dir / "panel.pkl").unlink(missing_ok=True)
 
 
@@ -158,7 +174,6 @@ def launch_multiverse(df: pd.DataFrame, specs: list[Specification], run_id: str)
             [sys.executable, "-m", "pareto.analysis.runner", "--job", str(run_dir)],
             stdout=subprocess.DEVNULL,
             stderr=stderr_log,
-            text=True,
             env=env,
         )
     return RunHandle(run_dir=run_dir, process=proc)
@@ -176,13 +191,20 @@ def _run_job(run_dir: Path) -> None:
     def _write_progress(done: int, total: int, _res: EstimationResult) -> None:
         progress_path.write_text(json.dumps({"done": done, "total": total}), encoding="utf-8")
 
-    results = run_specs(df, specs, on_progress=_write_progress)
-    (run_dir / "results.json").write_text(
-        json.dumps([r.model_dump() for r in results], ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    _mirror_latest_run(run_dir, include_panel=False)
-    _cleanup_panel_pickles(run_dir)
+    # Z4: eskiden temizlik yalnızca mutlu yolun sonundaydı — run_specs (veya
+    # results.json yazımı) patlarsa hem run_dir/panel.pkl hem de launch'ta
+    # kopyalanan runs/latest/panel.pkl diskte kalıyordu. Artık finally'de,
+    # başarı/başarısızlık fark etmeksizin, her iki konum da temizleniyor.
+    try:
+        results = run_specs(df, specs, on_progress=_write_progress)
+        (run_dir / "results.json").write_text(
+            json.dumps([r.model_dump() for r in results], ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        _mirror_latest_run(run_dir, include_panel=False)
+    finally:
+        _cleanup_panel_pickle(run_dir)
+        _cleanup_panel_pickle(Path(SETTINGS.runs_dir) / "latest")
 
 
 def _cli() -> None:

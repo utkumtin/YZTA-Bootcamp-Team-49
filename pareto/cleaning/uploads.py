@@ -2,22 +2,16 @@
 
 from __future__ import annotations
 
-import hashlib
 from typing import Any
 
 
-def uploaded_file_identity(uploaded: Any) -> str | tuple[str, int, str]:
+def uploaded_file_identity(uploaded: Any) -> str:
     """Yüklenen dosyanın Streamlit-rerun dayanıklı kimliğini döndürür.
 
-    Streamlit'in sağladığı ``file_id`` tercih edilir. Eski sürümlerde aynı ad ve
-    boyuta sahip farklı dosyaları ayırt etmek için içerik özeti eklenir.
+    #53/2: Ad+boyut+içerik-hash fallback'i kaldırıldı. Proje `streamlit>=1.32`
+    pinliyor (bkz. pyproject.toml / requirements.txt) ve bu sürümde
+    `UploadedFile.file_id` her zaman dolu geliyor — fallback dalı hiçbir zaman
+    çalışmayan ölü koddu. Minimum sürüm pini bir gün düşürülürse bu fonksiyon
+    yeniden gözden geçirilmeli.
     """
-    file_id = getattr(uploaded, "file_id", None)
-    if file_id:
-        return file_id
-
-    return (
-        uploaded.name,
-        uploaded.size,
-        hashlib.sha256(uploaded.getvalue()).hexdigest(),
-    )
+    return f"id:{uploaded.file_id}"

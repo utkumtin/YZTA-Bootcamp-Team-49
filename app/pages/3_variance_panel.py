@@ -360,23 +360,25 @@ else:
         if not treated_cohort_selection:
             st.info("Pre-trend hesabı için en az bir treated cohort seçin.")
 
+        # Z3: estimate_pretrend_event_study kendi içindeki her riskli adımı
+        # `except Exception` ile sarıp `_failed_result(...)` döndürüyor
+        # (event_study.py) — yani pratikte ValueError fırlatmıyor. Sayfadaki
+        # try/except ValueError, kütüphanenin zaten koruduğu bir yolu bir daha
+        # koruyormuş gibi görünen ölü kod ve test edilemiyordu. Kaldırıldı;
+        # artık doğrudan {"status": ..., "error": ...} sözleşmesine güveniliyor.
         if st.button("Bu kolonlarla pre-trend hesapla", disabled=not treated_cohort_selection):
-            try:
-                event_study = estimate_pretrend_event_study(
-                    st.session_state["clean_df"],
-                    outcome_col=payload["outcome_col"],
-                    unit_col=payload["unit_col"],
-                    time_col=payload["time_col"],
-                    cohort_col=str(cohort_col),
-                    never_treated_col=str(never_treated_col),
-                    controls=payload["controls"],
-                    treated_cohorts=tuple(treated_cohort_selection),
-                )
-                st.session_state["_event_study_cache"] = event_study
-                st.session_state["_event_study_cache_key"] = cache_key
-            except ValueError as exc:
-                st.session_state["_event_study_cache"] = {"status": "failed", "error": str(exc)}
-                st.session_state["_event_study_cache_key"] = cache_key
+            event_study = estimate_pretrend_event_study(
+                st.session_state["clean_df"],
+                outcome_col=payload["outcome_col"],
+                unit_col=payload["unit_col"],
+                time_col=payload["time_col"],
+                cohort_col=str(cohort_col),
+                never_treated_col=str(never_treated_col),
+                controls=payload["controls"],
+                treated_cohorts=tuple(treated_cohort_selection),
+            )
+            st.session_state["_event_study_cache"] = event_study
+            st.session_state["_event_study_cache_key"] = cache_key
 
     if event_study is None:
         st.info("Hesaplamak için butona basın.")

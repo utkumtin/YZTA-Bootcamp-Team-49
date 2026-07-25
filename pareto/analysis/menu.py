@@ -111,7 +111,11 @@ def _axis_levels(proposal: SpecMenuProposal, name: str) -> list[str]:
     for axis in proposal.axes:
         if axis.axis_name == name:
             return [axis.baseline_level, *axis.candidate_levels]
-    raise ValueError(f"Missing axis: {name}")
+    # #50/13 (dil karışıklığı): önceden "Missing axis: {name}" İngilizceydi.
+    # Bu dal normal akışta _validate_menu_proposal_levels tarafından önceden
+    # yakalanır (axis eksikse orada "{name} ekseni eksik." raporlanır), ama
+    # savunma amaçlı burada da Türkçe olmalı.
+    raise ValueError(f"Eksen eksik: {name}")
 
 
 def _parse_control_set(level: str) -> list[str]:
@@ -206,7 +210,11 @@ def generate_spec_menu(
     her eksende savunulabilir seviyeler + baseline + gerekçe.
     """
     if not available_columns:
-        raise ValueError("Spec menu proposal needs at least one available column.")
+        # #50/13: önceden İngilizce ("Spec menu proposal needs at least one
+        # available column."). Bu istisna çağıran sayfa katmanında
+        # `except Exception as exc: st.error(f"Menü oluşturulamadı: {exc}")`
+        # ile doğrudan kullanıcıya basılabiliyor, o yüzden Türkçe olmalı.
+        raise ValueError("Spec menü önerisi için en az bir mevcut kolon gereklidir.")
 
     estimand = frozen.estimand
     prompt = (
@@ -541,9 +549,19 @@ def freeze_spec_menu(
     active_axes: tuple[AxisName, ...] | None = None,
 ) -> FrozenSpecMenu:
     if proposal.needs_clarification:
-        raise ValueError(proposal.clarification_question or "Clarification required")
+        # NEDEN İngilizce kalabilir: bu mesaj sabit bir Claude/JUDGE string'i
+        # değil, `clarification_question` LLM'in (JUDGE) ürettiği dinamik
+        # içerik — proposal ne dilde geldiyse o dilde kalır. Yalnızca hiç
+        # soru üretilmemişse (None) devreye giren statik fallback Türkçe.
+        raise ValueError(proposal.clarification_question or "Açıklama gerekli.")
     if not approved:
-        raise ValueError("User approval required to freeze spec menu")
+        # #50/13: önceden "User approval required to freeze spec menu"
+        # İngilizceydi. Bu da sayfa katmanında `except ValueError as exc:
+        # st.error(str(exc))` ile kullanıcıya basılabilecek bir yol, o yüzden
+        # Türkçe olmalı (pratikte UI'da buton `disabled=` ile kapalı tutulur,
+        # ama fonksiyon tek başına da çağrılabildiği için sözleşme dil açısından
+        # tutarlı olmalı).
+        raise ValueError("Spec menüsünü dondurmak için kullanıcı onayı gereklidir.")
 
     reasons = _collect_menu_proposal_reasons(
         proposal,
@@ -554,7 +572,13 @@ def freeze_spec_menu(
 
     menu = spec_menu_proposal_to_menu(proposal, available_columns=available_columns)
     if active_axes == ():
-        raise ValueError("At least one active axis must be selected")
+        # Z1: bu istisna 2_analysis.py'de yakalanıp doğrudan st.error(str(exc))
+        # ile kullanıcıya basılıyor; sayfanın deterministik yolundaki eşdeğer
+        # mesaj zaten Türkçe ("En az bir aktif eksen seçin; multiverse
+        # genişletmesi durduruldu."). İngilizce kalması #50/13'ün (dil
+        # karışıklığı) şikayet ettiği durumu bu PR'ın kendisi yeniden
+        # üretiyordu — artık Türkçe.
+        raise ValueError("En az bir aktif eksen seçilmelidir.")
     if active_axes is not None:
         menu = menu.model_copy(update={"active_axes": active_axes})
     return FrozenSpecMenu(menu=menu, menu_hash=_menu_hash(menu))

@@ -703,10 +703,16 @@ if menu is None:
 
 
 if menu_source == "deterministic":
+    # Z5: `menu` burada her rerun'da `build_deterministic_menu(...)` ile taze
+    # üretiliyor ve `SpecMenu.active_axes` varsayılanı `()`. Yani
+    # `list(menu.active_axes)` bu dalda pratikte HER ZAMAN boş liste — "or
+    # list(ALL_AXES)" sol tarafı hiçbir zaman doğru olmayan, dolayısıyla
+    # kafa karıştıran ölü bir "or" idi (menu.py:557'nin artık boş tuple'ı
+    # reddetmesiyle aynı kapanmışlık). Doğrudan ALL_AXES'e sabitlendi.
     active_axes = st.multiselect(
         "Aktif eksenler",
         options=list(ALL_AXES),
-        default=list(menu.active_axes) or list(ALL_AXES),
+        default=list(ALL_AXES),
         help="Seçilen eksenler faktöriyel genişlemeye dahil edilir.",
     )
     if not active_axes:
