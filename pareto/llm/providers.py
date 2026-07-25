@@ -249,26 +249,31 @@ def _session_choice(slot: ModelSlot) -> str:
     return choice
 
 
-def _session_thinking_choice(slot: ModelSlot) -> str:
-    """UI'dan seçilen thinking seviyesi; yoksa boş string.
+def _session_thinking_choice(slot: ModelSlot) -> ThinkingChoice | None:
+    """UI'dan seçilen thinking seviyesi; yoksa None.
 
     `_session_choice` ile aynı desen: Streamlit yoksa veya listede olmayan bir
     değer varsa sessizce (uyarıyla) yok sayılır, uygulama çökmez.
+
+    Dönüş tipi `str` değil `ThinkingChoice | None`: seçim zaten
+    `slot.thinking_options` üyeliğiyle doğrulanıyor, yani daraltılmış tip
+    çağıranın gördüğü gerçeği anlatıyor. Üyelik kontrolü `in` yerine döngüyle
+    yapılıyor çünkü `in` tip daraltmaz — eşleşen seçeneği döndürmek `cast`
+    ihtiyacını da ortadan kaldırıyor.
     """
     try:
         import streamlit as st
 
         choice = str(st.session_state.get(f"thinking_choice_{slot.key}", "")).strip()
     except Exception:
-        return ""
+        return None
     if not choice:
-        return ""
-    if choice not in slot.thinking_options:
-        logger.warning(
-            "Oturumdaki thinking seçimi listede yok, yok sayıldı: %s=%s", slot.key, choice
-        )
-        return ""
-    return choice
+        return None
+    for option in slot.thinking_options:
+        if option == choice:
+            return option
+    logger.warning("Oturumdaki thinking seçimi listede yok, yok sayıldı: %s=%s", slot.key, choice)
+    return None
 
 
 def _session_provider_choice(*, privacy: PrivacyMode) -> str:
@@ -297,7 +302,7 @@ def _resolve(slot: ModelSlot, *, allow_session: bool) -> ProviderModel:
     model_id = (_session_choice(slot) if allow_session else "") or resolve_setting(
         slot.model_env, slot.default_model
     )
-    thinking = (_session_thinking_choice(slot) if allow_session else "") or slot.default_thinking
+    thinking = (_session_thinking_choice(slot) if allow_session else None) or slot.default_thinking
     return ProviderModel(
         provider=slot.provider,
         model_id=model_id,
@@ -330,7 +335,10 @@ def chain_for(role: ModelRole, privacy: PrivacyMode) -> tuple[ProviderModel, ...
         )
         provider_choice = _session_provider_choice(privacy=privacy) or default_provider
         slot = by_provider[provider_choice]
-        chain = (_resolve(slot, allow_session=True),)
+        # Açık anotasyon: ilk atama tek elemanlı olduğu için mypy `chain`i
+        # `tuple[ProviderModel]` çıkarıyor, aşağıdaki değişken uzunluklu atama
+        # da o dar tiple çakışıyordu.
+        chain: tuple[ProviderModel, ...] = (_resolve(slot, allow_session=True),)
         if privacy is PrivacyMode.PRIVATE and any(not m.no_train for m in chain):
             raise RuntimeError("PRIVATE modda no-train olmayan uç seçilemez.")
         return chain
