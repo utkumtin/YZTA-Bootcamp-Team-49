@@ -91,7 +91,10 @@ class RunHandle:
 def _mirror_latest_run(run_dir: Path) -> None:
     latest_dir = Path(SETTINGS.runs_dir) / "latest"
     latest_dir.mkdir(parents=True, exist_ok=True)
-    for name in ("panel.pkl", "specs.json", "progress.json", "results.json"):
+    # `run_id.txt` aynaya da kopyalanır: `runs/latest` dizin adında run_id taşımaz,
+    # onu okuyan katman (varyans paneli) koşuyu aksi hâlde "latest" sanır ve
+    # run_id'ye bağlı artefaktları (donmuş menü) bulamaz.
+    for name in ("run_id.txt", "panel.pkl", "specs.json", "progress.json", "results.json"):
         source = run_dir / name
         if source.exists():
             copy2(source, latest_dir / name)
@@ -102,6 +105,7 @@ def launch_multiverse(df: pd.DataFrame, specs: list[Specification], run_id: str)
     run_dir = Path(SETTINGS.runs_dir) / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    (run_dir / "run_id.txt").write_text(run_id, encoding="utf-8")
     (run_dir / "panel.pkl").write_bytes(pickle.dumps(df))
     (run_dir / "specs.json").write_text(
         json.dumps([s.model_dump() for s in specs], ensure_ascii=False), encoding="utf-8"

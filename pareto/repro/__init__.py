@@ -6,6 +6,7 @@ from .package import (
     ReproInputs,
     ReproPackageError,
     build_reproduction_package,
+    figure_html,
     missing_artifacts,
 )
 
@@ -14,6 +15,7 @@ __all__ = [
     "ReproInputs",
     "ReproPackageError",
     "build_reproduction_package",
+    "figure_html",
     "missing_artifacts",
     "render_methods_section",
 ]

@@ -10,7 +10,9 @@ Girdi: runner çıktısı `runs/<run_id>/results.json`.
 
 from __future__ import annotations
 
+import io
 import json
+import zipfile
 from pathlib import Path
 
 import pandas as pd
@@ -33,6 +35,7 @@ from pareto.repro import (
     ReproInputs,
     ReproPackageError,
     build_reproduction_package,
+    figure_html,
     missing_artifacts,
 )
 from pareto.spec import Specification
@@ -65,12 +68,8 @@ package_figures: dict[str, str] = {}
 
 
 def _capture_figure(name: str, figure: go.Figure) -> None:
-    """Figürü paket için kendi kendine yeten HTML olarak saklar.
-
-    `include_plotlyjs="directory"` kütüphaneyi HTML'in yanındaki tek bir dosyadan
-    okur; paket internetsiz açılır ama her figür için 4 MB tekrar taşınmaz.
-    """
-    package_figures[name] = figure.to_html(full_html=True, include_plotlyjs="directory")
+    """Figürü paket için saklar. Render kuralları `pareto.repro.figure_html`te."""
+    package_figures[name] = figure_html(name, figure)
 
 
 def _build_event_study_payload() -> dict[str, object] | None:
@@ -474,15 +473,35 @@ st.dataframe(pd.DataFrame([r.model_dump() for r in results]), use_container_widt
 # --------------------------------------------------------------------------- #
 # Reprodüksiyon paketi
 # --------------------------------------------------------------------------- #
+def _resolve_run_id(results_file: Path) -> str:
+    """Sonuç dizininin gerçek run_id'si.
+
+    Öncelik dizinin yanındaki `run_id.txt`tedir: `runs/latest` bir aynadır, dizin
+    adı "latest"tir ve oturumdaki run_id kullanıcının elle girdiği eski bir koşuya
+    ait olabilir. run_id yanlış çözülürse donmuş menü bulunamaz ve METHODS.md
+    estimand bölümünü tamamen kaybeder.
+    """
+    marker = results_file.with_name("run_id.txt")
+    if marker.exists():
+        recorded = marker.read_text(encoding="utf-8").strip()
+        if recorded:
+            return recorded
+    return str(st.session_state.get("multiverse_run_id") or results_file.parent.name)
+
+
 def _repro_inputs() -> ReproInputs:
     """Koşunun artefakt yollarını oturumdan ve disk düzeninden çözer.
 
     Temizleme run_id'si ile multiverse run_id'si farklıdır, üstelik varsayılan
     sonuç yolu (`runs/latest`) hiçbir run_id taşımaz; bu yüzden yollar burada
     açıkça çözülür ve pakete hazır olarak verilir.
+
+    Temizleme artefaktları oturumdan gelir ve gösterilen sonuçlarla aynı koşuya ait
+    OLMAYABİLİR; sandbox çıktısı da (`reproduced.pkl`) pakete verilir ki paket bu
+    bağı kendi denetleyip manifest'e yazabilsin.
     """
     results_file = Path(results_path)
-    run_id = str(st.session_state.get("multiverse_run_id") or results_file.parent.name)
+    run_id = _resolve_run_id(results_file)
 
     def _session_path(key: str) -> Path | None:
         value = st.session_state.get(key)
@@ -498,6 +517,8 @@ def _repro_inputs() -> ReproInputs:
         ledger_path=_session_path("last_ledger_path"),
         cleaning_script_path=_session_path("last_audit_path"),
         raw_panel_path=(repro_dir / "raw.pkl") if repro_dir is not None else None,
+        cleaned_panel_path=(repro_dir / "reproduced.pkl") if repro_dir is not None else None,
+        cleaning_run_id=(repro_dir.name.removesuffix("_repro") if repro_dir is not None else None),
         figures=dict(package_figures),
     )
 
@@ -528,17 +549,43 @@ repro_key = json.dumps(
     sort_keys=True,
 )
 
+
+def _forget_package() -> None:
+    for key in ("_repro_package", "_repro_package_key", "_repro_package_provenance"):
+        st.session_state.pop(key, None)
+
+
 if st.button("Reprodüksiyon paketini hazırla"):
     try:
         with st.spinner("Paket hazırlanıyor..."):
-            st.session_state["_repro_package"] = build_reproduction_package(repro_inputs)
-            st.session_state["_repro_package_key"] = repro_key
+            payload = build_reproduction_package(repro_inputs)
+        st.session_state["_repro_package"] = payload
+        st.session_state["_repro_package_key"] = repro_key
+        # Provenans denetimi paketin içinde yapılır; arayüz sonucu manifest'ten
+        # okur ki uyarı ile pakete yazılan kayıt tek kaynaktan gelsin.
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            manifest = json.loads(archive.read("MANIFEST.json").decode("utf-8"))
+        st.session_state["_repro_package_provenance"] = manifest.get("provenance") or {}
+        st.session_state["_repro_package_stale"] = False
     except ReproPackageError as exc:
-        st.session_state.pop("_repro_package", None)
-        st.session_state.pop("_repro_package_key", None)
+        _forget_package()
         st.error(f"Reprodüksiyon paketi kurulamadı: {exc}")
 
 if st.session_state.get("_repro_package_key") == repro_key:
+    provenance = st.session_state.get("_repro_package_provenance") or {}
+    if provenance.get("cleaning_matches_panel") is False:
+        st.error(
+            "Pakete giren temizleme izi bu sonuçları üreten veriyle EŞLEŞMİYOR "
+            f"(temizleme koşusu: `{provenance.get('cleaning_run_id')}`). Karar defteri "
+            "ve temizleme script'i başka bir koşudan geliyor; paket bu hâliyle denetim "
+            "izi sayılmaz. Uyarı paketin MANIFEST ve METHODS dosyalarına da yazıldı."
+        )
+    elif provenance.get("cleaning_matches_panel") is None:
+        st.info(
+            "Temizleme izi ile analiz paneli arasındaki bağ denetlenemedi; "
+            "paket bunu doğrulanmamış olarak kaydediyor."
+        )
+
     st.download_button(
         "Reprodüksiyon paketini indir",
         data=st.session_state["_repro_package"],
@@ -546,9 +593,14 @@ if st.session_state.get("_repro_package_key") == repro_key:
         mime="application/zip",
         type="primary",
     )
-elif st.session_state.get("_repro_package") is not None:
+elif st.session_state.get("_repro_package") is not None or st.session_state.get(
+    "_repro_package_stale"
+):
     # Panel içeriği hazırlanan paketten sonra değişti (ör. pre-trend hesaplandı).
-    # İndirme butonunu açıklamasız kaldırmak "sessiz hiçlik" olurdu.
+    # İndirme butonunu açıklamasız kaldırmak "sessiz hiçlik" olurdu. Bayat paketin
+    # birkaç MB'ı oturumda tutulmaz, yerine yalnız uyarıyı ayakta tutan bayrak kalır.
+    _forget_package()
+    st.session_state["_repro_package_stale"] = True
     st.info("Panel hazırlanan paketten sonra değişti; paketi yeniden hazırlayın.")
 else:
     st.info("Paketi indirmeden önce hazırlayın.")

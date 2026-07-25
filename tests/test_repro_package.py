@@ -15,6 +15,7 @@ import pickle
 import subprocess
 import sys
 import zipfile
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -25,6 +26,7 @@ from pareto.repro import (
     ReproInputs,
     ReproPackageError,
     build_reproduction_package,
+    figure_html,
     missing_artifacts,
     render_methods_section,
 )
@@ -33,7 +35,7 @@ from pareto.spec import Specification
 pyfixest = pytest.importorskip("pyfixest")  # estimator dep yoksa atla, CI'da koşar
 
 from pareto.analysis.runner import run_specs  # noqa: E402
-from pareto.cleaning.codegen import render_audit_script  # noqa: E402
+from pareto.cleaning.codegen import REPRO_ATOL, REPRO_RTOL, render_audit_script  # noqa: E402
 from pareto.cleaning.ledger import LedgerEntry  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -60,6 +62,19 @@ def _specs() -> list[Specification]:
             spec_id="s2", outcome="y", treatment="d", controls=("year",), cluster_by=None
         ),
     ]
+
+
+def _figure_html(name: str) -> str:
+    """Figürü panelin kullandığı yardımcıyla üretir.
+
+    Testte elle sabit bir HTML string'i vermek determinizm testini boşa çıkarır:
+    Plotly varsayılan olarak her çağrıda yeni bir uuid div id'si basar, yani gerçek
+    yolda paket byte'ları değişir ama sabit string'li test bunu göremez. Aynı
+    nedenle HTML burada elle üretilmez, panelin çağırdığı `figure_html` çağrılır.
+    """
+    import plotly.graph_objects as go
+
+    return figure_html(name, go.Figure(data=[go.Scatter(x=[1, 2, 3], y=[1, 4, 9])]))
 
 
 def _make_run(tmp_path: Path, *, with_cleaning: bool = True) -> ReproInputs:
@@ -108,6 +123,8 @@ def _make_run(tmp_path: Path, *, with_cleaning: bool = True) -> ReproInputs:
     ledger_path: Path | None = None
     script_path: Path | None = None
     raw_path: Path | None = None
+    cleaned_path: Path | None = None
+    cleaning_run_id: str | None = None
     if with_cleaning:
         audit_dir = tmp_path / "audit_trail"
         audit_dir.mkdir(parents=True)
@@ -125,12 +142,17 @@ def _make_run(tmp_path: Path, *, with_cleaning: bool = True) -> ReproInputs:
         ledger_path.write_text(
             json.dumps(entry.model_dump(), ensure_ascii=False) + "\n", encoding="utf-8"
         )
+        cleaning_run_id = "clean"
         raw_path = audit_dir / "clean_repro" / "raw.pkl"
         raw_path.parent.mkdir(parents=True)
         # Ham veri = panel + tekrar eden satırlar; temizleme script'i tam olarak
         # paneli geri vermeli.
         raw = pd.concat([panel, panel.head(5)], ignore_index=True)
         raw_path.write_bytes(pickle.dumps(raw))
+        # L4 sandbox'ının çıktısı: provenans denetimi bunu analiz paneliyle
+        # karşılaştırır, yani gerçek bir koşuda ikisi aynı olmalı.
+        cleaned_path = raw_path.with_name("reproduced.pkl")
+        cleaned_path.write_bytes(pickle.dumps(panel))
 
     return ReproInputs(
         run_id="demo-run",
@@ -141,7 +163,9 @@ def _make_run(tmp_path: Path, *, with_cleaning: bool = True) -> ReproInputs:
         ledger_path=ledger_path,
         cleaning_script_path=script_path,
         raw_panel_path=raw_path,
-        figures={"specification_curve.html": "<html><body>figure</body></html>"},
+        cleaned_panel_path=cleaned_path,
+        cleaning_run_id=cleaning_run_id,
+        figures={"specification_curve.html": _figure_html("specification_curve.html")},
     )
 
 
@@ -153,6 +177,23 @@ def _names(payload: bytes) -> set[str]:
 def _read(payload: bytes, name: str) -> str:
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
         return archive.read(name).decode("utf-8")
+
+
+def _run_package(extract_dir: Path) -> subprocess.CompletedProcess:
+    """Açılmış paketin doğrulama script'ini koşar.
+
+    `pareto` PyPI'da değil: sandbox'ta da repo kökü PYTHONPATH'e eklenir
+    (verify_reproduction ile aynı desen).
+    """
+    env = {**os.environ, "PYTHONPATH": str(REPO_ROOT), "PYTHONHASHSEED": "0"}
+    return subprocess.run(
+        [sys.executable, "run_reproduction.py"],
+        cwd=extract_dir,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
 
 
 def test_package_carries_every_audit_trail_artifact(tmp_path):
@@ -251,8 +292,16 @@ def test_package_without_results_fails_loud(tmp_path):
 def test_package_bytes_are_deterministic(tmp_path):
     # NEDEN: reprodüksiyon paketinin kendisi de reprodüklenebilir olmalı; aynı
     # koşudan iki farklı zip, hash'lenerek atıf verilmesini imkansız kılar.
+    #
+    # Figürler İKİNCİ kez ayrıca render edilir: aynı HTML string'ini iki kez
+    # paketlemek determinizmi inşa yoluyla garantiler ve testi boşa çıkarır. Gerçek
+    # yolda panel her rerun'da figürü yeniden çizer, kırılgan yer tam orasıdır.
     inputs = _make_run(tmp_path)
-    assert build_reproduction_package(inputs) == build_reproduction_package(inputs)
+    recaptured = replace(
+        inputs,
+        figures={name: _figure_html(name) for name in inputs.figures},
+    )
+    assert build_reproduction_package(inputs) == build_reproduction_package(recaptured)
 
 
 def test_methods_draft_renders_decisions_without_llm(tmp_path):
@@ -277,20 +326,159 @@ def test_run_script_reproduces_packaged_results(tmp_path):
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
         archive.extractall(extract_dir)
 
-    # `pareto` PyPI'da değil: sandbox'ta da repo kökü PYTHONPATH'e eklenir
-    # (verify_reproduction ile aynı desen).
-    env = {**os.environ, "PYTHONPATH": str(REPO_ROOT), "PYTHONHASHSEED": "0"}
-    proc = subprocess.run(
-        [sys.executable, "run_reproduction.py"],
-        cwd=extract_dir,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
+    proc = _run_package(extract_dir)
     assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
     assert "TAMAM: temizleme adımı yeniden üretildi" in proc.stdout
     assert "Reprodüksiyon doğrulandı." in proc.stdout
+
+
+def test_run_script_fails_when_spec_set_is_trimmed(tmp_path):
+    # NEDEN: ürünün iddiası "rapor edilen küme sonradan kırpılamaz". Sonuçları
+    # bozmadan menüden spec silmek, kalan kümeyi kendi içinde tutarlı bıraktığı
+    # için katsayı karşılaştırmasına yakalanmaz; kümeyi MANIFEST hash'lerine karşı
+    # denetlemezsek script kırpılmış bir pakete "doğrulandı" der.
+    payload = build_reproduction_package(_make_run(tmp_path))
+    extract_dir = tmp_path / "trimmed"
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        archive.extractall(extract_dir)
+
+    specs_file = extract_dir / "specs.json"
+    kept = json.loads(specs_file.read_text(encoding="utf-8"))[:1]
+    specs_file.write_text(json.dumps(kept, ensure_ascii=False), encoding="utf-8")
+
+    proc = _run_package(extract_dir)
+    assert proc.returncode != 0, f"stdout:\n{proc.stdout}"
+    assert "BAŞARISIZ" in proc.stdout
+    assert "s2" in proc.stdout
+
+
+def test_run_script_fails_when_a_spec_definition_is_edited(tmp_path):
+    # NEDEN: kırpmanın ikizi. Bir spec'in içeriği (ör. kontrol değişkenleri)
+    # sonradan değiştirilirse koşu yine tutarlı görünür; içerik hash'i MANIFEST'te
+    # dondurulduğu için bu da yakalanmalı.
+    payload = build_reproduction_package(_make_run(tmp_path))
+    extract_dir = tmp_path / "edited"
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        archive.extractall(extract_dir)
+
+    specs_file = extract_dir / "specs.json"
+    edited = json.loads(specs_file.read_text(encoding="utf-8"))
+    edited[0]["cluster_by"] = None
+    specs_file.write_text(json.dumps(edited, ensure_ascii=False), encoding="utf-8")
+
+    proc = _run_package(extract_dir)
+    assert proc.returncode != 0, f"stdout:\n{proc.stdout}"
+    assert "içeriği değişen" in proc.stdout
+
+
+def test_provenance_mismatch_is_recorded_everywhere(tmp_path):
+    # NEDEN: temizleme ve multiverse ayrı koşulardır. A'yı temizleyip koşan, sonra
+    # B'yi temizleyen kullanıcının paketi B'nin karar defterini A'nın sonuçlarıyla
+    # birleştirir; hiçbir artefakt EKSİK olmadığı için paket "eksiksiz" görünür.
+    # Uyarı manifest'e, README'ye ve METHODS'a birden yazılmazsa kullanıcı olmayan
+    # bir denetim izine güvenir.
+    inputs = _make_run(tmp_path)
+    assert inputs.cleaned_panel_path is not None
+    # Başka bir koşunun temizleme çıktısı: aynı şema, farklı veri.
+    inputs.cleaned_panel_path.write_bytes(pickle.dumps(_panel(effect=0.2, seed=7)))
+
+    payload = build_reproduction_package(inputs)
+    manifest = json.loads(_read(payload, "MANIFEST.json"))
+
+    assert manifest["missing"] == []  # eksik yok; yanlış olan provenans
+    assert manifest["provenance"]["cleaning_matches_panel"] is False
+    assert manifest["provenance"]["cleaning_run_id"] == "clean"
+    assert (
+        manifest["provenance"]["cleaned_panel_fingerprint"]
+        != manifest["provenance"]["panel_fingerprint"]
+    )
+    assert "EŞLEŞMİYOR" in _read(payload, "README.md")
+    assert "UYARI" in _read(payload, "METHODS.md")
+
+
+def test_provenance_confirms_matching_cleaning_run(tmp_path):
+    # NEDEN: uyarı her pakette çıkarsa uyarı olmaktan çıkar. Doğru eşleşen koşuda
+    # provenans olumlu kaydedilmeli ve taslakta uyarı görünmemeli.
+    payload = build_reproduction_package(_make_run(tmp_path))
+    manifest = json.loads(_read(payload, "MANIFEST.json"))
+
+    assert manifest["provenance"]["cleaning_matches_panel"] is True
+    assert "UYARI" not in _read(payload, "METHODS.md")
+
+
+def test_provenance_tolerates_what_the_l4_gate_tolerated(tmp_path):
+    # NEDEN: L4 kapısı sandbox çıktısını TOLERANSLA kabul eder (REPRO_RTOL/ATOL).
+    # Provenans denetimi bit eşitliği arasaydı, float'a dokunan bir transform
+    # eklendiğinde kapıdan geçmiş DOĞRU bir koşu "denetim izi sahte" damgası yerdi.
+    # Her pakette çıkan bir uyarı, uyarı olmaktan çıkar.
+    inputs = _make_run(tmp_path)
+    assert inputs.cleaned_panel_path is not None
+    cleaned = pickle.loads(inputs.cleaned_panel_path.read_bytes())
+    # Toleransın içinde, ama bit düzeyinde farklı.
+    cleaned["y"] = cleaned["y"] + 1e-12
+    inputs.cleaned_panel_path.write_bytes(pickle.dumps(cleaned))
+
+    manifest = json.loads(_read(build_reproduction_package(inputs), "MANIFEST.json"))
+    assert manifest["provenance"]["cleaning_matches_panel"] is True
+    # Parmak izleri farklı olabilir; kararı veren tolerans karşılaştırmasıdır.
+    assert manifest["provenance"]["comparison"] == {"rtol": REPRO_RTOL, "atol": REPRO_ATOL}
+
+
+def test_provenance_flags_structurally_different_cleaning_output(tmp_path):
+    # NEDEN: tolerans gevşekliği her farkı yutmamalı. Kolon kümesi ya da satır
+    # sayısı farklıysa bu tolerans meselesi değil, başka bir veridir.
+    inputs = _make_run(tmp_path)
+    assert inputs.cleaned_panel_path is not None
+    cleaned = pickle.loads(inputs.cleaned_panel_path.read_bytes())
+    inputs.cleaned_panel_path.write_bytes(pickle.dumps(cleaned.head(len(cleaned) - 1)))
+
+    manifest = json.loads(_read(build_reproduction_package(inputs), "MANIFEST.json"))
+    assert manifest["provenance"]["cleaning_matches_panel"] is False
+
+
+def test_provenance_is_unverified_without_cleaning_sandbox(tmp_path):
+    # NEDEN: "denetlenmedi" ile "denetlendi ve tamam" aynı şey değildir; ikisini
+    # tek bayrakta toplamak doğrulanmamış bir defteri doğrulanmış gösterir.
+    inputs = _make_run(tmp_path, with_cleaning=False)
+    manifest = json.loads(_read(build_reproduction_package(inputs), "MANIFEST.json"))
+    assert manifest["provenance"]["cleaning_matches_panel"] is None
+    assert manifest["provenance"]["cleaning_run_id"] is None
+
+
+def test_corrupt_ledger_raises_package_error_not_raw_traceback(tmp_path):
+    # NEDEN: arayüz yalnız ReproPackageError yakalar. Bozuk bir artefakt ham
+    # JSONDecodeError olarak sızarsa kullanıcı Streamlit traceback'i görür ve
+    # neyin bozuk olduğunu anlamaz.
+    inputs = _make_run(tmp_path)
+    assert inputs.ledger_path is not None
+    inputs.ledger_path.write_text("{bu json değil\n", encoding="utf-8")
+
+    with pytest.raises(ReproPackageError, match="Karar defteri"):
+        build_reproduction_package(inputs)
+
+
+def test_schema_drifted_results_raise_package_error(tmp_path):
+    # NEDEN: aynı gerekçe, pydantic tarafı. Eski şemalı bir results.json
+    # ValidationError ile patlarsa hata mesajı kullanıcıya ulaşmaz.
+    inputs = _make_run(tmp_path)
+    inputs.results_path.write_text(
+        json.dumps([{"spec_id": "s1"}], ensure_ascii=False), encoding="utf-8"
+    )
+
+    with pytest.raises(ReproPackageError, match="şemasına uymuyor"):
+        build_reproduction_package(inputs)
+
+
+def test_methods_draft_degrades_loudly_without_frozen_menu(tmp_path):
+    # NEDEN: donmuş menü bulunamadığında (ör. run_id yanlış çözülürse) taslak
+    # estimand bölümünü kaybeder. Sessizce kısalmak yerine eksikliği söylemeli.
+    inputs = _make_run(tmp_path)
+    assert inputs.frozen_menu_path is not None
+    inputs.frozen_menu_path.unlink()
+
+    methods = _read(build_reproduction_package(inputs), "METHODS.md")
+    assert "Dondurulmuş estimand kaydı bu pakette yok" in methods
+    assert "frozen_menu" in methods
 
 
 def test_run_script_fails_when_packaged_results_are_tampered(tmp_path):
@@ -306,14 +494,6 @@ def test_run_script_fails_when_packaged_results_are_tampered(tmp_path):
     tampered[0]["coefficient"] = float(tampered[0]["coefficient"]) + 1.0
     results_file.write_text(json.dumps(tampered, ensure_ascii=False), encoding="utf-8")
 
-    env = {**os.environ, "PYTHONPATH": str(REPO_ROOT), "PYTHONHASHSEED": "0"}
-    proc = subprocess.run(
-        [sys.executable, "run_reproduction.py"],
-        cwd=extract_dir,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
+    proc = _run_package(extract_dir)
     assert proc.returncode != 0
     assert "BAŞARISIZ" in proc.stdout

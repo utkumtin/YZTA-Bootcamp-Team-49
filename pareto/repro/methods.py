@@ -51,6 +51,31 @@ def _estimand_section(manifest: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _provenance_note(manifest: dict[str, Any]) -> list[str]:
+    """Karar defterinin bu sonuçlara ait olduğu doğrulandı mı.
+
+    Temizleme ve multiverse ayrı koşulardır; taslak, doğrulanmamış bir defteri
+    doğrulanmış gibi sunarsa metot bölümü olduğu iddiasını kaybeder.
+    """
+    provenance = manifest.get("provenance") or {}
+    matches = provenance.get("cleaning_matches_panel")
+    if matches is True:
+        return []
+    if matches is False:
+        return [
+            "> **UYARI:** Aşağıdaki karar defteri, analize giren panelle eşleşmeyen "
+            "bir temizleme koşusundan gelmektedir "
+            f"(temizleme run_id: `{provenance.get('cleaning_run_id')}`). Bu bölüm "
+            "doğrulanana kadar yayımlanmamalıdır.",
+            "",
+        ]
+    return [
+        "> **Not:** Karar defterinin bu sonuçları üreten veriye ait olduğu "
+        "doğrulanamamıştır (temizleme sandbox çıktısı pakete girmedi).",
+        "",
+    ]
+
+
 def _cleaning_section(manifest: dict[str, Any]) -> list[str]:
     decisions = manifest.get("cleaning_decisions") or []
     if not decisions:
@@ -59,9 +84,11 @@ def _cleaning_section(manifest: dict[str, Any]) -> list[str]:
             "burada raporlanamamaktadır.",
         ]
 
+    note = _provenance_note(manifest)
     flagged = sum(1 for d in decisions if d.get("belirsizlik_bayragi"))
     rejected = sum(1 for d in decisions if d.get("resolution") == "rejected")
     lines = [
+        *note,
         f"Veri temizleme {len(decisions)} karardan oluşur. Bunların {flagged} tanesi "
         "belirsizlik bayrağı taşıdığı için insan onayına sunulmuş, "
         f"{rejected} tanesi reddedilmiştir. Her karar kapalı bir transform sözlüğünden "
