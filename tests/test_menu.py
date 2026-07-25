@@ -152,7 +152,7 @@ def test_validate_spec_menu_to_specs_fails_loud_on_dirty_spec():
         cluster_by="g",
         estimator="OLS",
     )
-    with pytest.raises(ValueError, match="Spec validation failed"):
+    with pytest.raises(ValueError, match="Spec doğrulaması başarısız"):
         validate_spec_menu_to_specs(frozen, [dirty])
 
 

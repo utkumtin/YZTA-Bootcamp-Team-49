@@ -72,3 +72,16 @@ def test_hicbiri_tanimli_degilken_none_doner(monkeypatch):
     key, source = resolve_api_key("GEMINI_API_KEY")
 
     assert (key, source) == ("", "none")
+
+
+def test_gemini_yoksa_google_api_key_aliasina_duser(monkeypatch):
+    """GEMINI_API_KEY tanımsızken _API_KEY_ALIASES üzerinden GOOGLE_API_KEY'e
+    düşülmeli — config.py'deki alias zincirinin pozitif yolu daha önce test
+    edilmiyordu (yalnız 'hiçbiri yokken' negatif durumu vardı)."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("GOOGLE_API_KEY", "google-anahtari")
+    monkeypatch.setattr("streamlit.session_state", {})
+
+    key, source = resolve_api_key("GEMINI_API_KEY")
+
+    assert (key, source) == ("google-anahtari", "env")

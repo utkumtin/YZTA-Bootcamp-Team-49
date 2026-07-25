@@ -574,22 +574,28 @@ def validate_spec_menu_to_specs(
 
     for spec in specs:
         if list(spec.controls) not in menu.control_sets:
-            errors.append(f"{spec.spec_id}: invalid controls {list(spec.controls)!r}")
+            errors.append(f"{spec.spec_id}: geçersiz controls {list(spec.controls)!r}")
         if spec.sample_filter not in menu.sample_filters:
-            errors.append(f"{spec.spec_id}: invalid sample_filter {spec.sample_filter!r}")
+            errors.append(f"{spec.spec_id}: geçersiz sample_filter {spec.sample_filter!r}")
         if spec.pre_period_window not in menu.pre_period_windows:
-            errors.append(f"{spec.spec_id}: invalid pre_period {spec.pre_period_window!r}")
+            errors.append(f"{spec.spec_id}: geçersiz pre_period {spec.pre_period_window!r}")
         if spec.cluster_by not in menu.clustering_levels:
-            errors.append(f"{spec.spec_id}: invalid cluster_by {spec.cluster_by!r}")
+            errors.append(f"{spec.spec_id}: geçersiz cluster_by {spec.cluster_by!r}")
         if spec.include_never_treated not in menu.never_treated_levels:
-            errors.append(f"{spec.spec_id}: invalid never_treated {spec.include_never_treated!r}")
+            errors.append(
+                f"{spec.spec_id}: geçersiz never_treated {spec.include_never_treated!r}"
+            )
         if spec.estimator not in menu.estimators:
-            errors.append(f"{spec.spec_id}: invalid estimator {spec.estimator!r}")
+            errors.append(f"{spec.spec_id}: geçersiz estimator {spec.estimator!r}")
         if spec.weight_col not in menu.weighting_levels:
-            errors.append(f"{spec.spec_id}: invalid weight_col {spec.weight_col!r}")
+            errors.append(f"{spec.spec_id}: geçersiz weight_col {spec.weight_col!r}")
 
     if errors:
-        raise ValueError("Spec validation failed: " + "; ".join(errors))
+        # NEDEN Türkçe: #50/13 — menü tarafındaki parser mesajları (örn. "Geçersiz
+        # clustering kolonu") Türkçeleşmişti ama bu fonksiyon İngilizce kalmıştı;
+        # freeze/expand akışında "; " ile birleşen hata metinlerinde dil karışımı
+        # oluşabiliyordu. Artık bu fonksiyon da Türkçe.
+        raise ValueError("Spec doğrulaması başarısız: " + "; ".join(errors))
 
 
 # -----------------------------
