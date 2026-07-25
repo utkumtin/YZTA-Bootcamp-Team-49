@@ -37,7 +37,7 @@ def test_mirror_latest_run_replaces_the_entire_snapshot(tmp_path: Path, monkeypa
     assert (latest / "panel.pkl").read_bytes() == pickle.dumps("panel-b")
     assert (latest / "specs.json").read_text(encoding="utf-8") == "specs-b"
     assert (latest / "run_id.txt").read_text(encoding="utf-8") == "run-b"
-    
+
     # Z8: kimse "latest/progress.json"ı okumuyordu (RunHandle yalnız kendi
     # run_dir'inin progress.json'ını okur), bu yüzden mirror'lanan dosya
     # listesinden çıkarıldı. Artık latest snapshot'ında bu dosya hiç yok.
