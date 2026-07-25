@@ -152,7 +152,7 @@ def test_validate_spec_menu_to_specs_fails_loud_on_dirty_spec():
         cluster_by="g",
         estimator="OLS",
     )
-    with pytest.raises(ValueError, match="Spec validation failed"):
+    with pytest.raises(ValueError, match="Spec doğrulaması başarısız"):
         validate_spec_menu_to_specs(frozen, [dirty])
 
 
@@ -204,6 +204,26 @@ def test_clustering_none_level_freezes_instead_of_failing():
         approved=True,
     )
     assert frozen_menu.menu.clustering_levels == (None,)
+
+
+def test_freeze_spec_menu_rejects_explicit_empty_active_axes() -> None:
+    # Z1 düzeltmesi: mesaj artık Türkçe ("En az bir aktif eksen seçilmelidir.").
+    # Önceki `match="At least one active axis"` bu Türkçe mesajı YAKALAMAZ ve
+    # testi kırar — review'ın kendi önerisi buydu: davranışa (ValueError +
+    # boş active_axes reddi) bağlı kal, İngilizce substring'e değil.
+    proposal = SpecMenuProposal(**_menu_proposal_args())
+
+    with pytest.raises(ValueError, match="aktif eksen") as exc_info:
+        freeze_spec_menu(
+            proposal,
+            available_columns=_MENU_COLUMNS,
+            approved=True,
+            active_axes=(),
+        )
+
+    # Davranış assertion'ı: mesaj Türkçe kalmalı, İngilizceye geri dönmemeli.
+    assert "En az bir aktif eksen" in str(exc_info.value)
+    assert "At least one active axis" not in str(exc_info.value)
 
 
 def test_clustering_axis_expands_none_and_column_as_two_specs():
@@ -347,8 +367,13 @@ def test_defensibility_gate_happy_path_matches_real_expansion_count():
 
 
 def test_freeze_spec_menu_rejects_unapproved():
+    # Z1 kapsamının genişletilmesi (#50/13): "User approval required to
+    # freeze spec menu" da İngilizceydi; bu istisna da aynı şekilde sayfa
+    # katmanında `except ValueError as exc: st.error(str(exc))` yoluyla
+    # kullanıcıya basılabilir, o yüzden mesaj Türkçeleştirildi ve test
+    # buna göre güncellendi.
     proposal = SpecMenuProposal(**_menu_proposal_args())
-    with pytest.raises(ValueError, match="User approval required"):
+    with pytest.raises(ValueError, match="kullanıcı onayı"):
         freeze_spec_menu(
             proposal,
             available_columns=["state", "year", "expanded", "uninsured_rate", "population"],
@@ -357,6 +382,10 @@ def test_freeze_spec_menu_rejects_unapproved():
 
 
 def test_freeze_spec_menu_rejects_clarification_needed():
+    # NEDEN bu test değişmedi: burada fırlatılan mesaj sabit bir statik
+    # string değil, `proposal.clarification_question` — yani JUDGE'ın (LLM)
+    # ürettiği dinamik içerik. Hangi dilde geldiyse o dilde kalması doğru;
+    # #50/13 yalnızca Claude'un/kodun kendi ürettiği SABİT mesajlarla ilgili.
     args = _menu_proposal_args()
     args["needs_clarification"] = True
     args["clarification_question"] = "Which clustering level?"

@@ -97,9 +97,7 @@ def _chain_model(chain: tuple[ProviderModel, ...]) -> Any:
             )
             missing.append(pm.api_key_env)
     if not models:
-        raise OSError(
-            f"Zincirde kullanılabilir model yok; eksik anahtarlar: {', '.join(missing)}"
-        )
+        raise OSError(f"Zincirde kullanılabilir model yok; eksik anahtarlar: {', '.join(missing)}")
     if len(models) == 1:
         return models[0]
 

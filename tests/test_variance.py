@@ -230,7 +230,7 @@ def test_diagnose_axes_anova_partial_r2_detects_dominant_estimator_axis():
             for sample in (None, "region == 'A'"):
                 for noise in (-0.05, 0.05):
                     spec_id = f"s{i}"
-                    coef = (-5.0 if estimator == "OLS" else 5.0)
+                    coef = -5.0 if estimator == "OLS" else 5.0
                     coef += 0.2 if controls else 0.0
                     coef += 0.1 if sample else 0.0
                     coef += noise

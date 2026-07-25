@@ -73,6 +73,7 @@ def _render_multiverse_progress(handle) -> None:
             if handle.process.returncode == 0:
                 st.success("Multiverse tamamlandı.")
                 results_path = str(handle.results_path)
+                st.session_state["multiverse_results_path"] = results_path
                 st.caption(f"Sonuçlar: {results_path}")
                 st.page_link("pages/3_variance_panel.py", label="Varyans panelini aç")
             else:
@@ -702,14 +703,22 @@ if menu is None:
 
 
 if menu_source == "deterministic":
+    # Z5: `menu` burada her rerun'da `build_deterministic_menu(...)` ile taze
+    # üretiliyor ve `SpecMenu.active_axes` varsayılanı `()`. Yani
+    # `list(menu.active_axes)` bu dalda pratikte HER ZAMAN boş liste — "or
+    # list(ALL_AXES)" sol tarafı hiçbir zaman doğru olmayan, dolayısıyla
+    # kafa karıştıran ölü bir "or" idi (menu.py:557'nin artık boş tuple'ı
+    # reddetmesiyle aynı kapanmışlık). Doğrudan ALL_AXES'e sabitlendi.
     active_axes = st.multiselect(
         "Aktif eksenler",
         options=list(ALL_AXES),
-        default=list(menu.active_axes),
+        default=list(ALL_AXES),
         help="Seçilen eksenler faktöriyel genişlemeye dahil edilir.",
     )
-    if active_axes:
-        menu = menu.model_copy(update={"active_axes": tuple(active_axes)})
+    if not active_axes:
+        st.warning("En az bir aktif eksen seçin; multiverse genişletmesi durduruldu.")
+        st.stop()
+    menu = menu.model_copy(update={"active_axes": tuple(active_axes)})
 else:
     st.caption("LLM menüsünde aktif eksenler dondurma anında sabitlenir.")
 

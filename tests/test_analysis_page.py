@@ -94,6 +94,12 @@ def test_analysis_page_shows_multiverse_success_path(monkeypatch: pytest.MonkeyP
     assert any("Multiverse tamamlandı." in item.value for item in app.success)
     assert any("Sonuçlar:" in item.value for item in app.caption)
     assert calls == [("pages/3_variance_panel.py", "Varyans panelini aç")]
+    # NEDEN str(Path(...)): sabit "runs\\fake-run\\results.json" yalnızca
+    # Windows'ta doğruydu; POSIX'te Path str() '/' ayracı üretir, bu yüzden
+    # beklenen değeri platforma göre inşa ediyoruz.
+    assert app.session_state["multiverse_results_path"] == str(
+        Path("runs") / "fake-run" / "results.json"
+    )
     assert not app.exception
 
 

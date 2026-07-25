@@ -21,15 +21,16 @@ import streamlit as st
 
 from pareto.analysis.event_study import estimate_pretrend_event_study
 from pareto.analysis.event_study_columns import (
-    event_study_cache_key as _event_study_cache_key,
+    build_event_study_payload,
 )
 from pareto.analysis.event_study_columns import (
-    infer_column as _infer_column,
+    event_study_cache_key as _event_study_cache_key,
 )
 from pareto.analysis.variance import ROBUST_RULE_TEXT, diagnose_axes, summarize
 from pareto.config import SETTINGS
 from pareto.contracts import EstimationResult
 from pareto.llm.narrative import generate_narrative
+from pareto.memory.store import ProjectStore
 from pareto.repro import (
     ARTIFACT_LABELS,
     ReproInputs,
@@ -48,7 +49,11 @@ with st.sidebar:
 st.title("📊 3 · Varyans Paneli")
 st.caption("Tek kesin cevap yok; savunulabilir seçimler menüsü ve her birinin sonucu.")
 
-results_path = st.text_input("Sonuç dosyası", value="runs/latest/results.json")
+# local-only: dosya sistemi erişimi güvenilir ortamda varsayılır.
+results_path = st.text_input(
+    "Sonuç dosyası",
+    value=st.session_state.get("multiverse_results_path", "runs/latest/results.json"),
+)
 if not Path(results_path).exists():
     st.warning(f"Sonuç dosyası yok: {results_path}. Önce multiverse runner koş.")
     st.stop()
@@ -64,6 +69,26 @@ else:
     specs = []
 
 
+def _load_frozen_menu_record(run_id: str | None) -> dict | None:
+    """ProjectStore'da dondurulan estimand/menu kaydını okur (#50/12).
+
+    NEDEN: `2_analysis.py` her multiverse başlatmasında `_persist_frozen_menu`
+    ile `frozen_menu` kaydını ProjectStore'a (`{run_id}/frozen_menu.json`) yazıyordu
+    ama hiçbir yer bunu okumuyordu — yazılan provenance bilgisi ölü koddu. Artık
+    varyans paneli bu kaydı okuyup run'ın hangi estimand/menu hash'inden üretildiğini
+    gösteriyor ve oturumdaki mevcut estimand ile karşılaştırıyor.
+
+    `ProjectStore.load` var olmayan anahtarda None döner (exception atmaz), bu
+    yüzden geniş bir try/except'e gerek yok — yalnız beklenmedik şekil (dict
+    olmayan içerik) durumuna karşı savunuluyoruz.
+    """
+    if not run_id:
+        return None
+    store = ProjectStore(project_id=str(run_id))
+    record = store.load("frozen_menu")
+    return record if isinstance(record, dict) else None
+
+
 # Panelde çizilen figürler reprodüksiyon paketine de girer: dosya adı -> HTML gövdesi.
 package_figures: dict[str, str] = {}
 
@@ -73,68 +98,42 @@ def _capture_figure(name: str, figure: go.Figure) -> None:
     package_figures[name] = figure_html(name, figure)
 
 
-def _build_event_study_payload() -> dict[str, object] | None:
-    df = st.session_state.get("clean_df")
-    if df is None:
-        return None
+def _render_run_provenance(results_path: str) -> None:
+    run_id = st.session_state.get("multiverse_run_id") or Path(results_path).parent.name
+    record = _load_frozen_menu_record(run_id)
 
-    analysis_state = st.session_state.get("analysis_state") or {}
-    estimand = st.session_state.get("frozen_estimand")
+    st.subheader("Run provenance")
+    if record is None:
+        st.caption(
+            "Bu run için ProjectStore'da dondurulmuş estimand/menu kaydı bulunamadı "
+            "(run doğrudan CLI/worker ile üretilmiş olabilir)."
+        )
+        return
 
-    outcome_col = None
-    outcome_source = "unknown"
-    if estimand is not None:
-        outcome_col = getattr(getattr(estimand, "estimand", None), "outcome", None)
-        if outcome_col:
-            outcome_source = "estimand"
+    stored_estimand_hash = record.get("estimand_hash")
+    stored_menu_hash = record.get("menu_hash")
+    stored_spec_count = record.get("spec_count")
+    st.caption(
+        f"Kayıtlı estimand_hash=`{stored_estimand_hash}` · "
+        f"menu_hash=`{stored_menu_hash}` · spec_count={stored_spec_count}"
+    )
 
-    if not outcome_col:
-        outcome_col = _infer_column(df, "outcome", "y", "dependent")
-        outcome_source = "inferred" if outcome_col else "unknown"
+    current_estimand = st.session_state.get("frozen_estimand")
+    current_estimand_hash = getattr(current_estimand, "freeze_hash", None)
 
-    unit_col = analysis_state.get("unit_col")
-    unit_source = "analysis_state" if unit_col else "inferred"
-    if not unit_col:
-        unit_col = _infer_column(df, "unit", "unit_id", "id")
+    if current_estimand_hash and stored_estimand_hash:
+        if current_estimand_hash == stored_estimand_hash:
+            st.success("✓ Oturumdaki estimand, bu run'ı üreten dondurulmuş estimand ile eşleşiyor.")
+        else:
+            st.warning(
+                "⚠️ Oturumdaki estimand hash'i, bu run'ı üreten dondurulmuş estimand ile "
+                "**eşleşmiyor**. Aşağıdaki sonuçlar farklı bir estimand'dan üretilmiş olabilir."
+            )
+    elif stored_estimand_hash:
+        st.info("Oturumda aktif bir estimand yok; run provenance'ı yalnız kayıttan gösteriliyor.")
 
-    time_col = analysis_state.get("time_col")
-    time_source = "analysis_state" if time_col else "inferred"
-    if not time_col:
-        time_col = _infer_column(df, "year", "time", "date", "period")
 
-    cohort_col = _infer_column(df, "cohort", "cohort_id", "treatment_time", "group")
-    cohort_source = "inferred" if cohort_col else "unknown"
-
-    never_treated_col = _infer_column(df, "never_treated", "never_treat", "untreated", "control")
-    never_treated_source = "inferred" if never_treated_col else "unknown"
-
-    controls = analysis_state.get("controls") or []
-
-    if not outcome_col or not unit_col or not time_col:
-        return {
-            "status": "skipped",
-            "reason": "required columns for pre-trend diagnostic are missing",
-        }
-
-    return {
-        "status": "needs_selection"
-        if not cohort_col or not never_treated_col
-        else "pending_columns",
-        "outcome_col": outcome_col,
-        "unit_col": unit_col,
-        "time_col": time_col,
-        "cohort_col": cohort_col,
-        "never_treated_col": never_treated_col,
-        "controls": tuple(controls),
-        "column_options": [str(col) for col in df.columns],
-        "sources": {
-            "outcome_col": outcome_source,
-            "unit_col": unit_source,
-            "time_col": time_source,
-            "cohort_col": cohort_source,
-            "never_treated_col": never_treated_source,
-        },
-    }
+_render_run_provenance(results_path)
 
 
 def _plot_coefficient_series(
@@ -307,25 +306,27 @@ else:
     st.info("Efektif N bilgisi bulunamadı.")
 
 st.subheader("Pre-trend event study")
-payload = _build_event_study_payload()
+payload = build_event_study_payload(
+    st.session_state.get("clean_df"),
+    estimand=st.session_state.get("frozen_estimand"),
+    analysis_state=st.session_state.get("analysis_state"),
+)
 event_study = None
 if payload is None:
     st.info("Pre-trend görseli için temizlenmiş veri seti yok.")
-elif payload.get("status") == "skipped":
-    st.info(payload.get("reason", "Pre-trend görseli için gerekli veri yok."))
-elif payload.get("status") in {"pending_columns", "needs_selection"}:
-    sources = payload.get("sources", {})
+elif payload["status"] == "skipped":
+    st.info(payload["reason"])
+else:
+    sources = payload["sources"]
     st.caption(
         "Kullanılacak kolonlar → "
         f"outcome: `{payload['outcome_col']}` ({sources.get('outcome_col', 'unknown')}), "
         f"unit: `{payload['unit_col']}` ({sources.get('unit_col', 'unknown')}), "
         f"time: `{payload['time_col']}` ({sources.get('time_col', 'unknown')})"
     )
-    column_options = list(
-        payload.get("column_options", [str(col) for col in st.session_state["clean_df"].columns])
-    )
-    cohort_col = payload.get("cohort_col")
-    never_treated_col = payload.get("never_treated_col")
+    column_options = payload["column_options"]
+    cohort_col = payload["cohort_col"]
+    never_treated_col = payload["never_treated_col"]
 
     if cohort_col is None:
         cohort_choice = st.selectbox(
@@ -380,23 +381,28 @@ elif payload.get("status") in {"pending_columns", "needs_selection"}:
         if cached_key == cache_key:
             event_study = st.session_state.get("_event_study_cache")
 
-        if st.button("Bu kolonlarla pre-trend hesapla"):
-            try:
-                event_study = estimate_pretrend_event_study(
-                    st.session_state["clean_df"],
-                    outcome_col=payload["outcome_col"],
-                    unit_col=payload["unit_col"],
-                    time_col=payload["time_col"],
-                    cohort_col=str(cohort_col),
-                    never_treated_col=str(never_treated_col),
-                    controls=payload["controls"],
-                    treated_cohorts=tuple(treated_cohort_selection) or None,
-                )
-                st.session_state["_event_study_cache"] = event_study
-                st.session_state["_event_study_cache_key"] = cache_key
-            except Exception as exc:  # noqa: BLE001
-                st.session_state["_event_study_cache"] = {"status": "failed", "error": str(exc)}
-                st.session_state["_event_study_cache_key"] = cache_key
+        if not treated_cohort_selection:
+            st.info("Pre-trend hesabı için en az bir treated cohort seçin.")
+
+        # Z3: estimate_pretrend_event_study kendi içindeki her riskli adımı
+        # `except Exception` ile sarıp `_failed_result(...)` döndürüyor
+        # (event_study.py) — yani pratikte ValueError fırlatmıyor. Sayfadaki
+        # try/except ValueError, kütüphanenin zaten koruduğu bir yolu bir daha
+        # koruyormuş gibi görünen ölü kod ve test edilemiyordu. Kaldırıldı;
+        # artık doğrudan {"status": ..., "error": ...} sözleşmesine güveniliyor.
+        if st.button("Bu kolonlarla pre-trend hesapla", disabled=not treated_cohort_selection):
+            event_study = estimate_pretrend_event_study(
+                st.session_state["clean_df"],
+                outcome_col=payload["outcome_col"],
+                unit_col=payload["unit_col"],
+                time_col=payload["time_col"],
+                cohort_col=str(cohort_col),
+                never_treated_col=str(never_treated_col),
+                controls=payload["controls"],
+                treated_cohorts=tuple(treated_cohort_selection),
+            )
+            st.session_state["_event_study_cache"] = event_study
+            st.session_state["_event_study_cache_key"] = cache_key
 
     if event_study is None:
         st.info("Hesaplamak için butona basın.")

@@ -74,6 +74,4 @@ def test_ols_twfe_match_r_fixest_reference(
         assert getattr(result, field) == pytest.approx(
             float(reference[field]), **ESTIMATE_TOLERANCE
         )
-    assert result.p_value == pytest.approx(
-        float(reference["p_value"]), **P_VALUE_TOLERANCE
-    )
+    assert result.p_value == pytest.approx(float(reference["p_value"]), **P_VALUE_TOLERANCE)

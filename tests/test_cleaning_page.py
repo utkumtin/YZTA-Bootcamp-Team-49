@@ -38,9 +38,7 @@ def test_same_upload_preserves_ledger_when_resolution_is_saved(
     )
 
     monkeypatch.setattr("streamlit.file_uploader", lambda *args, **kwargs: uploaded)
-    monkeypatch.setattr(
-        "pareto.profiling.load_raw_file", lambda _: pd.DataFrame({"value": [1, 2]})
-    )
+    monkeypatch.setattr("pareto.profiling.load_raw_file", lambda _: pd.DataFrame({"value": [1, 2]}))
     monkeypatch.setattr("pareto.profiling.profile_dataframe", lambda _: {"columns": []})
     monkeypatch.setattr("pareto.cleaning.agent.generate_ledger", lambda _: [entry])
 
@@ -76,9 +74,7 @@ def test_new_upload_resets_ledger_and_resolution_state(
     )
 
     monkeypatch.setattr("streamlit.file_uploader", lambda *args, **kwargs: uploads[0])
-    monkeypatch.setattr(
-        "pareto.profiling.load_raw_file", lambda _: pd.DataFrame({"value": [1, 2]})
-    )
+    monkeypatch.setattr("pareto.profiling.load_raw_file", lambda _: pd.DataFrame({"value": [1, 2]}))
     monkeypatch.setattr("pareto.profiling.profile_dataframe", lambda _: {"columns": []})
     monkeypatch.setattr("pareto.cleaning.agent.generate_ledger", lambda _: [entry])
 
@@ -96,7 +92,38 @@ def test_new_upload_resets_ledger_and_resolution_state(
     uploads[0] = _UploadedFile("second-upload")
     app.run()
 
-    assert app.session_state["cleaning_uploaded_file_id"] == "second-upload"
+    assert app.session_state["cleaning_uploaded_file_id"] == "id:second-upload"
     assert "ledger" not in app.session_state
     assert "resolutions" not in app.session_state
     assert "run_id" not in app.session_state
+
+
+def test_failed_upload_shows_cached_error_without_reparsing_on_rerun(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#53/1: hata yolunda banner sticky kalmalı ama load_raw_file her rerun'da
+    tekrar çağrılmamalı; yalnızca açık 'Tekrar dene' ile yeniden denenmeli."""
+    uploaded = _UploadedFile("failing-upload")
+    call_count = {"n": 0}
+
+    def _boom(_uploaded):
+        call_count["n"] += 1
+        raise ValueError("Dosya okunamadı")
+
+    monkeypatch.setattr("streamlit.file_uploader", lambda *args, **kwargs: uploaded)
+    monkeypatch.setattr("pareto.profiling.load_raw_file", _boom)
+
+    app = AppTest.from_file(PAGE_PATH, default_timeout=10)
+    app.run()
+    assert call_count["n"] == 1
+    assert any("Dosya okunamadı" in err.value for err in app.error)
+
+    # Otomatik rerun (widget değeri aynı) — reparse OLMAMALI.
+    app.run()
+    assert call_count["n"] == 1
+    assert any("Dosya okunamadı" in err.value for err in app.error)
+
+    # Açık "Tekrar dene" — şimdi reparse OLMALI.
+    next(button for button in app.button if "Tekrar dene" in button.label).click()
+    app.run()
+    assert call_count["n"] == 2

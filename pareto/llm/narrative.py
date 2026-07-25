@@ -63,9 +63,7 @@ def _validate_axes(narrative: VarianceNarrative, diagnosis: dict[str, Any]) -> N
         raise ValueError(f"JUDGE teşhiste olmayan eksen andı: {unknown}")
 
 
-def generate_narrative(
-    summary: dict[str, Any], diagnosis: dict[str, Any]
-) -> VarianceNarrative:
+def generate_narrative(summary: dict[str, Any], diagnosis: dict[str, Any]) -> VarianceNarrative:
     """JUDGE: deterministik özet + eksen teşhisi -> tipli varyans anlatısı.
 
     Ölçüm `summarize` ve `diagnose_axes`'ten gelir; LLM yalnızca açıklama yazar.

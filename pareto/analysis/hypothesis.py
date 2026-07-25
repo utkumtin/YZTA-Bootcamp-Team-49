@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -106,20 +106,15 @@ def draft_tac_proposal(
     """Sokratik beyan sonrası TAC önerisini hazırlar."""
 
     if not available_columns:
-        raise ValueError(
-            "TAC önerisi için en az bir mevcut kolon gereklidir."
-        )
+        raise ValueError("TAC önerisi için en az bir mevcut kolon gereklidir.")
 
     prompt = (
         "Araştırma hikayesi:\n"
         f"{prompt_json(research_story)}\n\n"
-
         "Kullanıcının Sokratik beyanı:\n"
         f"{prompt_json(declaration.model_dump())}\n\n"
-
         "Veri setinde bulunan kullanılabilir kolonlar:\n"
         f"<available_columns>{prompt_json(available_columns)}</available_columns>\n\n"
-
         "Kurallar:\n"
         "- Treatment yalnızca yukarıdaki kolonlardan biri olabilir.\n"
         "- Outcome yalnızca yukarıdaki kolonlardan biri olabilir.\n"
@@ -156,18 +151,11 @@ def freeze_estimand(
     """Estimand'ı kullanıcı onayı sonrası dondurur."""
 
     if proposal.needs_clarification:
-        question = (
-            proposal.clarification_question
-            or proposal.confirmation_question
-        )
-        raise ValueError(
-            f"Estimand dondurulamıyor: {question}"
-        )
+        question = proposal.clarification_question or proposal.confirmation_question
+        raise ValueError(f"Estimand dondurulamıyor: {question}")
 
     if not approved:
-        raise ValueError(
-            "Estimand'ın dondurulması için kullanıcı onayı gereklidir."
-        )
+        raise ValueError("Estimand'ın dondurulması için kullanıcı onayı gereklidir.")
 
     estimand = proposal.to_estimand()
 
@@ -199,47 +187,24 @@ def validate_estimand_spec_mapping(
     if available_columns is not None:
         cols: set[str] = set(map(str, available_columns))
 
-        if (
-            spec.cluster_by
-            and spec.cluster_by not in cols
-        ):
-            errors.append(
-                f"Kümeleme kolonu '{spec.cluster_by}' veri setinde bulunamadı."
-            )
+        if spec.cluster_by and spec.cluster_by not in cols:
+            errors.append(f"Kümeleme kolonu '{spec.cluster_by}' veri setinde bulunamadı.")
 
         for control in spec.controls:
             if control not in cols:
-                errors.append(
-                    f"Kontrol kolonu '{control}' veri setinde bulunamadı."
-                )
+                errors.append(f"Kontrol kolonu '{control}' veri setinde bulunamadı.")
 
         if spec.estimator == "TWFE":
-            if (
-                not spec.unit_fe
-                or spec.unit_fe not in cols
-            ):
-                errors.append(
-                    "TWFE için geçerli bir unit_fe kolonu gereklidir."
-                )
+            if not spec.unit_fe or spec.unit_fe not in cols:
+                errors.append("TWFE için geçerli bir unit_fe kolonu gereklidir.")
 
-            if (
-                not spec.time_fe
-                or spec.time_fe not in cols
-            ):
-                errors.append(
-                    "TWFE için geçerli bir time_fe kolonu gereklidir."
-                )
+            if not spec.time_fe or spec.time_fe not in cols:
+                errors.append("TWFE için geçerli bir time_fe kolonu gereklidir.")
 
     if errors:
-        raise ValueError(
-            "Estimand → Specification doğrulaması başarısız: "
-            + "; ".join(errors)
-        )
+        raise ValueError("Estimand → Specification doğrulaması başarısız: " + "; ".join(errors))
 
-    if (
-        estimand.identification_assumption == "parallel_trends"
-        and spec.estimator == "OLS"
-    ):
+    if estimand.identification_assumption == "parallel_trends" and spec.estimator == "OLS":
         warning = (
             f"Hash {frozen.freeze_hash}: "
             "parallel_trends varsayımı OLS ile eşleştirildi. "

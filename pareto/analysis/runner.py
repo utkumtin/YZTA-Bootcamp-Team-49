@@ -23,7 +23,8 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from shutil import copy2
+from shutil import copy2, rmtree
+from tempfile import mkdtemp
 
 import pandas as pd
 
@@ -80,41 +81,71 @@ class RunHandle:
         return [EstimationResult(**r) for r in raw]
 
     def read_stderr(self) -> str:
-        if self.process.stderr is None:
-            return ""
-        return self.process.stderr.read() or ""
+        stderr_path = self.run_dir / "stderr.log"
+        return stderr_path.read_text(encoding="utf-8") if stderr_path.exists() else ""
 
     def is_done(self) -> bool:
         return self.process.poll() is not None
 
 
-def _mirror_latest_run(run_dir: Path) -> None:
-    """`runs/latest`i koşunun o anki hâlinin TAM aynası yapar.
+def _mirror_latest_run(run_dir: Path, *, include_panel: bool = True) -> None:
+    """Publish a complete run snapshot without mixing files from separate runs.
 
-    `run_id.txt` aynaya da kopyalanır: `runs/latest` dizin adında run_id taşımaz,
-    onu okuyan katman (varyans paneli) koşuyu aksi hâlde "latest" sanır ve
-    run_id'ye bağlı artefaktları (donmuş menü) bulamaz.
+    Bu fonksiyon atomik bir dizin takası (temp_dir -> latest) yapar.
+    Bu sayede eski ve yeni koşu dosyaları asla birbirine karışmaz ve
+    kopyalama sırası (örneğin kimlik damgasının sona bırakılması) önemsizleşir.
 
-    Kaynakta olmayan dosya aynadan SİLİNİR. Yalnız kopyalasaydık ayna iki koşuyu
-    birden taşırdı: `results.json` koşunun en sonunda yazılır, dolayısıyla B
-    başlarken aynada hâlâ A'nın sonuçları durur ve B'nin kimlik damgasıyla
-    eşleşirdi. O pencerede kurulan reprodüksiyon paketi A'nın sonuçlarını B'nin
-    donmuş menüsüyle çiftler; hiçbir artefakt eksik görünmediği için de paket
-    "eksiksiz" damgası yer.
-
-    Kimlik damgası EN SONA kopyalanır. Kopyalama atomik değildir; ortada kesilen
-    bir aynalama, damga başta olsaydı yeni koşunun kimliğini eski koşunun
-    sonuçlarının yanına bırakırdı. Sona alındığında yarım ayna eski kimliği ve
-    silinmiş sonuçları taşır: eksik, ama kendi içinde tutarlı.
+    NEDEN except-tipine göre dallanmıyoruz: os.replace() bir dizinin üzerine
+    boş-olmayan bir hedef dizin varken yazamaz... (POSIX ENOTEMPTY detayı).
+    Bunun yerine eskisini kenara alıp yenisini takas ediyor, sonra eskisini siliyoruz.
     """
     latest_dir = Path(SETTINGS.runs_dir) / "latest"
-    latest_dir.mkdir(parents=True, exist_ok=True)
-    for name in ("panel.pkl", "specs.json", "progress.json", "results.json", "run_id.txt"):
-        source = run_dir / name
-        if source.exists():
-            copy2(source, latest_dir / name)
-        else:
-            (latest_dir / name).unlink(missing_ok=True)
+    latest_dir.parent.mkdir(parents=True, exist_ok=True)
+    temp_dir = Path(mkdtemp(prefix=".latest-", dir=latest_dir.parent))
+
+    # Z8: "latest/progress.json"ı hiç kimse okumuyor; kopyalamaya dahil edilmedi.
+    # Ancak run_id.txt okuyan katman (varyans paneli) için kritik, aksi halde
+    # koşu "latest" sanılır ve run_id'ye bağlı artefaktlar bulunamaz.
+    names = ["specs.json", "results.json", "run_id.txt"]
+    if include_panel:
+        names.insert(0, "panel.pkl")
+
+    # Z6: copy2 sırasında bir hata olursa temp_dir sızıntısını önle.
+    try:
+        for name in names:
+            source = run_dir / name
+            if source.exists():
+                copy2(source, temp_dir / name)
+
+        if not latest_dir.exists():
+            # İlk run: hedef yok, doğrudan atomik takas yeterli.
+            os.replace(temp_dir, latest_dir)
+            return
+    except Exception:
+        if temp_dir.exists():
+            rmtree(temp_dir, ignore_errors=True)
+        raise
+
+    # latest_dir zaten var. Eskisini kenara taşı, yenisini yerine koy, eskisini sil.
+    backup_dir = Path(mkdtemp(prefix=".latest-old-", dir=latest_dir.parent))
+    backup_dir.rmdir()
+    os.replace(latest_dir, backup_dir)
+    try:
+        os.replace(temp_dir, latest_dir)
+    except OSError:
+        # Takas başarısız oldu: latest_dir'i asla kayıp bırakma, eskisini geri koy.
+        os.replace(backup_dir, latest_dir)
+        raise
+    else:
+        rmtree(backup_dir, ignore_errors=True)
+    finally:
+        if temp_dir.exists():
+            rmtree(temp_dir, ignore_errors=True)
+
+
+def _cleanup_panel_pickle(run_dir: Path) -> None:
+    """Drop the raw panel once the run directory no longer needs it."""
+    (run_dir / "panel.pkl").unlink(missing_ok=True)
 
 
 def launch_multiverse(df: pd.DataFrame, specs: list[Specification], run_id: str) -> RunHandle:
@@ -130,13 +161,13 @@ def launch_multiverse(df: pd.DataFrame, specs: list[Specification], run_id: str)
     _mirror_latest_run(run_dir)
 
     env = {**os.environ, **SETTINGS.deterministic_env}
-    proc = subprocess.Popen(  # noqa: S603  # sabit argüman listesi, shell yok; girdi kullanıcıdan gelmez
-        [sys.executable, "-m", "pareto.analysis.runner", "--job", str(run_dir)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=env,
-    )
+    with (run_dir / "stderr.log").open("w", encoding="utf-8") as stderr_log:
+        proc = subprocess.Popen(  # noqa: S603  # sabit argüman listesi, shell yok; girdi kullanıcıdan gelmez
+            [sys.executable, "-m", "pareto.analysis.runner", "--job", str(run_dir)],
+            stdout=subprocess.DEVNULL,
+            stderr=stderr_log,
+            env=env,
+        )
     return RunHandle(run_dir=run_dir, process=proc)
 
 
@@ -151,14 +182,21 @@ def _run_job(run_dir: Path) -> None:
 
     def _write_progress(done: int, total: int, _res: EstimationResult) -> None:
         progress_path.write_text(json.dumps({"done": done, "total": total}), encoding="utf-8")
-        _mirror_latest_run(run_dir)
 
-    results = run_specs(df, specs, on_progress=_write_progress)
-    (run_dir / "results.json").write_text(
-        json.dumps([r.model_dump() for r in results], ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    _mirror_latest_run(run_dir)
+    # Z4: eskiden temizlik yalnızca mutlu yolun sonundaydı — run_specs (veya
+    # results.json yazımı) patlarsa hem run_dir/panel.pkl hem de launch'ta
+    # kopyalanan runs/latest/panel.pkl diskte kalıyordu. Artık finally'de,
+    # başarı/başarısızlık fark etmeksizin, her iki konum da temizleniyor.
+    try:
+        results = run_specs(df, specs, on_progress=_write_progress)
+        (run_dir / "results.json").write_text(
+            json.dumps([r.model_dump() for r in results], ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        _mirror_latest_run(run_dir, include_panel=False)
+    finally:
+        _cleanup_panel_pickle(run_dir)
+        _cleanup_panel_pickle(Path(SETTINGS.runs_dir) / "latest")
 
 
 def _cli() -> None:

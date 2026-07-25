@@ -36,8 +36,7 @@ from pareto.spec import SUPPORTED_ESTIMATORS, Specification  # noqa: E402
 DATASETS = ("divorce", "castle")
 TREATMENT_DUMMY_LOGICAL_NAMES = ("post", "treated")
 GENERATION_COMMAND = (
-    ".venv/bin/python scripts/run_flip_spike.py --dataset all "
-    "--out docs/spikes/s2-15-flip-spike.md"
+    ".venv/bin/python scripts/run_flip_spike.py --dataset all --out docs/spikes/s2-15-flip-spike.md"
 )
 ESTIMATOR_FE_AXIS_NOTE = (
     "estimator axis here compares pooled OLS (no fixed effects) with TWFE "
@@ -244,9 +243,7 @@ def _descriptive_dominant_sign_axis(
     dominance test. Matched-pair counts and rates still come from diagnose_axes.
     """
     candidates = [
-        (axis, metrics)
-        for axis, metrics in matched_pairs.items()
-        if metrics["sign_flip_count"] > 0
+        (axis, metrics) for axis, metrics in matched_pairs.items() if metrics["sign_flip_count"] > 0
     ]
     if not candidates:
         return None
@@ -277,9 +274,7 @@ def _dataset_decision(
 ) -> dict[str, Any]:
     ok = [result for result in results if result.status == "ok" and result.coefficient is not None]
     matched_pairs = diagnosis["matched_pairs"]
-    comparable_pairs = sum(
-        metrics["sign_comparable_pairs"] for metrics in matched_pairs.values()
-    )
+    comparable_pairs = sum(metrics["sign_comparable_pairs"] for metrics in matched_pairs.values())
     sign_flips = sum(metrics["sign_flip_count"] for metrics in matched_pairs.values())
     dominant_sign_axis = _descriptive_dominant_sign_axis(matched_pairs)
     dominant_partial_r2_axis = _dominant_partial_r2_axis(diagnosis["anova_partial_r2"])
@@ -438,9 +433,7 @@ def _format_dataset_names(dataset_names: Iterable[Any]) -> str:
 
 
 def _spec_count_summary(dataset_reports: Sequence[dict[str, Any]]) -> dict[str, Any]:
-    by_dataset = {
-        str(report["dataset"]): int(report["spec_count"]) for report in dataset_reports
-    }
+    by_dataset = {str(report["dataset"]): int(report["spec_count"]) for report in dataset_reports}
     unique_counts = set(by_dataset.values())
     return {
         "specs_per_dataset": unique_counts.pop() if len(unique_counts) == 1 else None,
@@ -477,8 +470,7 @@ def _report_provenance(repo_root: Path = REPO_ROOT) -> dict[str, str]:
         "python": platform.python_version(),
         "platform": _platform_name(),
         "analysis_core": (
-            "pareto.analysis.variance.summarize and diagnose_axes at source commit "
-            f"{source_commit}"
+            f"pareto.analysis.variance.summarize and diagnose_axes at source commit {source_commit}"
         ),
     }
 
@@ -648,9 +640,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         if dataset["failed_specs"]:
             lines.extend(["", "### Failed Specs", ""])
             for failure in dataset["failed_specs"]:
-                lines.append(
-                    f"- {failure['spec_id']} ({failure['estimator']}): {failure['error']}"
-                )
+                lines.append(f"- {failure['spec_id']} ({failure['estimator']}): {failure['error']}")
         else:
             lines.extend(["", "### Failed Specs", "", "- No failed specs."])
 
