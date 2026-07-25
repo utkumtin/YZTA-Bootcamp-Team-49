@@ -21,6 +21,7 @@ from pareto.cleaning.codegen import (
     verify_reproduction,
 )
 from pareto.cleaning.ledger import persist_ledger
+from pareto.cleaning.uploads import uploaded_file_identity
 from pareto.profiling import load_raw_file, profile_dataframe
 from pareto.streamlit_ui import render_clean_panel, render_compact_sidebar
 
@@ -48,6 +49,11 @@ if st.session_state.get("clean_df") is not None:
             "resolutions",
             "run_id",
             "last_script",
+            "last_repro_dir",
+            "last_audit_path",
+            "last_ledger_path",
+            "cleaning_uploaded_file_id",
+            "cleaning_file_uploader",
         ):
             st.session_state.pop(key, None)
         st.rerun()
@@ -58,19 +64,41 @@ uploaded = st.file_uploader(
     key="cleaning_file_uploader",
 )
 if uploaded is not None:
-    try:
-        df = load_raw_file(uploaded)
-    except ValueError as exc:
-        st.error(str(exc))
-    else:
-        st.session_state["clean_df"] = df
-        st.session_state["clean_profile"] = profile_dataframe(df)
-        # Yeni dosya yüklendiyse önceki ledger/karar geçmişi geçersiz.
-        for key in ("clean_df_raw", "ledger", "resolutions", "run_id", "last_script"):
-            st.session_state.pop(key, None)
-        st.success(f"Yüklendi: {len(df)} satır × {df.shape[1]} kolon")
-        st.subheader("Deterministik profil")
-        st.json(st.session_state["clean_profile"])
+    # Streamlit her widget etkileşiminde script'i yeniden çalıştırır. Aynı
+    # UploadedFile için ledger'ı sıfırlamak yerine, sadece gerçekten yeni bir
+    # dosya geldiğinde oturumdaki karar akışını baştan başlat.
+    # Streamlit 1.32+'da file_id sağlanır. Geriye uyumluluk için fallback,
+    # aynı ad ve boyuttaki farklı dosyaları da ayırt eden içerik özeti içerir.
+    uploaded_file_id = uploaded_file_identity(uploaded)
+    is_new_file = st.session_state.get("cleaning_uploaded_file_id") != uploaded_file_id
+
+    if is_new_file:
+        try:
+            df = load_raw_file(uploaded)
+        except ValueError as exc:
+            st.error(str(exc))
+        else:
+            st.session_state["clean_df"] = df
+            st.session_state["clean_profile"] = profile_dataframe(df)
+            st.session_state["cleaning_uploaded_file_id"] = uploaded_file_id
+            # Sadece yeni dosya yüklendiyse önceki ledger/karar geçmişi geçersiz.
+            for key in (
+                "clean_df_raw",
+                "ledger",
+                "resolutions",
+                "run_id",
+                "last_script",
+                "last_repro_dir",
+                "last_audit_path",
+                "last_ledger_path",
+            ):
+                st.session_state.pop(key, None)
+            st.success(f"Yüklendi: {len(df)} satır × {df.shape[1]} kolon")
+            st.subheader("Deterministik profil")
+            st.json(st.session_state["clean_profile"])
+
+# Uploader'dan dosyayı kaldırmak mevcut temizleme oturumunu korur; kullanıcı
+# bunun yerine "Veriyi oturumdan sil" eylemini kullanarak açıkça sıfırlayabilir.
 
 # --------------------------------------------------------------------------- #
 # Decision ledger + gatekeeper (Sprint-2)
@@ -93,6 +121,11 @@ if st.session_state.get("clean_df") is not None:
             )
         else:
             st.session_state["clean_profile"] = raw_profile
+            # Önceki JUDGE turunun dinamik widget değerleri artık erişilemez.
+            # Uzun oturumlarda bu anahtarların session_state'te birikmesini önle.
+            for key in list(st.session_state):
+                if key.startswith(("resolution_choice_", "params_edit_")):
+                    st.session_state.pop(key)
             st.session_state["ledger"] = entries
             st.session_state["resolutions"] = {}
             st.session_state["run_id"] = uuid.uuid4().hex
