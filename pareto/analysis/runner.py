@@ -91,28 +91,26 @@ class RunHandle:
 def _mirror_latest_run(run_dir: Path, *, include_panel: bool = True) -> None:
     """Publish a complete run snapshot without mixing files from separate runs.
 
+    Bu fonksiyon atomik bir dizin takası (temp_dir -> latest) yapar.
+    Bu sayede eski ve yeni koşu dosyaları asla birbirine karışmaz ve
+    kopyalama sırası (örneğin kimlik damgasının sona bırakılması) önemsizleşir.
+
     NEDEN except-tipine göre dallanmıyoruz: os.replace() bir dizinin üzerine
-    boş-olmayan bir hedef dizin varken yazamaz — ama bu kısıtlama yalnızca
-    Windows'a özgü değil. POSIX'te de rename(2) ENOTEMPTY ile düz bir OSError
-    fırlatır (FileExistsError/PermissionError DEĞİL), bu yüzden istisna tipine
-    dayanan bir ayrım her platformda güvenilir değildir. Bunun yerine
-    latest_dir'in var olup olmadığına bakıyoruz: varsa, eskisini kenara alıp
-    yenisini takas ediyor, sonra eskisini siliyoruz. Her adımda latest_dir ya
-    eski tam snapshot'ı ya da yeni tam snapshot'ı gösterir — asla karışık
-    dosya seti veya "kayıp" dizin göstermez.
+    boş-olmayan bir hedef dizin varken yazamaz... (POSIX ENOTEMPTY detayı).
+    Bunun yerine eskisini kenara alıp yenisini takas ediyor, sonra eskisini siliyoruz.
     """
     latest_dir = Path(SETTINGS.runs_dir) / "latest"
     latest_dir.parent.mkdir(parents=True, exist_ok=True)
     temp_dir = Path(mkdtemp(prefix=".latest-", dir=latest_dir.parent))
-    # Z8: "latest/progress.json"ı hiç kimse okumuyor (yalnız RunHandle.progress_path,
-    # yani run_dir'in kendisi okunuyor); mirror'a dahil etmenin bir faydası yok.
-    names = ["specs.json", "results.json"]
+    
+    # Z8: "latest/progress.json"ı hiç kimse okumuyor; kopyalamaya dahil edilmedi.
+    # Ancak run_id.txt okuyan katman (varyans paneli) için kritik, aksi halde
+    # koşu "latest" sanılır ve run_id'ye bağlı artefaktlar bulunamaz.
+    names = ["specs.json", "results.json", "run_id.txt"]
     if include_panel:
         names.insert(0, "panel.pkl")
 
-    # Z6: copy2 sırasında bir hata (örn. disk dolması) temp_dir'i try/finally
-    # dışında bırakıyordu → "runs/.latest-xxxx" kalıcı sızıntı. Artık kopyalama
-    # başarısız olursa temp_dir hemen temizlenip istisna yeniden fırlatılıyor.
+    # Z6: copy2 sırasında bir hata olursa temp_dir sızıntısını önle.
     try:
         for name in names:
             source = run_dir / name
@@ -128,14 +126,7 @@ def _mirror_latest_run(run_dir: Path, *, include_panel: bool = True) -> None:
             rmtree(temp_dir, ignore_errors=True)
         raise
 
-    # latest_dir zaten var (ilk run'dan sonra her zaman non-empty). Eskisini
-    # kenara taşı, yenisini yerine koy, sonra eskisini sil. Ara adımlarda bile
-    # latest_dir ya eski ya da yeni tam snapshot'ı gösterir.
-    #
-    # NOT (Z6, kalan risk): iki run'ın mirror'ı eşzamanlı koşarsa dar bir
-    # pencerede biri latest_dir'i bulamayıp OSError alabilir. Bu düzeltme
-    # yalnızca temp_dir sızıntısını kapatıyor; eşzamanlılık için kilit dosyası
-    # ya da "latest.json" işaretçisi ayrı bir karar gerektiriyor (kapsam dışı).
+    # latest_dir zaten var. Eskisini kenara taşı, yenisini yerine koy, eskisini sil.
     backup_dir = Path(mkdtemp(prefix=".latest-old-", dir=latest_dir.parent))
     backup_dir.rmdir()
     os.replace(latest_dir, backup_dir)
@@ -156,12 +147,12 @@ def _cleanup_panel_pickle(run_dir: Path) -> None:
     """Drop the raw panel once the run directory no longer needs it."""
     (run_dir / "panel.pkl").unlink(missing_ok=True)
 
-
 def launch_multiverse(df: pd.DataFrame, specs: list[Specification], run_id: str) -> RunHandle:
     """Worker'ı ayrı süreçte başlatır. Determinizm env pinlenir."""
     run_dir = Path(SETTINGS.runs_dir) / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    (run_dir / "run_id.txt").write_text(run_id, encoding="utf-8")
     (run_dir / "panel.pkl").write_bytes(pickle.dumps(df))
     (run_dir / "specs.json").write_text(
         json.dumps([s.model_dump() for s in specs], ensure_ascii=False), encoding="utf-8"
