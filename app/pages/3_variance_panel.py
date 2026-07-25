@@ -37,6 +37,7 @@ from pareto.repro import (
     build_reproduction_package,
     figure_html,
     missing_artifacts,
+    package_key,
 )
 from pareto.spec import Specification
 from pareto.streamlit_ui import render_compact_sidebar
@@ -538,20 +539,20 @@ if repro_missing:
         + ". Eksikler paketin MANIFEST dosyasına da yazılır."
     )
 
-# Paket birkaç MB olabilir; her rerun'da yeniden kurulmasın diye anahtarla önbelleklenir.
-repro_key = json.dumps(
-    {
-        "run_id": repro_inputs.run_id,
-        "results": str(repro_inputs.results_path),
-        "missing": repro_missing,
-        "figures": sorted(package_figures),
-    },
-    sort_keys=True,
-)
+# Paket birkaç MB olabilir; her rerun'da yeniden kurulmasın diye anahtarla
+# önbelleklenir. Anahtar `pareto.repro`da hesaplanır: temizleme artefaktlarını
+# kapsamayan bir anahtar, provenans uyarısını tam da uyarının gerektiği senaryoda
+# (A'yı koşup paketleyip sonra B'yi temizlemek) önbellekte yutardı.
+repro_key = package_key(repro_inputs)
 
 
 def _forget_package() -> None:
-    for key in ("_repro_package", "_repro_package_key", "_repro_package_provenance"):
+    for key in (
+        "_repro_package",
+        "_repro_package_key",
+        "_repro_package_provenance",
+        "_repro_package_stale",
+    ):
         st.session_state.pop(key, None)
 
 

@@ -40,9 +40,22 @@ from ..contracts import EstimationResult
 from ..spec import Specification
 from .methods import render_methods_section
 
-# /2: manifest `provenance` kaydını taşır ve doğrulama script'i `spec_hashes`
-# olmadan koşmaz. /1 paketleri bu script'le doğrulanamaz, format alanı bunun için var.
-PACKAGE_FORMAT = "pareto-reproduction/2"
+# /3: manifest `tolerances` kaydını taşır (doğrulama script'i eşikleri oradan okur)
+# ve `frozen_menu.json` pakete girer. /2 manifest `provenance` kaydını getirmişti.
+# Eski paketler bu script'le doğrulanamaz, format alanı bunun için var.
+PACKAGE_FORMAT = "pareto-reproduction/3"
+
+# Tahmin karşılaştırmasının eşiği. Temizleme eşiğinden (REPRO_RTOL/ATOL) ayrıdır ve
+# daha gevşektir: temizleme eşiği L4 kapısının pandas transformlarını ölçer, bu eşik
+# ise BLAS/estimator gürültüsünü. İkisi de manifest'e yazılır, run script oradan okur;
+# script'te ikinci bir kopya olsaydı paket kendi içinde çelişen iki karar verebilirdi.
+ESTIMATE_RTOL = 1e-4
+ESTIMATE_ATOL = 1e-6
+
+# Manifest'in kendisi ve ondan türeyen dosyalar `contents` hesaplandıktan SONRA
+# eklenir (METHODS ve README manifest'ten render edilir). Envanterin eksik kalmaması
+# için adları burada sabit: "contents" paketin tam listesi olmalı.
+_GENERATED_FILES = ("MANIFEST.json", "METHODS.md", "README.md", "run_reproduction.py")
 
 # Zip girdilerinin zaman damgası sabitlenir: aynı koşudan iki kez üretilen paket
 # byte düzeyinde aynı olsun (paketin kendisi de reprodüklenebilir olmalı).
@@ -145,6 +158,44 @@ def missing_artifacts(inputs: ReproInputs) -> list[str]:
     if not inputs.figures:
         missing.append("figures")
     return missing
+
+
+def package_key(inputs: ReproInputs) -> str:
+    """Hazırlanmış paketin önbellek anahtarı: girdilerin TAMAMINI kapsar.
+
+    Arayüz paketi oturumda önbelleğe alır. Anahtar yalnız sonuç yolunu ve eksik
+    listesini kapsasaydı `_provenance()`in yakalamak için var olduğu senaryo tam da
+    önbellekte kaybolurdu: A'yı temizleyip koşan ve paketi hazırlayan kullanıcı,
+    sonra B'yi temizlediğinde sonuç yolu, run_id ve eksik listesi aynı kalır —
+    anahtar değişmez, A'nın paketi servis edilir ve "EŞLEŞMİYOR" uyarısı hiç çıkmaz.
+    Bu yüzden anahtar temizleme artefaktlarının yollarını da taşır.
+
+    Sayfa import edilemediği için (Streamlit script'i, modül değil) anahtar burada
+    durur: test edilebilen tek yer burası.
+    """
+    return json.dumps(
+        {
+            "run_id": inputs.run_id,
+            "results": str(inputs.results_path),
+            "specs": str(inputs.specs_path),
+            "panel": str(inputs.panel_path),
+            "frozen_menu": str(inputs.frozen_menu_path),
+            "ledger": str(inputs.ledger_path),
+            "cleaning_script": str(inputs.cleaning_script_path),
+            "raw_panel": str(inputs.raw_panel_path),
+            "cleaned_panel": str(inputs.cleaned_panel_path),
+            "cleaning_run_id": inputs.cleaning_run_id,
+            "missing": missing_artifacts(inputs),
+            # Figürler adla değil İÇERİKLE anahtarlanır: panel yeniden çizildiğinde
+            # (ör. eksen seçimi değişti) dosya adı aynı kalır ama gövde değişir.
+            "figures": {
+                name: hashlib.sha256(html.encode("utf-8")).hexdigest()[:16]
+                for name, html in sorted(inputs.figures.items())
+            },
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+    )
 
 
 def _requirements_path() -> Path:
@@ -323,6 +374,13 @@ def _build_manifest(
         "estimand": (frozen or {}).get("estimand"),
         "spec_count": len(specs),
         "spec_hashes": {spec.spec_id: spec.content_hash() for spec in specs},
+        # Doğrulama script'i eşikleri BURADAN okur. Script'te ikinci bir kopya
+        # tutulsaydı paket kendi içinde çelişebilirdi: manifest "eşleşmiyor" derken
+        # script aynı farkı yutup "doğrulandı" basardı.
+        "tolerances": {
+            "cleaning": {"rtol": REPRO_RTOL, "atol": REPRO_ATOL},
+            "estimates": {"rtol": ESTIMATE_RTOL, "atol": ESTIMATE_ATOL},
+        },
         "determinism": {
             "seed": SETTINGS.seed,
             "env": dict(SETTINGS.deterministic_env),
@@ -357,6 +415,7 @@ def build_reproduction_package(inputs: ReproInputs) -> bytes:
 
     frozen_path = _present(inputs.frozen_menu_path)
     frozen = _read_json(frozen_path) if frozen_path is not None else None
+    frozen_text = _read_text(frozen_path) if frozen_path is not None else None
 
     ledger_path = _present(inputs.ledger_path)
     decisions = _cleaning_decisions(ledger_path)
@@ -370,6 +429,14 @@ def build_reproduction_package(inputs: ReproInputs) -> bytes:
         files["specs.json"] = json.dumps(
             [s.model_dump() for s in specs], ensure_ascii=False, indent=2
         )
+
+    if frozen_text is not None:
+        # Dosya diskteki hâliyle kopyalanır, manifest'ten yeniden serileştirilmez:
+        # `estimand_hash` ve `menu_hash` bu dosyanın içeriği üzerinden hesaplanır,
+        # dolayısıyla okuyucunun hash'leri yeniden hesaplayabilmesi için pakete
+        # BYTE olarak girmesi gerekir. Yalnız manifest'e kopyalansaydı iki hash
+        # doğrulanamayan birer iddia olurdu.
+        files["frozen_menu.json"] = frozen_text
 
     dtypes: dict[str, dict[str, str]] = {}
     panel: pd.DataFrame | None = None
@@ -419,7 +486,7 @@ def build_reproduction_package(inputs: ReproInputs) -> bytes:
         frozen=frozen,
         decisions=decisions,
         provenance=_provenance(inputs, panel),
-        contents=list(files),
+        contents=[*files, *_GENERATED_FILES],
     )
     files["MANIFEST.json"] = json.dumps(manifest, ensure_ascii=False, indent=2)
     files["METHODS.md"] = render_methods_section(manifest)
@@ -490,8 +557,9 @@ python run_reproduction.py
 
 Script önce paketlenmiş spesifikasyon kümesini MANIFEST'teki içerik hash'leriyle
 karşılaştırır (küme sonradan kırpılamaz), sonra paneli ve spesifikasyonları yeniden
-koşar; ürettiği katsayı, standart hata ve gözlem sayılarını `results.json` ile
-tolerans içinde karşılaştırır. Ham veri ve temizleme script'i pakete girmişse önce
+koşar; ürettiği katsayı ve standart hataları `results.json` ile MANIFEST'te
+bildirilen tolerans içinde, gözlem sayılarını ise TAM eşitlikle karşılaştırır
+(n_obs bir ölçüm değil sayımdır). Ham veri ve temizleme script'i pakete girmişse önce
 temizleme adımını da tekrarlar. Uyuşmazlıkta script sıfırdan farklı bir çıkış
 koduyla biter.
 
@@ -510,6 +578,7 @@ koduyla biter.
 | `MANIFEST.json` | Makine-okunur tek kayıt: hash'ler, determinizm pinleri, özet |
 | `METHODS.md` | Manifest'in metot bölümü taslağı olarak render'ı (LLM kullanılmaz) |
 | `run_reproduction.py` | Tek komutluk doğrulama script'i |
+| `frozen_menu.json` | Dondurulmuş estimand ve menü (manifest'teki hash'lerin kaynağı) |
 | `specs.json` | Çalıştırılan spesifikasyonlar |
 | `results.json` | Referans sonuçlar |
 | `data/panel.csv` | Analize giren panel |
@@ -553,17 +622,36 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 import pandas as pd
 
 HERE = Path(__file__).resolve().parent
-RTOL = 1e-4
-ATOL = 1e-6
 
 
-def _fail(message: str) -> None:
+def _fail(message: str) -> NoReturn:
     print(f"BAŞARISIZ: {message}")
     raise SystemExit(1)
+
+
+def _tolerance(manifest: dict, section: str) -> tuple[float, float]:
+    """Karşılaştırma eşiğini MANIFEST'ten okur.
+
+    Eşikler script'e GÖMÜLMEZ: paketi kuran katman temizleme çıktısını kendi
+    eşiğiyle denetleyip sonucu manifest'e yazıyor. Script ikinci bir kopya
+    taşısaydı aradaki farka düşen bir koşuda paket kendi içinde çelişirdi:
+    manifest "EŞLEŞMİYOR" derken script aynı farkı yutup "doğrulandı" basardı.
+    """
+    declared = (manifest.get("tolerances") or {}).get(section)
+    if not isinstance(declared, dict):
+        _fail(
+            f"MANIFEST.json `{section}` karşılaştırma eşiğini taşımıyor; "
+            "doğrulama eşiksiz koşulamaz."
+        )
+    try:
+        return float(declared["rtol"]), float(declared["atol"])
+    except (KeyError, TypeError, ValueError) as exc:
+        _fail(f"MANIFEST.json `{section}` eşiği okunamadı ({exc}).")
 
 
 def _import_pareto():
@@ -595,7 +683,7 @@ def _read_table(name: str) -> pd.DataFrame:
     return pd.read_csv(path, dtype=plain, parse_dates=date_cols or None)
 
 
-def _verify_cleaning(panel: pd.DataFrame) -> None:
+def _verify_cleaning(panel: pd.DataFrame, manifest: dict) -> None:
     script_path = HERE / "cleaning" / "cleaning_steps.py"
     raw_path = HERE / "data" / "raw.csv"
     if not script_path.exists() or not raw_path.exists():
@@ -608,10 +696,11 @@ def _verify_cleaning(panel: pd.DataFrame) -> None:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 
+    rtol, atol = _tolerance(manifest, "cleaning")
     reproduced = module.clean(_read_table("raw")).reset_index(drop=True)
     try:
         pd.testing.assert_frame_equal(
-            reproduced, panel, check_dtype=False, rtol=RTOL, atol=ATOL
+            reproduced, panel, check_dtype=False, rtol=rtol, atol=atol
         )
     except AssertionError as exc:
         _fail(f"temizleme çıktısı paketlenmiş panel ile eşleşmiyor.\\n{exc}")
@@ -670,8 +759,9 @@ def _verify_estimates(manifest: dict) -> None:
     }
 
     _verify_spec_set(specs, set(expected), manifest)
-    _verify_cleaning(panel)
+    _verify_cleaning(panel, manifest)
 
+    rtol, atol = _tolerance(manifest, "estimates")
     mismatches: list[str] = []
     reproduced_ids: set = set()
     for result in run_specs(panel, specs):
@@ -685,14 +775,21 @@ def _verify_estimates(manifest: dict) -> None:
                 f"{result.spec_id}: status {result.status} != {reference.get('status')}"
             )
             continue
-        for field_name in ("coefficient", "std_error", "n_obs"):
+        # Gözlem sayısı TAM eşitlikle karşılaştırılır, toleransla değil: n_obs bir
+        # ölçüm değil, sayımdır. Göreli eşikle karşılaştırılsaydı n=10.000'de bir
+        # satırlık fark (tolerans tam 1.0) sessizce geçerdi — örneklemi değişmiş bir
+        # koşuya "yeniden üretildi" demek, doğrulamanın kendisini boşa çıkarır.
+        if result.n_obs != reference.get("n_obs"):
+            mismatches.append(f"{result.spec_id}.n_obs: {result.n_obs} != {reference.get('n_obs')}")
+
+        for field_name in ("coefficient", "std_error"):
             got = getattr(result, field_name)
             want = reference.get(field_name)
             if got is None or want is None:
                 if got is not want:
                     mismatches.append(f"{result.spec_id}.{field_name}: {got} != {want}")
                 continue
-            if abs(float(got) - float(want)) > ATOL + RTOL * abs(float(want)):
+            if abs(float(got) - float(want)) > atol + rtol * abs(float(want)):
                 mismatches.append(f"{result.spec_id}.{field_name}: {got} != {want}")
 
     for spec_id in sorted(set(expected) - reproduced_ids):

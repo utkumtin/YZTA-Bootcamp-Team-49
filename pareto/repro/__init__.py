@@ -8,6 +8,7 @@ from .package import (
     build_reproduction_package,
     figure_html,
     missing_artifacts,
+    package_key,
 )
 
 __all__ = [
@@ -17,5 +18,6 @@ __all__ = [
     "build_reproduction_package",
     "figure_html",
     "missing_artifacts",
+    "package_key",
     "render_methods_section",
 ]

@@ -28,6 +28,7 @@ from pareto.repro import (
     build_reproduction_package,
     figure_html,
     missing_artifacts,
+    package_key,
     render_methods_section,
 )
 from pareto.spec import Specification
@@ -41,10 +42,10 @@ from pareto.cleaning.ledger import LedgerEntry  # noqa: E402
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _panel(effect: float = 0.8, seed: int = 0) -> pd.DataFrame:
+def _panel(effect: float = 0.8, seed: int = 0, units: int = 40) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     rows = []
-    for unit in range(40):
+    for unit in range(units):
         treated = unit % 2
         u_fe = rng.normal()
         for year in range(6):
@@ -77,9 +78,16 @@ def _figure_html(name: str) -> str:
     return figure_html(name, go.Figure(data=[go.Scatter(x=[1, 2, 3], y=[1, 4, 9])]))
 
 
-def _make_run(tmp_path: Path, *, with_cleaning: bool = True) -> ReproInputs:
+def _other_figure():
+    """Aynı adla çizilmiş BAŞKA bir figür (panel yeniden çizdiğinde olan şey)."""
+    import plotly.graph_objects as go
+
+    return go.Figure(data=[go.Scatter(x=[1, 2, 3], y=[9, 4, 1])])
+
+
+def _make_run(tmp_path: Path, *, with_cleaning: bool = True, units: int = 40) -> ReproInputs:
     """Gerçek bir koşunun diskteki artefakt düzenini kurar."""
-    panel = _panel()
+    panel = _panel(units=units)
     specs = _specs()
     results = run_specs(panel, specs)
 
@@ -207,6 +215,7 @@ def test_package_carries_every_audit_trail_artifact(tmp_path):
         "requirements.txt",
         "run_reproduction.py",
         "specs.json",
+        "frozen_menu.json",
         "results.json",
         "data/panel.csv",
         "data/raw.csv",
@@ -224,6 +233,88 @@ def test_package_carries_every_audit_trail_artifact(tmp_path):
     # sonradan kırpılamaz.
     assert set(manifest["spec_hashes"]) == {"s1", "s2"}
     assert manifest["determinism"]["seed"] == 20260704
+
+
+@pytest.mark.parametrize("with_cleaning", [True, False])
+@pytest.mark.parametrize("empty_specs", [False, True])
+def test_manifest_contents_lists_every_packaged_file(tmp_path, with_cleaning, empty_specs):
+    # NEDEN: MANIFEST paketin "tek makine-okunur kaydı"dır. Envanteri kendini ve
+    # ondan türeyen dosyaları saymazsa, kaydı okuyup paketi denetleyen bir araç
+    # eksik bir listeyi tam sanır — eksikliği gizleyen bir kayıt, kayıt değildir.
+    #
+    # Eksik artefaktlı kurulumlarla birlikte koşulur: `specs.json`, `frozen_menu.json`
+    # ve temizleme dosyaları KOŞULLU eklenir, yani envanterin kırılgan olduğu yer
+    # eksiksiz paket değil, eksik pakettir.
+    inputs = _make_run(tmp_path, with_cleaning=with_cleaning)
+    if empty_specs:
+        assert inputs.specs_path is not None
+        inputs.specs_path.write_text("[]", encoding="utf-8")
+
+    payload = build_reproduction_package(inputs)
+    manifest = json.loads(_read(payload, "MANIFEST.json"))
+    assert manifest["contents"] == sorted(_names(payload))
+
+
+def test_frozen_menu_is_packaged_so_its_hashes_can_be_recomputed(tmp_path):
+    # NEDEN: manifest `estimand_hash` ve `menu_hash` BEYAN eder. Hash'lerin
+    # hesaplandığı dosya pakete girmezse okuyucu bu iki değeri hiçbir şeye karşı
+    # doğrulayamaz; "menü sonuçlar görülmeden donduruldu" iddiası denetlenemez
+    # bir cümleye düşer.
+    inputs = _make_run(tmp_path)
+    payload = build_reproduction_package(inputs)
+    assert inputs.frozen_menu_path is not None
+    assert _read(payload, "frozen_menu.json") == inputs.frozen_menu_path.read_text(encoding="utf-8")
+
+    packaged = json.loads(_read(payload, "frozen_menu.json"))
+    manifest = json.loads(_read(payload, "MANIFEST.json"))
+    assert packaged["estimand_hash"] == manifest["estimand_hash"]
+    assert packaged["menu_hash"] == manifest["menu_hash"]
+
+
+def test_package_key_changes_when_the_cleaning_run_changes(tmp_path):
+    # NEDEN: arayüz paketi bu anahtarla önbelleğe alır. Anahtar temizleme
+    # artefaktlarını kapsamazsa provenans uyarısı TAM DA gerektiği senaryoda
+    # yutulur: A'yı temizleyip koşan ve paketi hazırlayan kullanıcı sonra B'yi
+    # temizlediğinde sonuç yolu, run_id ve eksik listesi aynı kalır — anahtar
+    # değişmezse A'nın paketi servis edilir ve "EŞLEŞMİYOR" hiç görünmez.
+    first = _make_run(tmp_path)
+
+    assert first.raw_panel_path is not None
+    second_dir = tmp_path / "audit_trail_b" / "temiz-b_repro"
+    second_dir.mkdir(parents=True)
+    (second_dir / "raw.pkl").write_bytes(first.raw_panel_path.read_bytes())
+    (second_dir / "reproduced.pkl").write_bytes(pickle.dumps(_panel(effect=0.2, seed=7)))
+    second = replace(
+        first,
+        raw_panel_path=second_dir / "raw.pkl",
+        cleaned_panel_path=second_dir / "reproduced.pkl",
+        cleaning_run_id="temiz-b",
+    )
+
+    # Hiçbir artefakt EKSİK değil ve sonuç yolu aynı: anahtarı ayıran tek şey
+    # temizleme koşusunun kimliği ve yolları olmalı.
+    assert missing_artifacts(first) == missing_artifacts(second)
+    assert first.results_path == second.results_path
+    assert package_key(first) != package_key(second)
+
+
+def test_package_key_changes_when_a_figure_is_redrawn(tmp_path):
+    # NEDEN: figürler dosya ADIYLA anahtarlansaydı, aynı adla yeniden çizilen bir
+    # figür (eksen seçimi değişti) önbellekteki eski gövdeyle indirilirdi; paketteki
+    # figür raporlanan panelden başka bir şey gösterirdi.
+    inputs = _make_run(tmp_path)
+    name = next(iter(inputs.figures))
+    redrawn = replace(inputs, figures={name: figure_html(name, _other_figure())})
+
+    assert set(inputs.figures) == set(redrawn.figures)
+    assert package_key(inputs) != package_key(redrawn)
+
+
+def test_package_key_is_stable_for_unchanged_inputs(tmp_path):
+    # NEDEN: anahtar her rerun'da değişseydi önbellek hiç tutmaz ve paket her
+    # etkileşimde yeniden kurulurdu; uyarı da her seferinde sıfırlanırdı.
+    inputs = _make_run(tmp_path)
+    assert package_key(inputs) == package_key(replace(inputs))
 
 
 def test_cleaning_script_is_copied_not_rerendered(tmp_path):
@@ -497,3 +588,71 @@ def test_run_script_fails_when_packaged_results_are_tampered(tmp_path):
     proc = _run_package(extract_dir)
     assert proc.returncode != 0
     assert "BAŞARISIZ" in proc.stdout
+
+
+def test_run_script_fails_on_a_single_row_n_obs_difference(tmp_path):
+    # NEDEN: n_obs bir ölçüm değil, SAYIMDIR. Göreli toleransla karşılaştırılırsa
+    # eşik örneklemle birlikte büyür (n=10.000'de tolerans tam 1.0) ve bir satırlık
+    # fark sessizce geçer. Örneklemi değişmiş bir koşuya "yeniden üretildi" demek,
+    # doğrulamanın kendisini boşa çıkarır — bu yüzden tam eşitlik aranmalı.
+    #
+    # Panel BİLEREK büyük: 240 satırda göreli eşik zaten 0.024'tür ve bir satırlık
+    # farkı yakalar, yani küçük panelde bu test toleranslı kodda da geçerdi. Hata
+    # ancak eşik 1.0'ı aştığında (n_obs > 10.000) ortaya çıkar.
+    payload = build_reproduction_package(_make_run(tmp_path, units=1700))
+    extract_dir = tmp_path / "n_obs"
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        archive.extractall(extract_dir)
+
+    results_file = extract_dir / "results.json"
+    tampered = json.loads(results_file.read_text(encoding="utf-8"))
+    # Katsayı ve standart hataya DOKUNULMAZ: tek fark bir satırlık örneklem.
+    tampered[0]["n_obs"] = int(tampered[0]["n_obs"]) - 1
+    results_file.write_text(json.dumps(tampered, ensure_ascii=False), encoding="utf-8")
+
+    proc = _run_package(extract_dir)
+    assert proc.returncode != 0, f"stdout:\n{proc.stdout}"
+    assert "n_obs" in proc.stdout
+
+
+def test_run_script_reads_its_tolerances_from_the_manifest(tmp_path):
+    # NEDEN: eşik script'e gömülü olsaydı paket kendi içinde çelişebilirdi —
+    # manifest temizleme çıktısı için "EŞLEŞMİYOR" derken, daha gevşek bir eşik
+    # taşıyan script aynı farkı yutup "doğrulandı" basardı. Tek kaynak MANIFEST.
+    payload = build_reproduction_package(_make_run(tmp_path))
+    manifest = json.loads(_read(payload, "MANIFEST.json"))
+    assert manifest["tolerances"]["cleaning"] == {"rtol": REPRO_RTOL, "atol": REPRO_ATOL}
+
+    extract_dir = tmp_path / "no_tolerance"
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        archive.extractall(extract_dir)
+
+    manifest_file = extract_dir / "MANIFEST.json"
+    stripped = json.loads(manifest_file.read_text(encoding="utf-8"))
+    del stripped["tolerances"]
+    manifest_file.write_text(json.dumps(stripped, ensure_ascii=False), encoding="utf-8")
+
+    # Eşiksiz kalan script sessizce bir varsayılana düşmemeli.
+    proc = _run_package(extract_dir)
+    assert proc.returncode != 0, f"stdout:\n{proc.stdout}"
+    assert "eşi" in proc.stdout
+
+
+def test_run_script_fails_readably_on_a_malformed_tolerance(tmp_path):
+    # NEDEN: eksik eşiğin ikizi. Sayı olmayan bir eşik ham TypeError/ValueError
+    # traceback'i olarak sızarsa kullanıcı neyin bozuk olduğunu göremez; modülün
+    # her yerinde olduğu gibi burada da hata OKUNUR bir mesaja çevrilmeli.
+    payload = build_reproduction_package(_make_run(tmp_path))
+    extract_dir = tmp_path / "bad_tolerance"
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        archive.extractall(extract_dir)
+
+    manifest_file = extract_dir / "MANIFEST.json"
+    broken = json.loads(manifest_file.read_text(encoding="utf-8"))
+    broken["tolerances"]["cleaning"]["rtol"] = "bu sayı değil"
+    manifest_file.write_text(json.dumps(broken, ensure_ascii=False), encoding="utf-8")
+
+    proc = _run_package(extract_dir)
+    assert proc.returncode != 0, f"stdout:\n{proc.stdout}"
+    assert "BAŞARISIZ" in proc.stdout
+    assert "Traceback" not in proc.stderr

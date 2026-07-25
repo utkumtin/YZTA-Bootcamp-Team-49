@@ -94,7 +94,12 @@ def _mirror_latest_run(run_dir: Path) -> None:
     # `run_id.txt` aynaya da kopyalanır: `runs/latest` dizin adında run_id taşımaz,
     # onu okuyan katman (varyans paneli) koşuyu aksi hâlde "latest" sanır ve
     # run_id'ye bağlı artefaktları (donmuş menü) bulamaz.
-    for name in ("run_id.txt", "panel.pkl", "specs.json", "progress.json", "results.json"):
+    #
+    # Kimlik damgası EN SONA kopyalanır. Kopyalama atomik değildir; ortada kesilen
+    # bir aynalama, damga başta olsaydı yeni koşunun kimliğini eski koşunun
+    # sonuçlarının yanına bırakırdı ve paket yanlış donmuş menüyle kurulurdu.
+    # Sona alındığında yarım ayna eski kimliği taşır, yani kendi içinde tutarlıdır.
+    for name in ("panel.pkl", "specs.json", "progress.json", "results.json", "run_id.txt"):
         source = run_dir / name
         if source.exists():
             copy2(source, latest_dir / name)
