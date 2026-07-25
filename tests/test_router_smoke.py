@@ -453,8 +453,8 @@ def test_zincirde_hic_anahtar_yoksa_fail_loud(monkeypatch):
 # Canlı smoke — anahtar ortamda yoksa atlanır
 # ---------------------------------------------------------------------------
 
-_gemini_key_var = "GEMINI_API_KEY" in os.environ or "GOOGLE_API_KEY" in os.environ
-_groq_key_var = "GROQ_API_KEY" in os.environ
+_gemini_key_var = bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
+_groq_key_var = bool(os.environ.get("GROQ_API_KEY"))
 
 
 @pytest.mark.live

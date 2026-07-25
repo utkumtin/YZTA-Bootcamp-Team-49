@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pickle
 from dataclasses import replace
 from pathlib import Path
 
@@ -10,9 +11,12 @@ from pareto.analysis import runner
 
 def _write_run(run_dir: Path, label: str, *, with_results: bool) -> None:
     run_dir.mkdir()
-    (run_dir / "panel.pkl").write_bytes(f"panel-{label}".encode())
+    # DÜZELTME: panel.pkl için geçerli bir pickle nesnesi yazıyoruz
+    (run_dir / "panel.pkl").write_bytes(pickle.dumps(f"panel-{label}"))
     (run_dir / "specs.json").write_text(f"specs-{label}", encoding="utf-8")
     (run_dir / "progress.json").write_text(f"progress-{label}", encoding="utf-8")
+    # run_id.txt mirror senaryoları için eklendi
+    (run_dir / "run_id.txt").write_text(f"run-{label}", encoding="utf-8")
     if with_results:
         (run_dir / "results.json").write_text(f"results-{label}", encoding="utf-8")
 
@@ -29,8 +33,11 @@ def test_mirror_latest_run_replaces_the_entire_snapshot(tmp_path: Path, monkeypa
     runner._mirror_latest_run(run_b)
 
     latest = tmp_path / "runs" / "latest"
-    assert (latest / "panel.pkl").read_bytes() == b"panel-b"
+    # DÜZELTME: Pickle ile yazıldığı için kıyaslama güncellendi
+    assert (latest / "panel.pkl").read_bytes() == pickle.dumps("panel-b")
     assert (latest / "specs.json").read_text(encoding="utf-8") == "specs-b"
+    assert (latest / "run_id.txt").read_text(encoding="utf-8") == "run-b"
+    
     # Z8: kimse "latest/progress.json"ı okumuyordu (RunHandle yalnız kendi
     # run_dir'inin progress.json'ını okur), bu yüzden mirror'lanan dosya
     # listesinden çıkarıldı. Artık latest snapshot'ında bu dosya hiç yok.
@@ -54,6 +61,7 @@ def test_mirror_latest_run_with_include_panel_false_skips_panel(
     assert not (latest / "panel.pkl").exists()
     assert (latest / "specs.json").read_text(encoding="utf-8") == "specs-a"
     assert (latest / "results.json").read_text(encoding="utf-8") == "results-a"
+    assert (latest / "run_id.txt").read_text(encoding="utf-8") == "run-a"
 
 
 def test_cleanup_panel_pickle_removes_single_file(tmp_path: Path) -> None:
@@ -61,7 +69,7 @@ def test_cleanup_panel_pickle_removes_single_file(tmp_path: Path) -> None:
     # hiç doğrudan test edilmiyordu.
     run_dir = tmp_path / "run-a"
     run_dir.mkdir()
-    (run_dir / "panel.pkl").write_bytes(b"panel-a")
+    (run_dir / "panel.pkl").write_bytes(pickle.dumps("panel-a"))
 
     runner._cleanup_panel_pickle(run_dir)
 
@@ -88,12 +96,13 @@ def test_run_job_cleans_up_panel_pickle_even_when_run_specs_fails(
 
     run_dir = tmp_path / "runs" / "run-a"
     run_dir.mkdir(parents=True)
-    (run_dir / "panel.pkl").write_bytes(b"panel-a")
+    # DÜZELTME: Test esnasında pickle.loads patlamaması için dumps kullanıyoruz
+    (run_dir / "panel.pkl").write_bytes(pickle.dumps("panel-a"))
     (run_dir / "specs.json").write_text("[]", encoding="utf-8")
 
     latest_dir = tmp_path / "runs" / "latest"
     latest_dir.mkdir(parents=True)
-    (latest_dir / "panel.pkl").write_bytes(b"panel-a")
+    (latest_dir / "panel.pkl").write_bytes(pickle.dumps("panel-a"))
 
     def _boom(*_args, **_kwargs):
         raise RuntimeError("estimation patladı")
