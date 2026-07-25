@@ -423,6 +423,30 @@ def test_run_script_reproduces_packaged_results(tmp_path):
     assert "Reprodüksiyon doğrulandı." in proc.stdout
 
 
+def test_run_script_fails_when_the_cleaning_script_is_tampered(tmp_path):
+    # NEDEN: temizleme adımı doğrulamanın kendi kapısı. Pakete giren script, ham
+    # veriden paketlenmiş paneli üretmeyi bırakırsa denetim izi sahtedir. Sonuç
+    # dosyasına DOKUNULMAZ: tahminler yine tutar, dolayısıyla bu farkı yakalayan
+    # tek şey `_verify_cleaning` — o kapı sessizse test de sessiz kalır.
+    payload = build_reproduction_package(_make_run(tmp_path))
+    extract_dir = tmp_path / "tampered_cleaning"
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        archive.extractall(extract_dir)
+
+    script_file = extract_dir / "cleaning" / "cleaning_steps.py"
+    original = script_file.read_text(encoding="utf-8")
+    # Tekrar eden satırların atılması, karar defterinin bildirdiği tek adımdı.
+    tampered = original.replace("df = df.drop_duplicates", "df = df  # drop_duplicates")
+    # Bulunamayan desen sessiz bir no-op bırakır ve test kendi kendini boşa çıkarır.
+    assert tampered != original, "temizleme adımı script'te bulunamadı"
+    script_file.write_text(tampered, encoding="utf-8")
+
+    proc = _run_package(extract_dir)
+    assert proc.returncode != 0, f"stdout:\n{proc.stdout}"
+    assert "BAŞARISIZ" in proc.stdout
+    assert "temizleme çıktısı" in proc.stdout
+
+
 def test_run_script_fails_when_spec_set_is_trimmed(tmp_path):
     # NEDEN: ürünün iddiası "rapor edilen küme sonradan kırpılamaz". Sonuçları
     # bozmadan menüden spec silmek, kalan kümeyi kendi içinde tutarlı bıraktığı
