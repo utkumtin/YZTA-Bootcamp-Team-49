@@ -1,6 +1,7 @@
 """Pareto — Streamlit girişi (Streamlit + Community Cloud).
 
-Ana sayfa: BYOK (bir kez) + oturum durumu. Diğer sayfalar: kompakt sidebar.
+Ana sayfa: Ayarlar (Genel Bakış + Ayarlar sekmeleri). Diğer sayfalar: kompakt
+sidebar (marka + gizlilik modu + oturum özeti).
 Oturum verisi `st.session_state` ile sayfalar arası kalır.
 
 Çalıştırma:  streamlit run app/main.py
@@ -11,7 +12,12 @@ from __future__ import annotations
 import streamlit as st
 
 from pareto.config import load_dotenv_file
-from pareto.streamlit_ui import render_byok_panel, render_compact_sidebar, render_session_overview
+from pareto.streamlit_ui import (
+    render_compact_sidebar,
+    render_main_nav_style,
+    render_session_overview,
+    render_settings_panel,
+)
 
 load_dotenv_file()
 
@@ -20,22 +26,23 @@ st.set_page_config(page_title="Pareto", page_icon="📊", layout="wide")
 with st.sidebar:
     render_compact_sidebar()
 
-st.title("📊 Pareto")
-st.caption(
-    "Tek bir kesin cevap değil; savunulabilir seçimler üzerinde bir dağılım. "
-    "Sözümüz: **savunulabilir sonuç.**"
-)
+_TAB_LABELS = [":material/bar_chart: Genel Bakış", ":material/settings: Ayarlar"]
+tab_overview, tab_settings = st.tabs(_TAB_LABELS, key="main_tab", on_change="rerun")
+render_main_nav_style()
 
-render_byok_panel()
-render_session_overview()
+with tab_overview:
+    render_session_overview()
 
-st.subheader("Akış")
-st.markdown(
-    "1. **Temizleme** — profil → karar defteri + üretilen kod (human-in-the-loop)\n"
-    "2. **Analiz** — estimand/H0-H1 → savunulabilir spec menüsü (dondurulur)\n"
-    "3. **Varyans Paneli** — çokluevren sonuçları: spec curve + 3-bant kırılganlık teşhisi"
-)
+    st.subheader("Akış")
+    st.markdown(
+        "1. **Temizleme** — profil → karar defteri + üretilen kod (human-in-the-loop)\n"
+        "2. **Analiz** — estimand/H0-H1 → savunulabilir spec menüsü (dondurulur)\n"
+        "3. **Varyans Paneli** — çokluevren sonuçları: spec curve + 3-bant kırılganlık teşhisi"
+    )
 
-st.info(
-    "Veri, estimand ve spec çıktıları oturum boyunca saklanır — sayfa değiştirince kaybolmaz."
-)
+    st.info(
+        "Veri, estimand ve spec çıktıları oturum boyunca saklanır — sayfa değiştirince kaybolmaz."
+    )
+
+with tab_settings:
+    render_settings_panel()

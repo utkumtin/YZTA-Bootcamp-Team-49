@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 50" role="img" aria-label="Pareto">
+  <style>
+    text {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 36px;
+      font-weight: 600;
+      fill: #31333F;
+    }
+    @media (prefers-color-scheme: dark) {
+      text { fill: #FAFAFA; }
+    }
+  </style>
+  <text x="0" y="38">Pareto</text>
+</svg>

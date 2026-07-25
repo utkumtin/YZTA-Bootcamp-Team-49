@@ -12,7 +12,6 @@ dondurmadan gelir (menu.freeze), model stabilitesinden değil.
 from __future__ import annotations
 
 import logging
-import os
 from contextlib import contextmanager
 from typing import Any
 
@@ -57,10 +56,15 @@ def _model_from_provider(pm: ProviderModel) -> Any:
             pm.model_id,
             provider=OpenRouterProvider(api_key=get_api_key(pm.api_key_env)),
         )
-    # Google/OpenRouter dışı sağlayıcılarda da BYOK/.env anahtarını ortama pinle.
-    os.environ[pm.api_key_env] = get_api_key(pm.api_key_env)
-    # Diğer sağlayıcılar: "<provider>:<model_id>" (groq vb. optional extra gerekir)
-    return f"{pm.provider}:{pm.model_id}"
+    if pm.provider == "groq":
+        from pydantic_ai.models.groq import GroqModel
+        from pydantic_ai.providers.groq import GroqProvider
+
+        return GroqModel(
+            pm.model_id,
+            provider=GroqProvider(api_key=get_api_key(pm.api_key_env)),
+        )
+    raise RuntimeError(f"Bilinmeyen sağlayıcı: {pm.provider!r}")
 
 
 def _get_effective_privacy_mode() -> PrivacyMode:

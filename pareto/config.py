@@ -1,7 +1,8 @@
 """Pareto genel ayarları — tek kaynak.
 
 Model-router rolleri, privacy modu, sert spec tavanı,
-determinizm pinleri. Sırlar buraya YAZILMAZ; yalnız env/`st.secrets` üzerinden okunur.
+determinizm pinleri. Sırlar buraya YAZILMAZ; yalnız oturum BYOK'u/env/
+`st.secrets` üzerinden okunur.
 """
 
 from __future__ import annotations
@@ -105,9 +106,37 @@ def _from_secrets(candidates: tuple[str, ...]) -> str:
     return ""
 
 
+def _from_session_byok(candidates: tuple[str, ...]) -> str:
+    """Oturumdaki BYOK anahtarını oku — yalnız ilgili switch açıksa (veya hiç
+    ayarlanmamışsa, geriye dönük uyumluluk için varsayılan AÇIK).
+
+    `_from_secrets` ile aynı desen: Streamlit yoksa veya session_state'e
+    erişim başarısızsa (headless/test bağlamı) sessizce boş döner —
+    `resolve_api_key` env/secrets'a düşsün.
+    """
+    try:
+        import streamlit as st
+    except ImportError:
+        return ""
+    try:
+        byok_keys = st.session_state.get("byok_keys", {})
+        if not isinstance(byok_keys, dict):
+            return ""
+        for name in candidates:
+            value = str(byok_keys.get(name, "")).strip()
+            if value and st.session_state.get(f"byok_enabled_{name}", True):
+                return value
+    except Exception:
+        return ""
+    return ""
+
+
 def resolve_api_key(provider_env: str) -> tuple[str, str]:
-    """API anahtarını çöz ve kaynağı döndür: env | secrets | none."""
+    """API anahtarını çöz ve kaynağı döndür: byok | env | secrets | none."""
     candidates = (provider_env, *_API_KEY_ALIASES.get(provider_env, ()))
+    byok_key = _from_session_byok(candidates)
+    if byok_key:
+        return byok_key, "byok"
     env_key = _from_env(candidates)
     if env_key:
         return env_key, "env"
@@ -125,16 +154,10 @@ def get_api_key(provider_env: str) -> str:
 
     raise OSError(
         f"{provider_env} tanımlı değil. Şunlardan biriyle ayarlayın:\n"
-        f"  • ana sayfa: **Anahtarı kaydet** (BYOK, oturum boyunca)\n"
+        f"  • Ayarlar sekmesi: **Anahtarı kaydet** (BYOK, oturum boyunca)\n"
         f"  • proje kökünde `.env`: {provider_env}=...\n"
         f"  • terminal: `export {provider_env}=...` (Streamlit'i yeniden başlat)"
     )
-
-
-def get_api_key_source(provider_env: str) -> str:
-    """Anahtar kaynağını döndür: env | secrets | none."""
-    _key, source = resolve_api_key(provider_env)
-    return source
 
 
 def resolve_setting(env_name: str, default: str) -> str:
