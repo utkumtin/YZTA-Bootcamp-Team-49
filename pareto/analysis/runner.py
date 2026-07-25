@@ -23,6 +23,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from shutil import copy2
 
 import pandas as pd
 
@@ -78,8 +79,22 @@ class RunHandle:
         raw = json.loads(self.results_path.read_text(encoding="utf-8"))
         return [EstimationResult(**r) for r in raw]
 
+    def read_stderr(self) -> str:
+        if self.process.stderr is None:
+            return ""
+        return self.process.stderr.read() or ""
+
     def is_done(self) -> bool:
         return self.process.poll() is not None
+
+
+def _mirror_latest_run(run_dir: Path) -> None:
+    latest_dir = Path(SETTINGS.runs_dir) / "latest"
+    latest_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("panel.pkl", "specs.json", "progress.json", "results.json"):
+        source = run_dir / name
+        if source.exists():
+            copy2(source, latest_dir / name)
 
 
 def launch_multiverse(df: pd.DataFrame, specs: list[Specification], run_id: str) -> RunHandle:
@@ -91,10 +106,14 @@ def launch_multiverse(df: pd.DataFrame, specs: list[Specification], run_id: str)
     (run_dir / "specs.json").write_text(
         json.dumps([s.model_dump() for s in specs], ensure_ascii=False), encoding="utf-8"
     )
+    _mirror_latest_run(run_dir)
 
     env = {**os.environ, **SETTINGS.deterministic_env}
     proc = subprocess.Popen(  # noqa: S603  # sabit argüman listesi, shell yok; girdi kullanıcıdan gelmez
         [sys.executable, "-m", "pareto.analysis.runner", "--job", str(run_dir)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
         env=env,
     )
     return RunHandle(run_dir=run_dir, process=proc)
@@ -111,12 +130,14 @@ def _run_job(run_dir: Path) -> None:
 
     def _write_progress(done: int, total: int, _res: EstimationResult) -> None:
         progress_path.write_text(json.dumps({"done": done, "total": total}), encoding="utf-8")
+        _mirror_latest_run(run_dir)
 
     results = run_specs(df, specs, on_progress=_write_progress)
     (run_dir / "results.json").write_text(
         json.dumps([r.model_dump() for r in results], ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    _mirror_latest_run(run_dir)
 
 
 def _cli() -> None:

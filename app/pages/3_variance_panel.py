@@ -18,6 +18,12 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from pareto.analysis.event_study import estimate_pretrend_event_study
+from pareto.analysis.event_study_columns import (
+    event_study_cache_key as _event_study_cache_key,
+)
+from pareto.analysis.event_study_columns import (
+    infer_column as _infer_column,
+)
 from pareto.analysis.variance import ROBUST_RULE_TEXT, diagnose_axes, summarize
 from pareto.contracts import EstimationResult
 from pareto.llm.narrative import generate_narrative
@@ -44,18 +50,6 @@ if specs_path.exists():
     specs = [Specification(**s) for s in json.loads(specs_path.read_text(encoding="utf-8"))]
 else:
     specs = []
-
-
-def _infer_column(df: pd.DataFrame, *candidates: str) -> str | None:
-    lowered = {str(col).lower(): col for col in df.columns}
-    for candidate in candidates:
-        if candidate.lower() in lowered:
-            return lowered[candidate.lower()]
-    for col in df.columns:
-        col_name = str(col).lower()
-        if any(token in col_name for token in ("cohort", "never", "treated", "year", "time", "date", "unit", "id")):
-            return str(col)
-    return None
 
 
 def _build_event_study_payload() -> dict[str, object] | None:
@@ -95,17 +89,23 @@ def _build_event_study_payload() -> dict[str, object] | None:
 
     controls = analysis_state.get("controls") or []
 
-    if not outcome_col or not unit_col or not time_col or not cohort_col or not never_treated_col:
-        return {"status": "skipped", "reason": "required columns for pre-trend diagnostic are missing"}
+    if not outcome_col or not unit_col or not time_col:
+        return {
+            "status": "skipped",
+            "reason": "required columns for pre-trend diagnostic are missing",
+        }
 
     return {
-        "status": "pending_columns",
+        "status": "needs_selection"
+        if not cohort_col or not never_treated_col
+        else "pending_columns",
         "outcome_col": outcome_col,
         "unit_col": unit_col,
         "time_col": time_col,
         "cohort_col": cohort_col,
         "never_treated_col": never_treated_col,
         "controls": tuple(controls),
+        "column_options": [str(col) for col in df.columns],
         "sources": {
             "outcome_col": outcome_source,
             "unit_col": unit_source,
@@ -114,6 +114,62 @@ def _build_event_study_payload() -> dict[str, object] | None:
             "never_treated_col": never_treated_source,
         },
     }
+
+
+def _plot_coefficient_series(
+    *,
+    x,
+    y,
+    title: str,
+    xaxis_title: str,
+    yaxis_title: str,
+    hovertemplate: str,
+    marker_size: int = 8,
+    connectgaps: bool = False,
+    add_zero_line: bool = True,
+    zero_line_y: float = 0.0,
+    add_vline_x: int | float | None = None,
+    height: int = 360,
+    trace_mode: str = "markers",
+    trace_name: str | None = None,
+    error_y: dict | None = None,
+) -> go.Figure:
+    fig = go.Figure()
+    trace_kwargs = {
+        "x": x,
+        "y": y,
+        "mode": trace_mode,
+        "marker": {"size": marker_size},
+        "hovertemplate": hovertemplate,
+    }
+    if trace_name is not None:
+        trace_kwargs["name"] = trace_name
+    if error_y is not None:
+        trace_kwargs["error_y"] = error_y
+    if not connectgaps:
+        trace_kwargs["connectgaps"] = False
+    fig.add_trace(go.Scatter(**trace_kwargs))
+    if add_vline_x is not None:
+        fig.add_vline(x=add_vline_x, line_dash="dot", line_color="black", opacity=0.6)
+    if add_zero_line:
+        fig.add_hline(y=zero_line_y, line_dash="dash", line_color="black", opacity=0.5)
+    fig.update_layout(
+        title=title,
+        xaxis_title=xaxis_title,
+        yaxis_title=yaxis_title,
+        template="simple_white",
+        height=height,
+    )
+    return fig
+
+
+@st.cache_data(show_spinner=False)
+def _diagnose_axes_cached(results_json: str, specs_json: str) -> dict[str, object]:
+    return diagnose_axes(
+        [EstimationResult(**item) for item in json.loads(results_json)],
+        [Specification(**item) for item in json.loads(specs_json)],
+    )
+
 
 # --- Özet metrikleri + 3-bant etiket ---
 c1, c2, c3, c4 = st.columns(4)
@@ -140,61 +196,80 @@ def _color(r: EstimationResult) -> str:
 ok = [r for r in results if r.status == "ok" and r.coefficient is not None]
 if ok:
     ok.sort(key=lambda r: r.coefficient)
-    fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=list(range(len(ok))),
-            y=[r.coefficient for r in ok],
-            mode="markers",
-            marker={"color": [_color(r) for r in ok], "size": 8},
-            error_y={
-                "type": "data",
-                "symmetric": False,
-                "array": [(r.ci_high - r.coefficient) if r.ci_high else 0 for r in ok],
-                "arrayminus": [(r.coefficient - r.ci_low) if r.ci_low else 0 for r in ok],
-                "thickness": 1,
-                "width": 0,
-            },
-            text=[r.spec_id for r in ok],
-            hovertemplate="%{text}<br>katsayı=%{y:.4f}<extra></extra>",
-        )
-    )
-    fig.add_hline(y=0, line_dash="dash", line_color="black", opacity=0.5)
-    fig.update_layout(
+    fig = _plot_coefficient_series(
+        x=list(range(len(ok))),
+        y=[r.coefficient for r in ok],
         title="Specification Curve (katsayıya göre sıralı)",
         xaxis_title="Spesifikasyonlar",
         yaxis_title="Tahmini etki (katsayı)",
-        template="simple_white",
+        hovertemplate="%{text}<br>katsayı=%{y:.4f}<extra></extra>",
+        marker_size=8,
+        trace_mode="markers",
+        add_zero_line=True,
         height=480,
+        error_y={
+            "type": "data",
+            "symmetric": False,
+            "array": [(r.ci_high - r.coefficient) if r.ci_high else 0 for r in ok],
+            "arrayminus": [(r.coefficient - r.ci_low) if r.ci_low else 0 for r in ok],
+            "thickness": 1,
+            "width": 0,
+        },
     )
+    fig.data[0].text = [r.spec_id for r in ok]
     st.plotly_chart(fig, use_container_width=True)
 
 st.subheader("Eksen atfı paneli")
 if specs:
-    diagnosis = diagnose_axes(results, specs)
-    st.json(diagnosis)
+    results_json = json.dumps([r.model_dump() for r in results], ensure_ascii=False)
+    specs_json = json.dumps([s.model_dump() for s in specs], ensure_ascii=False)
+    diagnosis = _diagnose_axes_cached(results_json, specs_json)
 
-    try:
-        narrative = generate_narrative(summary, diagnosis)
-        st.subheader("LLM narrative")
-        st.write(narrative.ozet)
-        for comment in narrative.eksen_yorumlari:
-            st.caption(f"• {comment.axis}: {comment.yorum}")
-    except Exception as exc:  # noqa: BLE001
-        st.info(f"Narrative oluşturulamadı: {exc}")
+    excluded_count = sum(diagnosis["n_excluded"].values())
+    st.caption(f"Kullanılan sonuç: {diagnosis['n_used']} · Hariç tutulan: {excluded_count}")
+    matched_pairs = pd.DataFrame.from_dict(diagnosis.get("matched_pairs", {}), orient="index")
+    if not matched_pairs.empty:
+        st.dataframe(matched_pairs, use_container_width=True)
+    anova_r2 = pd.DataFrame([diagnosis.get("anova_partial_r2", {})]).T
+    if not anova_r2.empty:
+        anova_r2.columns = ["partial_r2"]
+        st.dataframe(anova_r2, use_container_width=True)
+    if diagnosis.get("warnings"):
+        for warning in diagnosis.get("warnings", []):
+            st.caption(f"• {warning}")
+
+    narrative_key = json.dumps(
+        {"summary": summary, "diagnosis": diagnosis}, ensure_ascii=False, sort_keys=True
+    )
+    if st.button("LLM narrative oluştur"):
+        try:
+            with st.spinner("LLM narrative hazırlanıyor..."):
+                st.session_state["_variance_narrative"] = generate_narrative(summary, diagnosis)
+                st.session_state["_variance_narrative_key"] = narrative_key
+        except ValueError as exc:
+            st.warning(f"Narrative oluşturulamadı: {exc}")
+
+    if st.session_state.get("_variance_narrative_key") == narrative_key:
+        narrative = st.session_state.get("_variance_narrative")
+        if narrative is not None:
+            st.subheader("LLM narrative")
+            st.write(narrative.ozet)
+            for comment in narrative.eksen_yorumlari:
+                st.caption(f"• {comment.axis}: {comment.yorum}")
 else:
     st.info("Bu run için specs.json bulunamadı; eksen atfı ve narrative gösterilemiyor.")
 
 st.subheader("Efektif N")
 rows = []
 for result in results:
-    error_value = getattr(result, "error", None) or getattr(result, "error_message", None)
     rows.append(
         {
             "spec_id": result.spec_id,
-            "effective_n": int(result.n_obs) if (result.status == "ok" and result.n_obs is not None) else None,
+            "effective_n": int(result.n_obs)
+            if (result.status == "ok" and result.n_obs is not None)
+            else None,
             "status": result.status,
-            "error": error_value if result.status != "ok" else None,
+            "error": result.error if result.status != "ok" else None,
         }
     )
 if rows:
@@ -202,7 +277,10 @@ if rows:
     st.dataframe(df_n, use_container_width=True)
     n_missing = int(df_n["effective_n"].isna().sum())
     if n_missing:
-        st.caption(f"{n_missing} spesifikasyon için efektif N üretilemedi (yukarıdaki 'status'/'error' sütununa bakın).")
+        st.caption(
+            f"{n_missing} spesifikasyon için efektif N üretilemedi "
+            "(yukarıdaki 'status'/'error' sütununa bakın)."
+        )
 else:
     st.info("Efektif N bilgisi bulunamadı.")
 
@@ -213,7 +291,7 @@ if payload is None:
     st.info("Pre-trend görseli için temizlenmiş veri seti yok.")
 elif payload.get("status") == "skipped":
     st.info(payload.get("reason", "Pre-trend görseli için gerekli veri yok."))
-elif payload.get("status") == "pending_columns":
+elif payload.get("status") in {"pending_columns", "needs_selection"}:
     sources = payload.get("sources", {})
     st.caption(
         "Kullanılacak kolonlar → "
@@ -221,30 +299,83 @@ elif payload.get("status") == "pending_columns":
         f"unit: `{payload['unit_col']}` ({sources.get('unit_col', 'unknown')}), "
         f"time: `{payload['time_col']}` ({sources.get('time_col', 'unknown')})"
     )
-    st.caption(
-        "Kullanılacak özel kolonlar → "
-        f"cohort: `{payload['cohort_col']}` ({sources.get('cohort_col', 'unknown')}), "
-        f"never_treated: `{payload['never_treated_col']}` ({sources.get('never_treated_col', 'unknown')})"
+    column_options = list(
+        payload.get("column_options", [str(col) for col in st.session_state["clean_df"].columns])
     )
-    if sources.get("cohort_col") == "inferred" or sources.get("never_treated_col") == "inferred":
-        st.caption("⚠️ `cohort` ve/veya `never_treated` kolonları isimden sezgisel olarak tahmin edildi; bu yüzden işlemi onaylamak iyi olur.")
-    if st.button("Bu kolonlarla pre-trend hesapla"):
-        try:
-            event_study = estimate_pretrend_event_study(
-                st.session_state["clean_df"],
-                outcome_col=payload["outcome_col"],
-                unit_col=payload["unit_col"],
-                time_col=payload["time_col"],
-                cohort_col=payload["cohort_col"],
-                never_treated_col=payload["never_treated_col"],
-                controls=payload["controls"],
-            )
-            st.session_state["_event_study_cache"] = event_study
-        except Exception as exc:  # noqa: BLE001
-            st.session_state["_event_study_cache"] = {"status": "failed", "error": str(exc)}
-        st.rerun()
+    cohort_col = payload.get("cohort_col")
+    never_treated_col = payload.get("never_treated_col")
 
-    event_study = st.session_state.get("_event_study_cache")
+    if cohort_col is None:
+        cohort_choice = st.selectbox(
+            "Kohort kolonu",
+            options=["-- seçin --", *column_options],
+            key="event_study_cohort_choice",
+        )
+        cohort_col = None if cohort_choice == "-- seçin --" else cohort_choice
+    else:
+        st.caption(f"Kohort kolonu: `{cohort_col}` ({sources.get('cohort_col', 'unknown')})")
+
+    if never_treated_col is None:
+        never_choice = st.selectbox(
+            "Never-treated kolonu",
+            options=["-- seçin --", *column_options],
+            key="event_study_never_treated_choice",
+        )
+        never_treated_col = None if never_choice == "-- seçin --" else never_choice
+    else:
+        never_source = sources.get("never_treated_col", "unknown")
+        st.caption(f"Never-treated kolonu: `{never_treated_col}` ({never_source})")
+
+    if sources.get("cohort_col") == "inferred" or sources.get("never_treated_col") == "inferred":
+        st.caption(
+            "⚠️ `cohort` ve/veya `never_treated` kolonları isimden sezgisel olarak "
+            "tahmin edildi; bu yüzden işlemi onaylamak iyi olur."
+        )
+
+    if cohort_col is None or never_treated_col is None:
+        st.info("Pre-trend hesabı için cohort ve never-treated kolonlarını seçin.")
+    else:
+        cohort_values = sorted(
+            {value for value in st.session_state["clean_df"][cohort_col].dropna().tolist()},
+            key=lambda value: str(value),
+        )
+        treated_cohort_selection = st.multiselect(
+            "Treated cohorts",
+            options=cohort_values,
+            default=cohort_values[:1] if cohort_values else [],
+            key="event_study_treated_cohorts",
+            help="Committed-baseline diagnostic için açık treated cohort seçin.",
+        )
+        cache_key = _event_study_cache_key(
+            results_path=results_path,
+            df=st.session_state["clean_df"],
+            payload=payload,
+            cohort_col=str(cohort_col),
+            never_treated_col=str(never_treated_col),
+            treated_cohorts=tuple(treated_cohort_selection),
+        )
+        cached_key = st.session_state.get("_event_study_cache_key")
+        if cached_key == cache_key:
+            event_study = st.session_state.get("_event_study_cache")
+
+        if st.button("Bu kolonlarla pre-trend hesapla"):
+            try:
+                event_study = estimate_pretrend_event_study(
+                    st.session_state["clean_df"],
+                    outcome_col=payload["outcome_col"],
+                    unit_col=payload["unit_col"],
+                    time_col=payload["time_col"],
+                    cohort_col=str(cohort_col),
+                    never_treated_col=str(never_treated_col),
+                    controls=payload["controls"],
+                    treated_cohorts=tuple(treated_cohort_selection) or None,
+                )
+                st.session_state["_event_study_cache"] = event_study
+                st.session_state["_event_study_cache_key"] = cache_key
+            except Exception as exc:  # noqa: BLE001
+                st.session_state["_event_study_cache"] = {"status": "failed", "error": str(exc)}
+                st.session_state["_event_study_cache_key"] = cache_key
+
     if event_study is None:
         st.info("Hesaplamak için butona basın.")
     elif event_study.get("status") == "ok":
@@ -252,37 +383,57 @@ elif payload.get("status") == "pending_columns":
         if series.empty:
             st.info("Pre-trend serisi boş.")
         else:
-            fig = go.Figure()
-            fig.add_trace(
-                go.Scatter(
-                    x=series["event_time"],
-                    y=series["coefficient"],
-                    mode="lines+markers",
-                    marker={"size": 8},
-                    error_y={
-                        "type": "data",
-                        "symmetric": False,
-                        "array": [
-                            (row["ci_high"] - row["coefficient"]) if row.get("ci_high") is not None and row.get("coefficient") is not None else 0
-                            for _, row in series.iterrows()
-                        ],
-                        "arrayminus": [
-                            (row["coefficient"] - row["ci_low"]) if row.get("ci_low") is not None and row.get("coefficient") is not None else 0
-                            for _, row in series.iterrows()
-                        ],
-                        "thickness": 1,
-                        "width": 0,
-                    },
-                    hovertemplate="event_time=%{x}<br>estimate=%{y:.3f}<extra></extra>",
+            reference_period = int(event_study.get("reference_period", -1))
+            if reference_period not in set(series["event_time"]):
+                series = pd.concat(
+                    [
+                        series,
+                        pd.DataFrame(
+                            [
+                                {
+                                    "event_time": reference_period,
+                                    "coefficient": None,
+                                    "ci_low": None,
+                                    "ci_high": None,
+                                    "p_value": None,
+                                    "n_obs": None,
+                                }
+                            ]
+                        ),
+                    ],
+                    ignore_index=True,
                 )
-            )
-            fig.add_hline(y=0, line_dash="dash", line_color="black", opacity=0.5)
-            fig.update_layout(
+            series = series.sort_values("event_time")
+            fig = _plot_coefficient_series(
+                x=series["event_time"],
+                y=series["coefficient"],
                 title="Pre-trend event-study coefficients",
                 xaxis_title="Event time",
                 yaxis_title="Coefficient",
-                template="simple_white",
-                height=360,
+                hovertemplate="event_time=%{x}<br>estimate=%{y:.3f}<extra></extra>",
+                marker_size=8,
+                connectgaps=False,
+                add_zero_line=True,
+                add_vline_x=reference_period,
+                trace_mode="lines+markers",
+                error_y={
+                    "type": "data",
+                    "symmetric": False,
+                    "array": [
+                        (row["ci_high"] - row["coefficient"])
+                        if row.get("ci_high") is not None and row.get("coefficient") is not None
+                        else 0
+                        for _, row in series.iterrows()
+                    ],
+                    "arrayminus": [
+                        (row["coefficient"] - row["ci_low"])
+                        if row.get("ci_low") is not None and row.get("coefficient") is not None
+                        else 0
+                        for _, row in series.iterrows()
+                    ],
+                    "thickness": 1,
+                    "width": 0,
+                },
             )
             st.plotly_chart(fig, use_container_width=True)
         if event_study.get("warnings"):
