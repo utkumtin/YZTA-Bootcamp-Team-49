@@ -247,7 +247,7 @@ if st.session_state.get("clean_df") is not None:
                                 else:
                                     if not isinstance(modified_params, dict):
                                         st.error(
-                                            'params bir JSON objesi (dict) olmalı, '
+                                            "params bir JSON objesi (dict) olmalı, "
                                             ' ör. {"col": "..."}.'
                                         )
                                         parse_ok = False

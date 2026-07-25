@@ -39,7 +39,6 @@ def test_event_study_cache_key_uses_typed_controls() -> None:
     assert key[-1] == ("income",)
 
 
-
 def test_build_event_study_payload_skips_without_dataframe() -> None:
     assert build_event_study_payload(None, estimand=None, analysis_state=None) is None
 

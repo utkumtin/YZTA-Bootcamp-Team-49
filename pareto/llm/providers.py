@@ -244,9 +244,7 @@ def _session_choice(slot: ModelSlot) -> str:
     if not choice:
         return ""
     if choice not in option_ids(slot):
-        logger.warning(
-            "Oturumdaki model seçimi listede yok, yok sayıldı: %s=%s", slot.key, choice
-        )
+        logger.warning("Oturumdaki model seçimi listede yok, yok sayıldı: %s=%s", slot.key, choice)
         return ""
     return choice
 

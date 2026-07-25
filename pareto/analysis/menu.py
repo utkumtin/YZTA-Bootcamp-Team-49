@@ -606,9 +606,7 @@ def validate_spec_menu_to_specs(
         if spec.cluster_by not in menu.clustering_levels:
             errors.append(f"{spec.spec_id}: geçersiz cluster_by {spec.cluster_by!r}")
         if spec.include_never_treated not in menu.never_treated_levels:
-            errors.append(
-                f"{spec.spec_id}: geçersiz never_treated {spec.include_never_treated!r}"
-            )
+            errors.append(f"{spec.spec_id}: geçersiz never_treated {spec.include_never_treated!r}")
         if spec.estimator not in menu.estimators:
             errors.append(f"{spec.spec_id}: geçersiz estimator {spec.estimator!r}")
         if spec.weight_col not in menu.weighting_levels:

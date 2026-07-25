@@ -38,9 +38,7 @@ def test_same_upload_preserves_ledger_when_resolution_is_saved(
     )
 
     monkeypatch.setattr("streamlit.file_uploader", lambda *args, **kwargs: uploaded)
-    monkeypatch.setattr(
-        "pareto.profiling.load_raw_file", lambda _: pd.DataFrame({"value": [1, 2]})
-    )
+    monkeypatch.setattr("pareto.profiling.load_raw_file", lambda _: pd.DataFrame({"value": [1, 2]}))
     monkeypatch.setattr("pareto.profiling.profile_dataframe", lambda _: {"columns": []})
     monkeypatch.setattr("pareto.cleaning.agent.generate_ledger", lambda _: [entry])
 
@@ -76,9 +74,7 @@ def test_new_upload_resets_ledger_and_resolution_state(
     )
 
     monkeypatch.setattr("streamlit.file_uploader", lambda *args, **kwargs: uploads[0])
-    monkeypatch.setattr(
-        "pareto.profiling.load_raw_file", lambda _: pd.DataFrame({"value": [1, 2]})
-    )
+    monkeypatch.setattr("pareto.profiling.load_raw_file", lambda _: pd.DataFrame({"value": [1, 2]}))
     monkeypatch.setattr("pareto.profiling.profile_dataframe", lambda _: {"columns": []})
     monkeypatch.setattr("pareto.cleaning.agent.generate_ledger", lambda _: [entry])
 

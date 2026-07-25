@@ -70,9 +70,11 @@ def load_dotenv_file() -> None:
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     load_dotenv(os.path.join(root, ".env"))
 
+
 _API_KEY_ALIASES: dict[str, tuple[str, ...]] = {
     "GEMINI_API_KEY": ("GOOGLE_API_KEY",),
 }
+
 
 def _from_env(candidates: tuple[str, ...]) -> str:
     for name in candidates:

@@ -262,8 +262,7 @@ def _build_working_frame(
         return "treated cohort values must be numeric/year-like for event-time construction."
     work["_pareto_event_time"] = pd.NA
     work.loc[selected_treated, "_pareto_event_time"] = (
-        work.loc[selected_treated, "_pareto_time"]
-        - work.loc[selected_treated, "_pareto_cohort"]
+        work.loc[selected_treated, "_pareto_time"] - work.loc[selected_treated, "_pareto_cohort"]
     )
     work["_pareto_event_time"] = pd.to_numeric(work["_pareto_event_time"], errors="coerce")
 

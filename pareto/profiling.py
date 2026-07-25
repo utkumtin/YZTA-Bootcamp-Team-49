@@ -140,21 +140,12 @@ def profile_dataframe(df: pd.DataFrame) -> dict[str, Any]:
         else:
             top_values = series.value_counts(dropna=True).head(5)
 
-            col_info["top_values"] = {
-                str(key): int(value)
-                for key, value in top_values.items()
-            }
+            col_info["top_values"] = {str(key): int(value) for key, value in top_values.items()}
 
-            sample = (
-                series.dropna()
-                .astype(str)
-                .head(20)
-                .tolist()
-            )
+            sample = series.dropna().astype(str).head(20).tolist()
 
             col_info["looks_like_date"] = any(
-                any(sep in value for sep in ("-", "/", "."))
-                and any(ch.isdigit() for ch in value)
+                any(sep in value for sep in ("-", "/", ".")) and any(ch.isdigit() for ch in value)
                 for value in sample
             )
 
