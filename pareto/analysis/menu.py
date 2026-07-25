@@ -202,7 +202,9 @@ def generate_spec_menu(
     frozen: FrozenEstimand,
     available_columns: list[str],
 ) -> SpecMenuProposal:
-    """JUDGE: frozen estimand + kolonlar → her eksende savunulabilir seviyeler + baseline + gerekçe."""
+    """JUDGE: frozen estimand + kolonlar →
+    her eksende savunulabilir seviyeler + baseline + gerekçe.
+    """
     if not available_columns:
         raise ValueError("Spec menu proposal needs at least one available column.")
 
@@ -216,7 +218,8 @@ def generate_spec_menu(
         "Create a SpecMenuProposal with exactly these 7 axes:\n"
         "control_set, sample, pre_period, clustering, never_treated, estimator, weighting.\n\n"
         "For each axis provide baseline_level, candidate_levels, and rationale.\n"
-        "This is NOT a closed list — propose defensible levels grounded in the estimand and columns.\n"
+        "This is NOT a closed list — propose defensible levels grounded in the "
+        "estimand and columns.\n"
         "Be conservative: never invent columns or unsupported estimators.\n\n"
         "Encoding rules:\n"
         "- control_set: 'none' for no controls, or 'col1+col2' for control sets\n"
@@ -226,7 +229,8 @@ def generate_spec_menu(
         "panel/DiD: cluster at treatment-assignment level; 'none' only if indefensible\n"
         "- never_treated: 'true' or 'false'\n"
         "- estimator: 'OLS' or 'TWFE'\n"
-        f"- weighting: '{DEFAULT_WEIGHT_COL}' (population-weighted default) or 'none' for unweighted\n"
+        f"- weighting: '{DEFAULT_WEIGHT_COL}' (population-weighted default) or "
+        "'none' for unweighted\n"
     )
 
     agent = build_agent(
@@ -294,44 +298,107 @@ def _dedupe_preserving_order(values: list[T]) -> list[T]:
     return deduped
 
 
+def _validate_menu_proposal_levels(
+    proposal: SpecMenuProposal,
+    *,
+    available_columns: list[str],
+) -> list[str]:
+    cols = set(available_columns)
+    reasons: list[str] = []
+
+    axis_lookup = {axis.axis_name: axis for axis in proposal.axes}
+
+    for axis_name in ALL_AXES:
+        axis = axis_lookup.get(axis_name)
+        if axis is None:
+            reasons.append(f"{axis_name} ekseni eksik.")
+            continue
+
+        baseline = (axis.baseline_level or "").strip()
+        if not baseline:
+            reasons.append(f"{axis_name} baseline seviyesi boş olamaz.")
+            continue
+
+        try:
+            if axis_name == "control_set":
+                _parse_control_set(baseline)
+                for candidate in axis.candidate_levels:
+                    _parse_control_set(candidate)
+            elif axis_name == "sample":
+                _parse_sample_filter(baseline)
+                for candidate in axis.candidate_levels:
+                    _parse_sample_filter(candidate)
+            elif axis_name == "pre_period":
+                _parse_pre_period(baseline)
+                for candidate in axis.candidate_levels:
+                    _parse_pre_period(candidate)
+            elif axis_name == "clustering":
+                parsed = _parse_optional_column(baseline)
+                if parsed is not None and parsed not in cols:
+                    raise ValueError(f"Geçersiz clustering kolonu: {parsed}")
+                for candidate in axis.candidate_levels:
+                    parsed_candidate = _parse_optional_column(candidate)
+                    if parsed_candidate is not None and parsed_candidate not in cols:
+                        raise ValueError(f"Geçersiz clustering kolonu: {parsed_candidate}")
+            elif axis_name == "never_treated":
+                _parse_never_treated(baseline)
+                for candidate in axis.candidate_levels:
+                    _parse_never_treated(candidate)
+            elif axis_name == "estimator":
+                if baseline not in SUPPORTED_ESTIMATORS:
+                    raise ValueError(f"Desteklenmeyen kestirici: {baseline}")
+                for candidate in axis.candidate_levels:
+                    if candidate not in SUPPORTED_ESTIMATORS:
+                        raise ValueError(f"Desteklenmeyen kestirici: {candidate}")
+            elif axis_name == "weighting":
+                parsed = _parse_optional_column(baseline)
+                if parsed is not None and parsed not in cols:
+                    raise ValueError(f"Geçersiz ağırlık kolonu: {parsed}")
+                for candidate in axis.candidate_levels:
+                    parsed_candidate = _parse_optional_column(candidate)
+                    if parsed_candidate is not None and parsed_candidate not in cols:
+                        raise ValueError(f"Geçersiz ağırlık kolonu: {parsed_candidate}")
+        except ValueError as exc:
+            reasons.append(str(exc))
+
+    return reasons
+
+
 def spec_menu_proposal_to_menu(
     proposal: SpecMenuProposal,
     *,
     available_columns: list[str],
 ) -> SpecMenu:
-    cols = set(available_columns)
-
     def axis(name: str) -> list[str]:
         return _axis_levels(proposal, name)
 
+    reasons = _validate_menu_proposal_levels(proposal, available_columns=available_columns)
+    if reasons:
+        raise ValueError("; ".join(reasons))
+
     control_sets = _dedupe_preserving_order([_parse_control_set(v) for v in axis("control_set")])
-    sample_filters = tuple(_dedupe_preserving_order([_parse_sample_filter(v) for v in axis("sample")]))
-    pre_period_windows = tuple(_dedupe_preserving_order([_parse_pre_period(v) for v in axis("pre_period")]))
+    sample_filters = tuple(
+        _dedupe_preserving_order([_parse_sample_filter(v) for v in axis("sample")])
+    )
+    pre_period_windows = tuple(
+        _dedupe_preserving_order([_parse_pre_period(v) for v in axis("pre_period")])
+    )
     # weighting ile aynı normalizasyon: "none" savunulabilir bir seviye, hata değil
     clustering_levels = tuple(
         _dedupe_preserving_order([_parse_optional_column(v) for v in axis("clustering")])
     )
-    never_treated_levels = tuple(_dedupe_preserving_order([_parse_never_treated(v) for v in axis("never_treated")]))
-    weighting_levels = tuple(_dedupe_preserving_order([_parse_optional_column(v) for v in axis("weighting")]))
+    never_treated_levels = tuple(
+        _dedupe_preserving_order([_parse_never_treated(v) for v in axis("never_treated")])
+    )
+    weighting_levels = tuple(
+        _dedupe_preserving_order([_parse_optional_column(v) for v in axis("weighting")])
+    )
     estimator_levels_raw = _dedupe_preserving_order(axis("estimator"))
 
     for estimator in estimator_levels_raw:
         if estimator not in SUPPORTED_ESTIMATORS:
-            raise ValueError(f"Unsupported estimator: {estimator}")
+            raise ValueError(f"Desteklenmeyen kestirici: {estimator}")
     estimator_levels = cast(tuple[SupportedEstimator, ...], tuple(estimator_levels_raw))
-
-    for cluster in clustering_levels:
-        if cluster is not None and cluster not in cols:
-            raise ValueError(f"Invalid clustering column: {cluster}")
-
-    for control_set in control_sets:
-        for control in control_set:
-            if control not in cols:
-                raise ValueError(f"Invalid control column: {control}")
-
-    for w in weighting_levels:
-        if w is not None and w not in cols:
-            raise ValueError(f"Invalid weight column: {w}")
 
     return SpecMenu(
         control_sets=control_sets,
@@ -376,60 +443,7 @@ def _collect_menu_proposal_reasons(
     if time_col is not None and not (time_col or "").strip():
         reasons.append("Time kolonu zorunludur.")
 
-    axis_lookup = {axis.axis_name: axis for axis in proposal.axes}
-
-    for axis_name in ALL_AXES:
-        axis = axis_lookup.get(axis_name)
-        if axis is None:
-            reasons.append(f"{axis_name} ekseni eksik.")
-            continue
-
-        baseline = (axis.baseline_level or "").strip()
-        if not baseline:
-            reasons.append(f"{axis_name} baseline seviyesi boş olamaz.")
-            continue
-
-        try:
-            if axis_name == "control_set":
-                _parse_control_set(baseline)
-                for candidate in axis.candidate_levels:
-                    _parse_control_set(candidate)
-            elif axis_name == "sample":
-                _parse_sample_filter(baseline)
-                for candidate in axis.candidate_levels:
-                    _parse_sample_filter(candidate)
-            elif axis_name == "pre_period":
-                _parse_pre_period(baseline)
-                for candidate in axis.candidate_levels:
-                    _parse_pre_period(candidate)
-            elif axis_name == "clustering":
-                parsed = _parse_optional_column(baseline)
-                if parsed is not None and parsed not in set(available_columns):
-                    raise ValueError(f"Invalid clustering column: {parsed}")
-                for candidate in axis.candidate_levels:
-                    parsed_candidate = _parse_optional_column(candidate)
-                    if parsed_candidate is not None and parsed_candidate not in set(available_columns):
-                        raise ValueError(f"Invalid clustering column: {parsed_candidate}")
-            elif axis_name == "never_treated":
-                _parse_never_treated(baseline)
-                for candidate in axis.candidate_levels:
-                    _parse_never_treated(candidate)
-            elif axis_name == "estimator":
-                if baseline not in SUPPORTED_ESTIMATORS:
-                    raise ValueError(f"Unsupported estimator: {baseline}")
-                for candidate in axis.candidate_levels:
-                    if candidate not in SUPPORTED_ESTIMATORS:
-                        raise ValueError(f"Unsupported estimator: {candidate}")
-            elif axis_name == "weighting":
-                parsed = _parse_optional_column(baseline)
-                if parsed is not None and parsed not in set(available_columns):
-                    raise ValueError(f"Invalid weight column: {parsed}")
-                for candidate in axis.candidate_levels:
-                    parsed_candidate = _parse_optional_column(candidate)
-                    if parsed_candidate is not None and parsed_candidate not in set(available_columns):
-                        raise ValueError(f"Invalid weight column: {parsed_candidate}")
-        except ValueError as exc:
-            reasons.append(str(exc))
+    reasons.extend(_validate_menu_proposal_levels(proposal, available_columns=available_columns))
 
     if reasons:
         return reasons
@@ -451,6 +465,27 @@ def _collect_menu_proposal_reasons(
     return reasons
 
 
+def _collect_spec_binding_reasons(
+    *,
+    outcome: str | None = None,
+    treatment: str | None = None,
+    unit_col: str | None = None,
+    time_col: str | None = None,
+) -> list[str]:
+    reasons: list[str] = []
+
+    if outcome is None or not outcome.strip():
+        reasons.append("Outcome kolon adı zorunludur.")
+    if treatment is None or not treatment.strip():
+        reasons.append("Treatment kolon adı zorunludur.")
+    if unit_col is None or not unit_col.strip():
+        reasons.append("Unit kolonu zorunludur.")
+    if time_col is None or not time_col.strip():
+        reasons.append("Time kolonu zorunludur.")
+
+    return reasons
+
+
 def evaluate_menu_defensibility(
     proposal: SpecMenuProposal,
     *,
@@ -464,25 +499,36 @@ def evaluate_menu_defensibility(
     reasons = _collect_menu_proposal_reasons(
         proposal,
         available_columns=available_columns,
-        outcome=outcome,
-        treatment=treatment,
-        unit_col=unit_col,
-        time_col=time_col,
+    )
+    reasons.extend(
+        _collect_spec_binding_reasons(
+            outcome=outcome,
+            treatment=treatment,
+            unit_col=unit_col,
+            time_col=time_col,
+        )
     )
     if reasons:
         return False, reasons, 0
 
-    frozen_menu = freeze_spec_menu(
-        proposal,
-        available_columns=available_columns,
-        approved=True,
+    try:
+        menu = spec_menu_proposal_to_menu(proposal, available_columns=available_columns)
+    except ValueError as exc:
+        return False, [str(exc)], 0
+
+    frozen_menu = FrozenSpecMenu(menu=menu, menu_hash=_menu_hash(menu))
+    assert (
+        outcome is not None
+        and treatment is not None
+        and unit_col is not None
+        and time_col is not None
     )
     specs = expand_to_specs(
         frozen_menu,
-        outcome=outcome or "",
-        treatment=treatment or "",
-        unit_col=unit_col or "",
-        time_col=time_col or "",
+        outcome=outcome.strip(),
+        treatment=treatment.strip(),
+        unit_col=unit_col.strip(),
+        time_col=time_col.strip(),
     )
     return True, [], len(specs)
 

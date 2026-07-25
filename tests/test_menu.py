@@ -1,10 +1,9 @@
 import pytest
 from pydantic_ai.models.test import TestModel
 
-from pareto.analysis.hypothesis import Estimand, FrozenEstimand, TACProposal, freeze_estimand
+from pareto.analysis.hypothesis import FrozenEstimand, TACProposal, freeze_estimand
 from pareto.analysis.menu import (
     SpecMenu,
-    SpecMenuAxis,
     SpecMenuProposal,
     evaluate_menu_defensibility,
     expand_to_specs,
@@ -132,9 +131,7 @@ def test_weighting_axis_expands_with_population_default():
         weighting_levels=("population", None),
         active_axes=("weighting",),
     ).freeze()
-    specs = expand_to_specs(
-        frozen, outcome="y", treatment="d", unit_col="state", time_col="year"
-    )
+    specs = expand_to_specs(frozen, outcome="y", treatment="d", unit_col="state", time_col="year")
     assert len(specs) == 2
     assert {s.weight_col for s in specs} == {"population", None}
 
@@ -239,7 +236,7 @@ def test_unknown_clustering_column_still_fails_loud():
     clustering = next(a for a in args["axes"] if a["axis_name"] == "clustering")  # type: ignore[index]
     clustering["baseline_level"] = "hayali_kolon"
 
-    with pytest.raises(ValueError, match="Invalid clustering column"):
+    with pytest.raises(ValueError, match="Geçersiz clustering kolonu"):
         freeze_spec_menu(
             SpecMenuProposal(**args),
             available_columns=_MENU_COLUMNS,
@@ -264,6 +261,89 @@ def test_defensibility_gate_blocks_invalid_proposal():
     assert not ok
     assert spec_count == 0
     assert any("baseline" in reason.lower() for reason in reasons)
+
+
+def test_defensibility_gate_blocks_missing_axis():
+    args = _menu_proposal_args()
+    axes = args["axes"]
+    args["axes"] = [axis for axis in axes if axis["axis_name"] != "sample"]  # type: ignore[index]
+
+    proposal = SpecMenuProposal(**args)
+    ok, reasons, spec_count = evaluate_menu_defensibility(
+        proposal,
+        available_columns=_MENU_COLUMNS,
+        outcome="uninsured_rate",
+        treatment="expanded",
+        unit_col="state",
+        time_col="year",
+    )
+
+    assert not ok
+    assert spec_count == 0
+    assert any("sample ekseni eksik." == reason for reason in reasons)
+
+
+def test_defensibility_gate_blocks_unsupported_estimator():
+    args = _menu_proposal_args()
+    estimator = next(a for a in args["axes"] if a["axis_name"] == "estimator")  # type: ignore[index]
+    estimator["baseline_level"] = "IV"
+
+    proposal = SpecMenuProposal(**args)
+    ok, reasons, spec_count = evaluate_menu_defensibility(
+        proposal,
+        available_columns=_MENU_COLUMNS,
+        outcome="uninsured_rate",
+        treatment="expanded",
+        unit_col="state",
+        time_col="year",
+    )
+
+    assert not ok
+    assert spec_count == 0
+    assert any("Desteklenmeyen kestirici" in reason for reason in reasons)
+
+
+def test_defensibility_gate_blocks_missing_bound_columns():
+    proposal = SpecMenuProposal(**_menu_proposal_args())
+
+    ok, reasons, spec_count = evaluate_menu_defensibility(
+        proposal,
+        available_columns=_MENU_COLUMNS,
+        outcome=None,
+        treatment="expanded",
+        unit_col="state",
+        time_col="year",
+    )
+
+    assert not ok
+    assert spec_count == 0
+    assert any("Outcome kolon adı zorunludur." == reason for reason in reasons)
+
+
+def test_defensibility_gate_happy_path_matches_real_expansion_count():
+    proposal = SpecMenuProposal(**_menu_proposal_args())
+
+    ok, reasons, spec_count = evaluate_menu_defensibility(
+        proposal,
+        available_columns=_MENU_COLUMNS,
+        outcome="uninsured_rate",
+        treatment="expanded",
+        unit_col="state",
+        time_col="year",
+    )
+
+    frozen = freeze_spec_menu(proposal, available_columns=_MENU_COLUMNS, approved=True)
+    expanded = expand_to_specs(
+        frozen,
+        outcome="uninsured_rate",
+        treatment="expanded",
+        unit_col="state",
+        time_col="year",
+    )
+
+    assert ok
+    assert reasons == []
+    assert spec_count == len(expanded)
 
 
 def test_freeze_spec_menu_rejects_unapproved():
