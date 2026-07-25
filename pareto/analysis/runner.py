@@ -23,7 +23,8 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from shutil import copy2
+from shutil import copy2, rmtree
+from tempfile import mkdtemp
 
 import pandas as pd
 
@@ -80,21 +81,64 @@ class RunHandle:
         return [EstimationResult(**r) for r in raw]
 
     def read_stderr(self) -> str:
-        if self.process.stderr is None:
-            return ""
-        return self.process.stderr.read() or ""
+        stderr_path = self.run_dir / "stderr.log"
+        return stderr_path.read_text(encoding="utf-8") if stderr_path.exists() else ""
 
     def is_done(self) -> bool:
         return self.process.poll() is not None
 
 
-def _mirror_latest_run(run_dir: Path) -> None:
+def _mirror_latest_run(run_dir: Path, *, include_panel: bool = True) -> None:
+    """Publish a complete run snapshot without mixing files from separate runs.
+
+    NEDEN except-tipine göre dallanmıyoruz: os.replace() bir dizinin üzerine
+    boş-olmayan bir hedef dizin varken yazamaz — ama bu kısıtlama yalnızca
+    Windows'a özgü değil. POSIX'te de rename(2) ENOTEMPTY ile düz bir OSError
+    fırlatır (FileExistsError/PermissionError DEĞİL), bu yüzden istisna tipine
+    dayanan bir ayrım her platformda güvenilir değildir. Bunun yerine
+    latest_dir'in var olup olmadığına bakıyoruz: varsa, eskisini kenara alıp
+    yenisini takas ediyor, sonra eskisini siliyoruz. Her adımda latest_dir ya
+    eski tam snapshot'ı ya da yeni tam snapshot'ı gösterir — asla karışık
+    dosya seti veya "kayıp" dizin göstermez.
+    """
     latest_dir = Path(SETTINGS.runs_dir) / "latest"
-    latest_dir.mkdir(parents=True, exist_ok=True)
-    for name in ("panel.pkl", "specs.json", "progress.json", "results.json"):
+    latest_dir.parent.mkdir(parents=True, exist_ok=True)
+    temp_dir = Path(mkdtemp(prefix=".latest-", dir=latest_dir.parent))
+    names = ["specs.json", "progress.json", "results.json"]
+    if include_panel:
+        names.insert(0, "panel.pkl")
+    for name in names:
         source = run_dir / name
         if source.exists():
-            copy2(source, latest_dir / name)
+            copy2(source, temp_dir / name)
+
+    if not latest_dir.exists():
+        # İlk run: hedef yok, doğrudan atomik takas yeterli.
+        os.replace(temp_dir, latest_dir)
+        return
+
+    # latest_dir zaten var (ilk run'dan sonra her zaman non-empty). Eskisini
+    # kenara taşı, yenisini yerine koy, sonra eskisini sil. Ara adımlarda bile
+    # latest_dir ya eski ya da yeni tam snapshot'ı gösterir.
+    backup_dir = Path(mkdtemp(prefix=".latest-old-", dir=latest_dir.parent))
+    backup_dir.rmdir()
+    os.replace(latest_dir, backup_dir)
+    try:
+        os.replace(temp_dir, latest_dir)
+    except OSError:
+        # Takas başarısız oldu: latest_dir'i asla kayıp bırakma, eskisini geri koy.
+        os.replace(backup_dir, latest_dir)
+        raise
+    else:
+        rmtree(backup_dir, ignore_errors=True)
+    finally:
+        if temp_dir.exists():
+            rmtree(temp_dir, ignore_errors=True)
+
+
+def _cleanup_panel_pickles(run_dir: Path) -> None:
+    """Drop the raw panel once the completed run no longer needs it."""
+    (run_dir / "panel.pkl").unlink(missing_ok=True)
 
 
 def launch_multiverse(df: pd.DataFrame, specs: list[Specification], run_id: str) -> RunHandle:
@@ -109,13 +153,14 @@ def launch_multiverse(df: pd.DataFrame, specs: list[Specification], run_id: str)
     _mirror_latest_run(run_dir)
 
     env = {**os.environ, **SETTINGS.deterministic_env}
-    proc = subprocess.Popen(  # noqa: S603  # sabit argüman listesi, shell yok; girdi kullanıcıdan gelmez
-        [sys.executable, "-m", "pareto.analysis.runner", "--job", str(run_dir)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=env,
-    )
+    with (run_dir / "stderr.log").open("w", encoding="utf-8") as stderr_log:
+        proc = subprocess.Popen(  # noqa: S603  # sabit argüman listesi, shell yok; girdi kullanıcıdan gelmez
+            [sys.executable, "-m", "pareto.analysis.runner", "--job", str(run_dir)],
+            stdout=subprocess.DEVNULL,
+            stderr=stderr_log,
+            text=True,
+            env=env,
+        )
     return RunHandle(run_dir=run_dir, process=proc)
 
 
@@ -130,14 +175,14 @@ def _run_job(run_dir: Path) -> None:
 
     def _write_progress(done: int, total: int, _res: EstimationResult) -> None:
         progress_path.write_text(json.dumps({"done": done, "total": total}), encoding="utf-8")
-        _mirror_latest_run(run_dir)
 
     results = run_specs(df, specs, on_progress=_write_progress)
     (run_dir / "results.json").write_text(
         json.dumps([r.model_dump() for r in results], ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    _mirror_latest_run(run_dir)
+    _mirror_latest_run(run_dir, include_panel=False)
+    _cleanup_panel_pickles(run_dir)
 
 
 def _cli() -> None:

@@ -206,6 +206,18 @@ def test_clustering_none_level_freezes_instead_of_failing():
     assert frozen_menu.menu.clustering_levels == (None,)
 
 
+def test_freeze_spec_menu_rejects_explicit_empty_active_axes() -> None:
+    proposal = SpecMenuProposal(**_menu_proposal_args())
+
+    with pytest.raises(ValueError, match="At least one active axis"):
+        freeze_spec_menu(
+            proposal,
+            available_columns=_MENU_COLUMNS,
+            approved=True,
+            active_axes=(),
+        )
+
+
 def test_clustering_axis_expands_none_and_column_as_two_specs():
     # NEDEN: kümeleme seçimi bir varyans ekseni; "none" ile kolon aynı spec'e çökerse
     # panel bu ekseni hiç ölçemez.

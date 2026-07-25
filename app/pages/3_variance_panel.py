@@ -19,6 +19,9 @@ import streamlit as st
 
 from pareto.analysis.event_study import estimate_pretrend_event_study
 from pareto.analysis.event_study_columns import (
+    EventStudyPayloadResult,
+)
+from pareto.analysis.event_study_columns import (
     event_study_cache_key as _event_study_cache_key,
 )
 from pareto.analysis.event_study_columns import (
@@ -36,7 +39,11 @@ with st.sidebar:
 st.title("📊 3 · Varyans Paneli")
 st.caption("Tek kesin cevap yok; savunulabilir seçimler menüsü ve her birinin sonucu.")
 
-results_path = st.text_input("Sonuç dosyası", value="runs/latest/results.json")
+# local-only: dosya sistemi erişimi güvenilir ortamda varsayılır.
+results_path = st.text_input(
+    "Sonuç dosyası",
+    value=st.session_state.get("multiverse_results_path", "runs/latest/results.json"),
+)
 if not Path(results_path).exists():
     st.warning(f"Sonuç dosyası yok: {results_path}. Önce multiverse runner koş.")
     st.stop()
@@ -52,7 +59,7 @@ else:
     specs = []
 
 
-def _build_event_study_payload() -> dict[str, object] | None:
+def _build_event_study_payload() -> EventStudyPayloadResult | None:
     df = st.session_state.get("clean_df")
     if df is None:
         return None
@@ -87,7 +94,7 @@ def _build_event_study_payload() -> dict[str, object] | None:
     never_treated_col = _infer_column(df, "never_treated", "never_treat", "untreated", "control")
     never_treated_source = "inferred" if never_treated_col else "unknown"
 
-    controls = analysis_state.get("controls") or []
+    controls = tuple(str(control) for control in (analysis_state.get("controls") or []))
 
     if not outcome_col or not unit_col or not time_col:
         return {
@@ -96,9 +103,7 @@ def _build_event_study_payload() -> dict[str, object] | None:
         }
 
     return {
-        "status": "needs_selection"
-        if not cohort_col or not never_treated_col
-        else "pending_columns",
+        "status": "pending_columns",
         "outcome_col": outcome_col,
         "unit_col": unit_col,
         "time_col": time_col,
@@ -289,21 +294,19 @@ payload = _build_event_study_payload()
 event_study = None
 if payload is None:
     st.info("Pre-trend görseli için temizlenmiş veri seti yok.")
-elif payload.get("status") == "skipped":
-    st.info(payload.get("reason", "Pre-trend görseli için gerekli veri yok."))
-elif payload.get("status") in {"pending_columns", "needs_selection"}:
-    sources = payload.get("sources", {})
+elif payload["status"] == "skipped":
+    st.info(payload["reason"])
+else:
+    sources = payload["sources"]
     st.caption(
         "Kullanılacak kolonlar → "
         f"outcome: `{payload['outcome_col']}` ({sources.get('outcome_col', 'unknown')}), "
         f"unit: `{payload['unit_col']}` ({sources.get('unit_col', 'unknown')}), "
         f"time: `{payload['time_col']}` ({sources.get('time_col', 'unknown')})"
     )
-    column_options = list(
-        payload.get("column_options", [str(col) for col in st.session_state["clean_df"].columns])
-    )
-    cohort_col = payload.get("cohort_col")
-    never_treated_col = payload.get("never_treated_col")
+    column_options = payload["column_options"]
+    cohort_col = payload["cohort_col"]
+    never_treated_col = payload["never_treated_col"]
 
     if cohort_col is None:
         cohort_choice = st.selectbox(
@@ -358,7 +361,10 @@ elif payload.get("status") in {"pending_columns", "needs_selection"}:
         if cached_key == cache_key:
             event_study = st.session_state.get("_event_study_cache")
 
-        if st.button("Bu kolonlarla pre-trend hesapla"):
+        if not treated_cohort_selection:
+            st.info("Pre-trend hesabı için en az bir treated cohort seçin.")
+
+        if st.button("Bu kolonlarla pre-trend hesapla", disabled=not treated_cohort_selection):
             try:
                 event_study = estimate_pretrend_event_study(
                     st.session_state["clean_df"],
@@ -368,11 +374,11 @@ elif payload.get("status") in {"pending_columns", "needs_selection"}:
                     cohort_col=str(cohort_col),
                     never_treated_col=str(never_treated_col),
                     controls=payload["controls"],
-                    treated_cohorts=tuple(treated_cohort_selection) or None,
+                    treated_cohorts=tuple(treated_cohort_selection),
                 )
                 st.session_state["_event_study_cache"] = event_study
                 st.session_state["_event_study_cache_key"] = cache_key
-            except Exception as exc:  # noqa: BLE001
+            except ValueError as exc:
                 st.session_state["_event_study_cache"] = {"status": "failed", "error": str(exc)}
                 st.session_state["_event_study_cache_key"] = cache_key
 

@@ -538,7 +538,7 @@ def freeze_spec_menu(
     *,
     available_columns: list[str],
     approved: bool,
-    active_axes: tuple[AxisName, ...] = (),
+    active_axes: tuple[AxisName, ...] | None = None,
 ) -> FrozenSpecMenu:
     if proposal.needs_clarification:
         raise ValueError(proposal.clarification_question or "Clarification required")
@@ -553,7 +553,9 @@ def freeze_spec_menu(
         raise ValueError("; ".join(reasons))
 
     menu = spec_menu_proposal_to_menu(proposal, available_columns=available_columns)
-    if active_axes:
+    if active_axes == ():
+        raise ValueError("At least one active axis must be selected")
+    if active_axes is not None:
         menu = menu.model_copy(update={"active_axes": active_axes})
     return FrozenSpecMenu(menu=menu, menu_hash=_menu_hash(menu))
 

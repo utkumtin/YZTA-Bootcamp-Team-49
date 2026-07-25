@@ -154,3 +154,31 @@ def test_variance_panel_invalidates_cached_pretrend_when_treated_cohort_changes(
 
     assert any("Hesaplamak için butona basın." in info.value for info in app.info)
     assert len(app.get("plotly_chart")) == 1
+
+
+def test_variance_panel_skips_pretrend_when_required_columns_are_missing(tmp_path: Path) -> None:
+    app = AppTest.from_file(PAGE_PATH, default_timeout=10)
+    app.session_state["clean_df"] = pd.DataFrame({"unit": ["u1"], "year": [2014]})
+
+    _load_variance_panel(app, _results_file(tmp_path))
+
+    assert any(
+        "required columns for pre-trend diagnostic are missing" in info.value for info in app.info
+    )
+
+
+def test_variance_panel_warns_when_pretrend_estimation_fails(tmp_path: Path) -> None:
+    app = AppTest.from_file(PAGE_PATH, default_timeout=10)
+    panel = _panel_with_explicit_cohort()
+    panel["never_treated"] = False
+    app.session_state["clean_df"] = panel
+    app.session_state["frozen_estimand"] = _frozen_estimand()
+
+    _load_variance_panel(app, _results_file(tmp_path))
+    button = next(
+        button for button in app.button if button.label == "Bu kolonlarla pre-trend hesapla"
+    )
+    button.click()
+    app.run()
+
+    assert any("Pre-trend görseli hazırlanamadı" in warning.value for warning in app.warning)
