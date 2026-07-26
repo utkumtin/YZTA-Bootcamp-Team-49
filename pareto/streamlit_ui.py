@@ -346,6 +346,7 @@ def render_settings_panel() -> None:
     provider = stored or default_provider
 
     _render_route_strip(privacy, provider, slots_by_provider[provider])
+    _render_privacy_note(privacy)
 
     col_rail, col_detail = st.columns([1, 1.9], gap="medium")
     with col_rail:
@@ -394,6 +395,59 @@ def _render_route_strip(privacy: PrivacyMode, provider: str, slot: ModelSlot) ->
         '<div class="pa-route"><span class="pa-route-eyebrow">Etkin rota</span>'
         f"{arrow.join(parts)}</div>"
     )
+
+
+# Gizlilik notunun metni. Her modda geçerli olan kısım ortak; ilk cümle moda özgü,
+# çünkü kullanıcıya asıl lazım olan şey seçtiği modun ne vaat ettiği. Ortak kısımda
+# "ham satırlar gönderilmez" iddiasının yanına gerçek veri değerlerinin nerede
+# göründüğü de yazılıyor: eksik anlatılan bir garanti, olmayan bir garantiden daha
+# yanıltıcı olur.
+_PRIVACY_NOTE_BY_MODE: dict[PrivacyMode, str] = {
+    PrivacyMode.PRIVATE: (
+        "Özel modda istek yalnız eğitim yapmayan uçlara kurulur. Uygun anahtar yoksa "
+        "uygulama ücretsiz uca düşmez, açık hata verir."
+    ),
+    PrivacyMode.PUBLIC: (
+        "Herkese açık modda ücretsiz uçlar da kullanılabilir; sağlayıcı gönderilen özeti "
+        "model eğitiminde kullanabilir. Yayımlanmamış veya hassas veri için özel moda geçin."
+    ),
+}
+
+_PRIVACY_NOTE_COMMON: tuple[str, ...] = (
+    "Modele yalnız kolon düzeyinde özet gider: veri tipi, eksik oranı, benzersiz değer "
+    "sayısı, sayısal kolonlarda en küçük, en büyük, ortalama ve standart sapma, kategorik "
+    "kolonlarda en sık görülen beş değer. Ham satırlar gönderilmez.",
+    "En sık görülen değerler ile en küçük ve en büyük değerler verinizden birebir alınır; "
+    "bu yüzden kişiyi tanımlayabilecek mikro veri yüklemeyin.",
+    "Anahtarlar yalnız oturum belleğinde tutulur, diske yazılmaz. Karar defteri, üretilen "
+    "kod ve sonuçlar yerel çalışma dizinine yazılır, dışarıya gönderilmez.",
+)
+
+
+def _privacy_note_lines(privacy: PrivacyMode) -> tuple[str, ...]:
+    """Seçili moda göre gizlilik notunun satırları.
+
+    Metin render'dan ayrı duruyor: notun modla birlikte gerçekten değişip değişmediği
+    (özel modda zorlama, herkese açık modda eğitim uyarısı) Streamlit çalıştırmadan
+    test edilebilsin.
+    """
+    return (_PRIVACY_NOTE_BY_MODE[privacy], *_PRIVACY_NOTE_COMMON)
+
+
+def _render_privacy_note(privacy: PrivacyMode) -> None:
+    """Rota şeridinin altındaki kapalı gizlilik notu.
+
+    Yeri bilinçli: kullanıcı hangi ucun çalışacağını şeritte görüyor, not da o ucun
+    veriye ne yaptığını söylüyor. Kapalı açılır kutu, ayar akışını bölmeden okunabilir
+    kalmasını sağlıyor.
+    """
+    with st.expander(
+        "Bu modda verinize ne oluyor?",
+        icon=":material/shield:",
+        key="privacy_note_expander",  # key olmadan her rerun'da (mod değişimi dahil) kapanır
+    ):
+        for line in _privacy_note_lines(privacy):
+            st.markdown(f"- {line}")
 
 
 def _render_provider_rail(slots_by_provider: dict[str, ModelSlot], default_provider: str) -> str:

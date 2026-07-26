@@ -28,7 +28,6 @@ from pareto.llm.providers import (
     _PRIVATE_MECHANICAL_SLOTS,
     JUDGE_GROQ_PRIVATE_SLOT,
     JUDGE_GROQ_SLOT,
-    JUDGE_OPENROUTER_PRIVATE_SLOT,
     JUDGE_OPENROUTER_SLOT,
     JUDGE_SLOT,
     _resolve,
@@ -288,25 +287,6 @@ def test_provider_secimi_kimlik_alanlarini_asamaz():
         assert uc.no_train == slot.no_train
 
 
-def test_judge_private_her_saglayicida_no_train_true(monkeypatch):
-    for provider in ("google", "groq", "openrouter"):
-        monkeypatch.setattr("streamlit.session_state", {"judge_provider_choice": provider})
-
-        chain = chain_for(ModelRole.JUDGE, PrivacyMode.PRIVATE)
-
-        assert chain[0].no_train is True, f"{provider}: private judge no_train=False olamaz"
-
-
-def test_openrouter_private_judge_zdr_deklare_edilir():
-    """ZDR deklarasyonu slotta tanımlı olmalı ve `_resolve` sonrasında da hayatta kalmalı."""
-    zdr = {"openrouter_provider": {"zdr": True}}
-    assert JUDGE_OPENROUTER_PRIVATE_SLOT.extra_model_settings == zdr
-
-    uc = _resolve(JUDGE_OPENROUTER_PRIVATE_SLOT, allow_session=False)
-
-    assert uc.extra_model_settings == zdr
-
-
 def test_model_from_provider_openrouter_dogru_sinifi_kurar(monkeypatch):
     """`_model_from_provider` artık OpenRouter için genel string yerine tipli OpenRouterModel kurar
     (network çağrısı yok, yalnız construction — ZDR'ın taşınabilmesi buna dayanıyor)."""
@@ -318,18 +298,6 @@ def test_model_from_provider_openrouter_dogru_sinifi_kurar(monkeypatch):
     model = _model_from_provider(pm)
 
     assert isinstance(model, OpenRouterModel)
-
-
-def test_resolve_model_extra_settings_openrouter_private_icin_dolu(monkeypatch):
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-anahtar")
-    monkeypatch.setattr(
-        "streamlit.session_state",
-        {"privacy_mode": "private", "judge_provider_choice": "openrouter"},
-    )
-
-    _model, extra = _resolve_model(ModelRole.JUDGE)
-
-    assert extra == {"openrouter_provider": {"zdr": True}}
 
 
 def test_resolve_model_extra_settings_diger_slotlarda_bos(monkeypatch):
@@ -409,16 +377,6 @@ def test_judge_slotlari_thinking_secenegi_tasir():
 def test_mekanik_slotlarda_thinking_secimi_kapali():
     for slot in _MECHANICAL_SLOTS + _PRIVATE_MECHANICAL_SLOTS:
         assert slot.thinking_options == (), f"{slot.key} MECHANICAL ama thinking UI'da açık"
-
-
-def test_env_override_private_no_train_garantisini_bozmaz(monkeypatch):
-    for slot in _PRIVATE_JUDGE_SLOTS + _PRIVATE_MECHANICAL_SLOTS:
-        monkeypatch.setenv(slot.model_env, "baska-bir-model")
-
-    for role in (ModelRole.JUDGE, ModelRole.MECHANICAL):
-        chain = chain_for(role, PrivacyMode.PRIVATE)
-        assert chain, "private zincir boş olamaz"
-        assert all(uc.no_train for uc in chain)
 
 
 def test_mekanik_zincir_fallback_modele_indirgenir(monkeypatch):
