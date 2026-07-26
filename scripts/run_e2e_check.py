@@ -72,7 +72,9 @@ DATASET = "medicaid"
 RUN_ID = "s2-13-e2e"  # sabit: her koşu aynı çalışma dizinini tazeler, artık birikmez
 MULTIVERSE_TIMEOUT_SECONDS = 900
 MULTIVERSE_POLL_SECONDS = 0.5
-GENERATION_COMMAND = ".venv/bin/python scripts/run_e2e_check.py"
+GENERATION_COMMAND = (
+    ".venv/bin/python scripts/run_e2e_check.py --out docs/verification/s2-13-e2e-check.md"
+)
 
 STATUS_OK = "ok"
 STATUS_FAILED = "failed"
@@ -84,7 +86,7 @@ QUALITY_GATE_COMMANDS = (
     "ruff format --check .",
     "ruff check .",
     "mypy pareto",
-    "pytest -q",
+    'pytest -m "not live"',
 )
 
 
