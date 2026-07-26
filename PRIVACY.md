@@ -26,8 +26,8 @@ modda çalıştırırsanız uygulama sessizce ücretsiz uca geçmez, eksik anaht
 
 ## Modele ne gidiyor
 
-Yüklediğiniz dosyanın ham satırları hiçbir modda modele gönderilmez. Modele giden yük,
-dosyadan deterministik olarak üretilen kolon düzeyinde bir özettir:
+Yüklediğiniz dosyanın ham satırları hiçbir modda modele gönderilmez. Dosyadan modele giden
+yük, deterministik olarak üretilen kolon düzeyinde bir özettir:
 
 - satır ve kolon sayısı, yinelenen satır sayısı, birleştirme anahtarı adayları
 - her kolon için veri tipi, eksik değer sayısı ve oranı, benzersiz değer sayısı
@@ -42,6 +42,13 @@ bir arada dışarı çıkmaz" biçimindedir. Kişiyi tanımlayabilecek mikro ver
 Kolon adları ve örnek değerler kullanıcı verisinden geldiği için modele gönderilmeden
 önce güvenilmez olarak işaretlenir. Bu işaretleme, veriye gömülü bir metnin talimat gibi
 okunma olasılığını azaltır; tek başına yeterli bir savunma değildir.
+
+Yukarıdaki özet yalnız temizleme adımını anlatır. Sonraki adımlar modele veri dosyasından
+değil, sizin yazdıklarınızdan ve deterministik hesap çıktılarından beslenir: estimand
+kurulurken yazdığınız araştırma hikayesi ile Sokratik beyan metni, menü kurulurken
+dondurulmuş estimand ve kolon adları listesi, varyans anlatısı yazılırken çokluevren
+sonuç özeti ve eksen teşhisi. Bunların hiçbiri satır düzeyinde veri taşımaz; ancak serbest
+metin alanlarına kendiniz hassas bir şey yazarsanız o metin modele olduğu gibi gider.
 
 ## Anahtarlar
 
@@ -61,8 +68,8 @@ Model yanıtları, tekrar koşularını hızlandırmak ve ücretsiz katman istek
 için yerel diske önbelleklenir. Önbellek dosyasının adı isteğin özetinden türetilen bir
 karmadır, yani gönderilen istem düz metin olarak saklanmaz; yanıt gövdesi ise düz JSON
 olarak yazılır ve içinde kolon adları ile karar gerekçeleri bulunabilir. Hassas bir
-oturumdan sonra önbellek dizinini silmek istersiniz. Önbellek bir ortam değişkeniyle
-tamamen kapatılabilir.
+oturumdan sonra önbellek dizinini (`runs/llm_cache`) silmek istersiniz. `PARETO_LLM_CACHE=0`
+ortam değişkeni önbelleği tamamen kapatır.
 
 ## Sağlayıcı taahhütleri
 
@@ -73,9 +80,12 @@ tamamen kapatılabilir.
 | Groq | Hesap düzeyinde veri saklamama ayarı | Her iki mod |
 | OpenRouter | İstek düzeyinde sıfır veri saklama zorlaması | Özel modda zorlanır |
 
-Özel modda mekanik çağrılar tek bir uca sabittir ve kullanıcı seçimine açılmaz; bu ucun
-anahtarı dağıtım sahibinin kontrolündedir. Yargı çağrılarında sağlayıcıyı siz seçersiniz,
-ancak seçim yalnız yukarıdaki eğitim yapmayan uçlar arasından yapılabilir.
+Özel modda mekanik çağrılar tek bir uca, Groq'a sabittir ve bu seçim kullanıcıya açılmaz.
+Anahtarı ise ayrı değildir: yargı için Groq seçip kendi anahtarınızı kaydettiyseniz mekanik
+çağrılar da aynı anahtarla, yani sizin hesabınız üzerinden gider. Veri saklamama ayarının
+açık olması gereken hesap da o hesaptır. Anahtarı siz vermediyseniz dağıtımın ortam
+değişkenindeki anahtar kullanılır. Yargı çağrılarında sağlayıcıyı siz seçersiniz, ancak
+seçim yalnız yukarıdaki eğitim yapmayan uçlar arasından yapılabilir.
 
 OpenRouter tarafında ücretsiz uçlar veri saklama konusunda taahhüt vermediği için özel
 modun seçenek listesinde yer almaz.
@@ -107,3 +117,7 @@ koşar:
   yerleştirildiğinde çağrı hata yükseltir.
 - OpenRouter özel ucunda sıfır veri saklama zorlaması istek ayarlarına kadar taşınır.
 - Özel modun seçenek listelerinde ücretsiz uç kimliği bulunmaz.
+- Temizleme adımında modele giden yük, en sık beş değer ile en küçük/en büyük dışında
+  hiçbir hücre değeri taşımaz.
+- Uygulama içindeki gizlilik notu iki modda aynı metni göstermez: özel modda zorlamayı,
+  herkese açık modda eğitim uyarısını söyler.

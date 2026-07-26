@@ -437,6 +437,7 @@ pareto/
   llm/                   # router (PydanticAI), providers (model zincirleri), guardrails (spotlighting)
   memory/store.py        # proje-store / hafıza (disk)
 data/  notebooks/  docs/{adr,scrum}  tests/
+PRIVACY.md               # veri minimizasyonu + no-train yönlendirme: kodun zorladığı vs taahhüde dayanan
 ```
 
 **Stack:** Python · Streamlit (Community Cloud, canned-default + BYOK) · pandas · **pyfixest**
@@ -444,6 +445,11 @@ data/  notebooks/  docs/{adr,scrum}  tests/
 mechanical → Gemini Flash-Lite / Groq failover; `TestModel` for API-free tests) · subprocess
 multiverse runner (seed + `PYTHONHASHSEED` pinned) · uv · ruff · mypy · pre-commit + gitleaks ·
 GitHub Actions. Independent validation via R (`did` / `differences`) in `notebooks/` only.
+
+**Privacy.** [PRIVACY.md](PRIVACY.md) ayırt eder: hangi garanti kodun kendisi tarafından
+zorlanıyor (özel modda no-train yönlendirme, LLM'e yalnız kolon düzeyinde özet) ve hangi
+noktada üçüncü tarafın taahhüdüne güveniliyor. Zorlanan maddelerin her biri
+`tests/test_privacy_routing.py` altında testlidir.
 
 ## Setup
 

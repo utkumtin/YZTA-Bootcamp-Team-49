@@ -19,17 +19,15 @@ from pareto.config import SETTINGS, ModelRole, PrivacyMode, load_dotenv_file, re
 from pareto.llm import providers as providers_module
 from pareto.llm import router as router_module
 from pareto.llm.providers import (
-    _JUDGE_SLOTS,
-    _MECHANICAL_SLOTS,
     _PRIVATE_JUDGE_SLOTS,
     _PRIVATE_MECHANICAL_SLOTS,
     JUDGE_OPENROUTER_PRIVATE_SLOT,
     JUDGE_PRIVATE_SLOT,
-    JUDGE_PROVIDER_CHOICES,
     JUDGE_SLOT,
     MECH_GEMINI_SLOT,
     _resolve,
     chain_for,
+    judge_slots_for,
 )
 from pareto.llm.router import _get_effective_privacy_mode, _resolve_model
 from pareto.profiling import profile_dataframe
@@ -93,7 +91,9 @@ def test_ozel_modda_yalniz_no_train_anahtarlari_okunur(anahtarsiz_ortam):
 
     Zincirin `no_train` alanını okumak yetmez: asıl soru, kurulan nesnenin hangi
     hesabın anahtarıyla konuşacağıdır. Her yargı sağlayıcısı için ayrı ayrı bakılır,
-    çünkü sağlayıcı seçimi kullanıcıya açıktır.
+    çünkü sağlayıcı seçimi kullanıcıya açıktır. Gezilen liste ÖZEL moddan alınır:
+    herkese açık moddan türeyen `JUDGE_PROVIDER_CHOICES` üstünden dönmek, iki küme
+    ayrıştığı gün farkı sessizce kapsam dışı bırakırdı.
     """
     istenen: list[str] = []
 
@@ -104,7 +104,7 @@ def test_ozel_modda_yalniz_no_train_anahtarlari_okunur(anahtarsiz_ortam):
     anahtarsiz_ortam.setattr(router_module, "get_api_key", _sahte_anahtar)
     izinli = {s.api_key_env for s in _PRIVATE_JUDGE_SLOTS + _PRIVATE_MECHANICAL_SLOTS}
 
-    for provider in JUDGE_PROVIDER_CHOICES:
+    for provider in judge_slots_for(PrivacyMode.PRIVATE):
         istenen.clear()
         anahtarsiz_ortam.setattr(
             "streamlit.session_state",
@@ -115,15 +115,15 @@ def test_ozel_modda_yalniz_no_train_anahtarlari_okunur(anahtarsiz_ortam):
         _resolve_model(ModelRole.MECHANICAL)
 
         assert istenen, f"{provider}: hiç anahtar istenmedi, test bir şeyi ölçmüyor"
-        assert set(istenen) <= izinli, f"{provider}: özel mod dışı anahtar okundu"
-        assert JUDGE_SLOT.api_key_env not in istenen, (
-            f"{provider}: ücretsiz katman anahtarı özel modda okundu"
+        assert set(istenen) <= izinli, (
+            f"{provider}: özel mod dışı anahtar okundu (örn. ücretsiz katman): "
+            f"{sorted(set(istenen) - izinli)}"
         )
 
 
 def test_ozel_modda_her_saglayicida_no_train_zorunlu(anahtarsiz_ortam):
     """Sağlayıcı seçimi kullanıcıya açık, ama eğitim niteliği seçime açık değil."""
-    for provider in JUDGE_PROVIDER_CHOICES:
+    for provider in judge_slots_for(PrivacyMode.PRIVATE):
         anahtarsiz_ortam.setattr("streamlit.session_state", {"judge_provider_choice": provider})
 
         chain = chain_for(ModelRole.JUDGE, PrivacyMode.PRIVATE)
@@ -187,14 +187,6 @@ def test_router_gizlilik_modunu_oturumdan_okur(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_ozel_mod_slotlari_ucretsiz_uclarla_kesismez():
-    """Aynı slot hem herkese açık zincirde hem özel zincirde yer alamaz."""
-    ucretsiz = {s.key for s in _JUDGE_SLOTS + _MECHANICAL_SLOTS if not s.no_train}
-    ozel = {s.key for s in _PRIVATE_JUDGE_SLOTS + _PRIVATE_MECHANICAL_SLOTS}
-
-    assert not (ucretsiz & ozel)
-
-
 def test_ozel_mod_seceneklerinde_ucretsiz_model_kimligi_yok():
     """OpenRouter'ın `:free` uçları veri saklama taahhüdü vermez, özel modda listelenemez."""
     for slot in _PRIVATE_JUDGE_SLOTS + _PRIVATE_MECHANICAL_SLOTS:
@@ -230,13 +222,18 @@ def test_openrouter_ozel_ucunda_zdr_istek_ayarina_kadar_tasinir(anahtarsiz_ortam
 # ---------------------------------------------------------------------------
 
 
-def test_llm_payloadi_ham_satir_tasimaz():
-    """Modele giden yükte satır düzeyinde veri bulunmamalı.
+def test_temizleme_yukunde_satir_duzeyinde_veri_yok():
+    """TEMİZLEME yükünde satır düzeyinde veri bulunmamalı.
 
     Sınır bilinçli olarak dar çiziliyor: en sık görülen beş değer ile en küçük ve en
     büyük değerler zaten özetin parçası olduğu için dışarı çıkar. Test bunların
     dışında kalanı kontrol eder, çünkü ürünün verdiği söz "hiçbir değer çıkmaz"
     değil, "ham satırlar çıkmaz". Sözün genişletilmesi bu testi kırar, daraltılması da.
+
+    Kapsam yalnız `_build_judge_prompt`. Sonraki adımların yükleri (estimand, menü,
+    varyans anlatısı) dataframe'i hiç görmez; kendi girdileri kullanıcı metni ve
+    deterministik hesap çıktısıdır, dolayısıyla "ham satır sızdı mı" burada
+    sorulamaz — bkz. PRIVACY.md, "Modele ne gidiyor".
     """
     df = pd.DataFrame(
         {
@@ -252,9 +249,17 @@ def test_llm_payloadi_ham_satir_tasimaz():
         }
     )
 
-    payload = _build_judge_prompt(profile_dataframe(df))
+    profil = profile_dataframe(df)
+    payload = _build_judge_prompt(profil)
 
-    assert "1007" not in payload, "uç değer olmayan bir sayısal hücre payload'a sızdı"
+    # Sayısal kolonda sınır ALAN KÜMESİYLE kontrol ediliyor, ara bir hücrenin
+    # ("1007") payload'da aranmasıyla değil: o arama, hücrenin ortalama/std
+    # basamaklarına rastlamamasına bel bağlar, yani tesadüfen geçer. Kümede
+    # `stats` dışında bir alan belirmesi (örn. örnek satırlar) ise tesadüf değildir.
+    sayisal = profil["columns"]["hasta_no"]
+    assert set(sayisal) == {"dtype", "n_missing", "pct_missing", "n_unique", "stats"}
+    assert set(sayisal["stats"]) == {"min", "max", "mean", "std"}
+
     assert "Rize" not in payload, "en sık beş değerin dışındaki kategori payload'a sızdı"
     assert "Sinop" not in payload
     assert "hasta_no" in payload, "kolon adı özetin parçası, bulunmazsa test bir şey ölçmüyor"

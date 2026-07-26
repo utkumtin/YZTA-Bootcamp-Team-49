@@ -397,6 +397,8 @@ def _render_route_strip(privacy: PrivacyMode, provider: str, slot: ModelSlot) ->
     )
 
 
+_PRIVACY_DOC_URL = "https://github.com/utkumtin/YZTA-Bootcamp-Team-49/blob/main/PRIVACY.md"
+
 # Gizlilik notunun metni. Her modda geçerli olan kısım ortak; ilk cümle moda özgü,
 # çünkü kullanıcıya asıl lazım olan şey seçtiği modun ne vaat ettiği. Ortak kısımda
 # "ham satırlar gönderilmez" iddiasının yanına gerçek veri değerlerinin nerede
@@ -414,13 +416,16 @@ _PRIVACY_NOTE_BY_MODE: dict[PrivacyMode, str] = {
 }
 
 _PRIVACY_NOTE_COMMON: tuple[str, ...] = (
-    "Modele yalnız kolon düzeyinde özet gider: veri tipi, eksik oranı, benzersiz değer "
-    "sayısı, sayısal kolonlarda en küçük, en büyük, ortalama ve standart sapma, kategorik "
-    "kolonlarda en sık görülen beş değer. Ham satırlar gönderilmez.",
+    "Dosyanızdan modele yalnız kolon düzeyinde özet gider: veri tipi, eksik oranı, benzersiz "
+    "değer sayısı, sayısal kolonlarda en küçük, en büyük, ortalama ve standart sapma, "
+    "kategorik kolonlarda en sık görülen beş değer. Ham satırlar gönderilmez.",
     "En sık görülen değerler ile en küçük ve en büyük değerler verinizden birebir alınır; "
     "bu yüzden kişiyi tanımlayabilecek mikro veri yüklemeyin.",
-    "Anahtarlar yalnız oturum belleğinde tutulur, diske yazılmaz. Karar defteri, üretilen "
-    "kod ve sonuçlar yerel çalışma dizinine yazılır, dışarıya gönderilmez.",
+    "Araştırma sorunuz ve Sokratik beyanınız gibi kendi yazdığınız metinler modele olduğu "
+    "gibi gider; sonraki adımlarda gönderilen diğer her şey deterministik hesap çıktısıdır.",
+    "Girdiğiniz anahtarlar yalnız oturum belleğinde tutulur, uygulama bunları diske yazmaz. "
+    "Karar defteri, üretilen kod ve sonuçlar yerel çalışma dizinine yazılır, dışarıya "
+    "gönderilmez.",
 )
 
 
@@ -448,6 +453,9 @@ def _render_privacy_note(privacy: PrivacyMode) -> None:
     ):
         for line in _privacy_note_lines(privacy):
             st.markdown(f"- {line}")
+        # Notun kendisi kısa tutuluyor; sağlayıcı taahhütleri ve neyin GARANTİ EDİLMEDİĞİ
+        # tam metinde. Bağlantı `_privacy_note_lines` dışında, çünkü moda göre değişmiyor.
+        st.caption(f"Tam metin: [PRIVACY.md]({_PRIVACY_DOC_URL})")
 
 
 def _render_provider_rail(slots_by_provider: dict[str, ModelSlot], default_provider: str) -> str:
