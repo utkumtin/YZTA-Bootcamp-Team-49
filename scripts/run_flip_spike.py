@@ -8,9 +8,7 @@ sign, significance, matched-pair, or ANOVA attribution logic.
 from __future__ import annotations
 
 import argparse
-import json
 import platform
-import subprocess
 import sys
 from collections import Counter
 from collections.abc import Iterable, Sequence
@@ -32,6 +30,7 @@ from pareto.analysis.variance import diagnose_axes, summarize  # noqa: E402
 from pareto.config import SETTINGS  # noqa: E402
 from pareto.contracts import EstimationResult  # noqa: E402
 from pareto.spec import SUPPORTED_ESTIMATORS, Specification  # noqa: E402
+from scripts._report import jsonable, platform_name, source_commit, write_report  # noqa: E402
 
 DATASETS = ("divorce", "castle")
 TREATMENT_DUMMY_LOGICAL_NAMES = ("post", "treated")
@@ -196,18 +195,6 @@ def build_spike_specs(dataset: str, config: dict[str, Any]) -> list[Specificatio
     return specs
 
 
-def _jsonable(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {str(key): _jsonable(val) for key, val in value.items()}
-    if isinstance(value, tuple):
-        return [_jsonable(item) for item in value]
-    if isinstance(value, list):
-        return [_jsonable(item) for item in value]
-    if value is None or isinstance(value, str | int | float | bool):
-        return value
-    return str(value)
-
-
 def spec_to_report(spec: Specification) -> dict[str, Any]:
     return {
         "spec_id": spec.spec_id,
@@ -365,7 +352,7 @@ def dataset_report(
     diagnosis = diagnose_axes(list(results), list(specs))
     decision = _dataset_decision(results, diagnosis)
 
-    return _jsonable(
+    return jsonable(
         {
             **base,
             "dry_run": False,
@@ -441,36 +428,17 @@ def _spec_count_summary(dataset_reports: Sequence[dict[str, Any]]) -> dict[str, 
     }
 
 
-def _source_commit(repo_root: Path = REPO_ROOT) -> str:
-    try:
-        completed = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            cwd=repo_root,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except (OSError, subprocess.CalledProcessError):
-        return "unknown"
-    return completed.stdout.strip() or "unknown"
-
-
-def _platform_name() -> str:
-    system = platform.system()
-    return "macOS" if system == "Darwin" else system or "unknown"
-
-
 def _report_provenance(repo_root: Path = REPO_ROOT) -> dict[str, str]:
     # No timestamp here: the committed spike report should be reproducible byte-for-byte
     # when code, data, and commit are unchanged.
-    source_commit = _source_commit(repo_root=repo_root)
+    commit = source_commit(repo_root=repo_root)
     return {
         "generation_command": GENERATION_COMMAND,
-        "source_commit": source_commit,
+        "source_commit": commit,
         "python": platform.python_version(),
-        "platform": _platform_name(),
+        "platform": platform_name(),
         "analysis_core": (
-            f"pareto.analysis.variance.summarize and diagnose_axes at source commit {source_commit}"
+            f"pareto.analysis.variance.summarize and diagnose_axes at source commit {commit}"
         ),
     }
 
@@ -521,7 +489,7 @@ def run_spike(dataset: str, *, dry_run: bool, repo_root: Path = REPO_ROOT) -> di
         "datasets": reports,
     }
     report["overall_decision"] = _overall_decision(reports)
-    return _jsonable(report)
+    return jsonable(report)
 
 
 def _format_rate(value: Any) -> str:
@@ -656,17 +624,6 @@ def render_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def write_report(report: dict[str, Any], out_path: Path) -> None:
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    if out_path.suffix == ".json":
-        out_path.write_text(
-            json.dumps(report, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-    else:
-        out_path.write_text(render_markdown(report), encoding="utf-8")
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run Pareto S2-15 flip spike")
     parser.add_argument("--dataset", choices=(*DATASETS, "all"), default="all")
@@ -679,7 +636,7 @@ def main() -> None:
     args = parse_args()
     report = run_spike(args.dataset, dry_run=args.dry_run)
     if args.out:
-        write_report(report, Path(args.out))
+        write_report(report, Path(args.out), render=render_markdown)
     else:
         print(render_markdown(report), end="")
 
