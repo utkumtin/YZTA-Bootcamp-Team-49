@@ -264,80 +264,91 @@ def test_unknown_clustering_column_still_fails_loud():
         )
 
 
-def test_defensibility_gate_blocks_invalid_proposal():
-    args = _menu_proposal_args()
-    args["axes"][0]["baseline_level"] = ""
+# Kapının geçtiği referans bağlama. Her red testi önce bu bağlamayla geçtiğini
+# doğrular, sonra tek bir kusur enjekte eder: böylece test kapının O kusuru
+# yakaladığını kanıtlar, gerekçe metnini değil.
+_VALID_BINDINGS: dict[str, object] = {
+    "outcome": "uninsured_rate",
+    "treatment": "expanded",
+    "unit_col": "state",
+    "time_col": "year",
+}
 
-    proposal = SpecMenuProposal(**args)
-    ok, reasons, spec_count = evaluate_menu_defensibility(
-        proposal,
+
+def _gate(args: dict[str, object], **binding_overrides: object):
+    return evaluate_menu_defensibility(
+        SpecMenuProposal(**args),
         available_columns=_MENU_COLUMNS,
-        outcome="uninsured_rate",
-        treatment="expanded",
-        unit_col="state",
-        time_col="year",
+        **{**_VALID_BINDINGS, **binding_overrides},  # type: ignore[arg-type]
     )
 
-    assert not ok
+
+def test_defensibility_gate_blocks_empty_baseline_level():
+    """Baseline, multiverse'ün etrafında döndüğü taahhüt edilmiş spesifikasyon.
+
+    Boş bırakılırsa "ana sonuç hangisi" sorusunun cevabı kalmaz ve eğri
+    savunulabilirliğini yitirir; kapı bu yüzden var.
+    """
+    args = _menu_proposal_args()
+    assert _gate(args)[0] is True
+
+    args["axes"][0]["baseline_level"] = ""  # type: ignore[index]
+    ok, reasons, spec_count = _gate(args)
+
+    assert ok is False
     assert spec_count == 0
-    assert any("baseline" in reason.lower() for reason in reasons)
+    assert len(reasons) == 1
 
 
 def test_defensibility_gate_blocks_missing_axis():
+    """Zorunlu eksenlerden biri düşerse menü o varyans kaynağını hiç ölçemez.
+
+    Kapı eksik ekseni geçirirse panel eksiksiz görünen ama bir ekseni kör olan
+    bir eğri üretir — sessiz kayıp, bu yüzden başlamadan durdurulur.
+    """
     args = _menu_proposal_args()
-    axes = args["axes"]
-    args["axes"] = [axis for axis in axes if axis["axis_name"] != "sample"]  # type: ignore[index]
+    assert _gate(args)[0] is True
 
-    proposal = SpecMenuProposal(**args)
-    ok, reasons, spec_count = evaluate_menu_defensibility(
-        proposal,
-        available_columns=_MENU_COLUMNS,
-        outcome="uninsured_rate",
-        treatment="expanded",
-        unit_col="state",
-        time_col="year",
-    )
+    args["axes"] = [axis for axis in args["axes"] if axis["axis_name"] != "sample"]  # type: ignore[index,union-attr]
+    ok, reasons, spec_count = _gate(args)
 
-    assert not ok
+    assert ok is False
     assert spec_count == 0
-    assert any("sample ekseni eksik." == reason for reason in reasons)
+    assert len(reasons) == 1
 
 
 def test_defensibility_gate_blocks_unsupported_estimator():
+    """Desteklenmeyen kestirici kapıdan geçerse hata multiverse koşusunda patlar.
+
+    Kapı bunu önden yakalamazsa kullanıcı N spesifikasyonluk bir koşuyu
+    başlatıp sonuçların tamamının başarısız olduğunu görür.
+    """
     args = _menu_proposal_args()
-    estimator = next(a for a in args["axes"] if a["axis_name"] == "estimator")  # type: ignore[index]
+    assert _gate(args)[0] is True
+
+    estimator = next(a for a in args["axes"] if a["axis_name"] == "estimator")  # type: ignore[index,union-attr]
     estimator["baseline_level"] = "IV"
+    ok, reasons, spec_count = _gate(args)
 
-    proposal = SpecMenuProposal(**args)
-    ok, reasons, spec_count = evaluate_menu_defensibility(
-        proposal,
-        available_columns=_MENU_COLUMNS,
-        outcome="uninsured_rate",
-        treatment="expanded",
-        unit_col="state",
-        time_col="year",
-    )
-
-    assert not ok
+    assert ok is False
     assert spec_count == 0
-    assert any("Desteklenmeyen kestirici" in reason for reason in reasons)
+    assert len(reasons) == 1
 
 
 def test_defensibility_gate_blocks_missing_bound_columns():
-    proposal = SpecMenuProposal(**_menu_proposal_args())
+    """Menü geçerli olsa da bağlanacak kolon yoksa spesifikasyon üretilemez.
 
-    ok, reasons, spec_count = evaluate_menu_defensibility(
-        proposal,
-        available_columns=_MENU_COLUMNS,
-        outcome=None,
-        treatment="expanded",
-        unit_col="state",
-        time_col="year",
-    )
+    Kapı yalnız öneriye bakıp geçirirse `expand_to_specs` boş outcome ile
+    çağrılır; hata kullanıcıya kapıda değil, koşu ortasında görünür.
+    """
+    args = _menu_proposal_args()
+    assert _gate(args)[0] is True
 
-    assert not ok
+    ok, reasons, spec_count = _gate(args, outcome=None)
+
+    assert ok is False
     assert spec_count == 0
-    assert any("Outcome kolon adı zorunludur." == reason for reason in reasons)
+    assert len(reasons) == 1
 
 
 def test_defensibility_gate_happy_path_matches_real_expansion_count():

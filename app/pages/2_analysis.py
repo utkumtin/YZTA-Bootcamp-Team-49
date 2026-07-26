@@ -27,7 +27,7 @@ from pareto.analysis.menu import (
     validate_spec_menu_to_specs,
 )
 from pareto.analysis.runner import launch_multiverse
-from pareto.memory.store import ProjectStore
+from pareto.memory.frozen_menu import build_frozen_menu_record, save_frozen_menu_record
 from pareto.streamlit_ui import render_compact_sidebar
 
 # -------------------------------------------------
@@ -41,24 +41,23 @@ with st.sidebar:
 st.title("2 - Analiz (v2)")
 
 
-def _project_store() -> ProjectStore:
-    project_id = st.session_state.get("multiverse_run_id")
-    return ProjectStore(project_id=str(project_id or "analysis"))
+def _persist_frozen_menu(*, frozen_estimand, frozen_menu, specs, run_id: str) -> None:
+    """Provenance kaydını koşunun kendi kapsamına yazar.
 
-
-def _persist_frozen_menu(*, frozen_estimand, frozen_menu, specs, run_id: str | None = None) -> None:
-    store = _project_store()
-    store.save(
-        "frozen_menu",
-        {
-            "estimand_hash": frozen_estimand.freeze_hash,
-            "menu_hash": frozen_menu.menu_hash,
-            "spec_count": len(specs),
-            "run_id": run_id,
-            "estimand": frozen_estimand.estimand.model_dump(),
-            "menu": frozen_menu.model_dump(),
-        },
+    Kapsam koşu kimliğidir: kayıt yalnız bu koşuyu tarif eder ve varyans paneli
+    onu bakılan koşunun kimliğiyle arar. Daha önce kimlik oturumdan okunuyor ve
+    yoksa paylaşılan bir kovaya düşülüyordu; tek çağrı yolunda kimlik zaten
+    hazır olduğu için açık parametre hem fallback'i hem de belirsizliği kaldırır.
+    """
+    record = build_frozen_menu_record(
+        estimand_hash=frozen_estimand.freeze_hash,
+        menu_hash=frozen_menu.menu_hash,
+        spec_count=len(specs),
+        run_id=run_id,
+        estimand=frozen_estimand.estimand.model_dump(),
+        menu=frozen_menu.model_dump(),
     )
+    save_frozen_menu_record(run_id, record)
 
 
 @st.fragment(run_every="1s")

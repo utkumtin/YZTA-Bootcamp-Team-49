@@ -107,9 +107,11 @@ def build_event_study_payload(
     controls = tuple(str(control) for control in (state.get("controls") or []))
 
     if not outcome_col or not unit_col or not time_col:
+        # Bu metin panelde doğrudan kullanıcıya basılıyor; arayüzün geri kalanı
+        # gibi Türkçe olmalı.
         return {
             "status": "skipped",
-            "reason": "required columns for pre-trend diagnostic are missing",
+            "reason": "Pre-trend teşhisi için gerekli kolonlar eksik.",
         }
 
     return {

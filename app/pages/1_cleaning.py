@@ -30,36 +30,6 @@ with st.sidebar:
 
 st.title("1 - Temizleme")
 
-# JUDGE turuna bağlı dinamik widget anahtarlarının prefix'leri. Anahtarlar
-# `{prefix}{run_id}_{i}` biçiminde üretiliyor (bkz. `st.radio`/`st.text_area`/
-# `st.button` çağrıları aşağıda), yani her yeni turda erişilemez hale geliyorlar.
-_DYNAMIC_WIDGET_KEY_PREFIXES = ("resolution_choice_", "params_edit_", "confirm_")
-
-
-def _purge_dynamic_widget_keys() -> None:
-    """Erişilemez hale gelmiş JUDGE widget anahtarlarını session'dan siler.
-
-    NEDEN tek yardımcı: temizliği iki akış yapıyor — yeni bir JUDGE turu
-    başlarken ve "Veriyi oturumdan sil" ile oturum sıfırlanırken. İki yerde
-    ayrı ayrı yazıldığında biri prefix listesine güncellenip diğeri geride
-    kalıyordu; tek kaynak bunu imkânsız kılıyor.
-
-    ÖLÇÜM NOTU: Streamlit'in kendisi, son koşuda render edilmeyen widget'ların
-    state'ini zaten topluyor. Üç ardışık JUDGE turu ölçüldüğünde bu döngü ister
-    çağrılsın ister çağrılmasın session'da yalnız içinde bulunulan turun
-    anahtarları kalıyor — yani beklenen birikme gözlenmiyor ve döngünün
-    silecek bir şeyi olmuyor. Savunma amaçlı tutuluyor (prefix'lerden biri
-    ileride widget'a bağlı olmayan bir anahtara verilirse GC devreye girmez),
-    ama bugün ölçülebilir bir etkisi yok; testle sabitlenmemesinin sebebi bu.
-
-    `list(st.session_state)` stub'larda `str | int` dönebildiği için anahtar
-    `str(...)` ile daraltılıyor; `.pop` orijinal anahtarla çağrılıyor.
-    """
-    for state_key in list(st.session_state):
-        if str(state_key).startswith(_DYNAMIC_WIDGET_KEY_PREFIXES):
-            st.session_state.pop(state_key)
-
-
 # --------------------------------------------------------------------------- #
 # Veri yükleme (mevcut davranış)
 # --------------------------------------------------------------------------- #
@@ -88,10 +58,6 @@ if st.session_state.get("clean_df") is not None:
             "cleaning_failed_file_error",
         ):
             st.session_state.pop(key, None)
-        # Sabit anahtarlar yetmiyor: JUDGE turunun dinamik widget anahtarları da
-        # bu yolda temizlenmeli, aksi halde silme sonrası yüklenen yeni dosyada
-        # eski turun seçimleri session'da kalıyor.
-        _purge_dynamic_widget_keys()
         st.rerun()
 
 uploaded = st.file_uploader(
@@ -180,9 +146,6 @@ if st.session_state.get("clean_df") is not None:
             )
         else:
             st.session_state["clean_profile"] = raw_profile
-            # Önceki JUDGE turunun dinamik widget değerleri artık erişilemez.
-            # Uzun oturumlarda bu anahtarların session_state'te birikmesini önle.
-            _purge_dynamic_widget_keys()
             st.session_state["ledger"] = entries
             st.session_state["resolutions"] = {}
             st.session_state["run_id"] = uuid.uuid4().hex

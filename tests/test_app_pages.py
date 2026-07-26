@@ -12,7 +12,7 @@ from pareto.analysis.hypothesis import TACProposal, freeze_estimand
 from pareto.config import SETTINGS as _BASE_SETTINGS
 from pareto.contracts import EstimationResult
 from pareto.memory import store as _store_module
-from pareto.memory.store import ProjectStore
+from pareto.memory.frozen_menu import build_frozen_menu_record, save_frozen_menu_record
 
 PAGE_PATH = Path(__file__).resolve().parents[1] / "app" / "pages" / "3_variance_panel.py"
 
@@ -166,9 +166,7 @@ def test_variance_panel_skips_pretrend_when_required_columns_are_missing(tmp_pat
 
     _load_variance_panel(app, _results_file(tmp_path))
 
-    assert any(
-        "required columns for pre-trend diagnostic are missing" in info.value for info in app.info
-    )
+    assert any("gerekli kolonlar eksik" in info.value for info in app.info)
 
 
 def test_variance_panel_warns_when_pretrend_estimation_fails(tmp_path: Path) -> None:
@@ -189,19 +187,21 @@ def test_variance_panel_warns_when_pretrend_estimation_fails(tmp_path: Path) -> 
 
 
 def _persist_frozen_menu_record(run_id: str, *, estimand_hash: str, menu_hash: str) -> None:
-    # 2_analysis.py::_persist_frozen_menu ile aynı şekli üretir.
-    store = ProjectStore(project_id=run_id)
-    store.save(
-        "frozen_menu",
-        {
-            "estimand_hash": estimand_hash,
-            "menu_hash": menu_hash,
-            "spec_count": 4,
-            "run_id": run_id,
-            "estimand": {"outcome": "uninsured_rate"},
-            "menu": {"control_sets": [[]]},
-        },
+    """Kaydı analiz sayfasının kullandığı üreticiyle yazar.
+
+    Şekil test tarafında elle kurulursa anahtar ya da alan adı yazan tarafta
+    değiştiğinde bu testler yeşil kalır ve panel sessizce "kayıt bulunamadı"
+    demeye başlar; üretici paylaşıldığı sürece bu mümkün değil.
+    """
+    record = build_frozen_menu_record(
+        estimand_hash=estimand_hash,
+        menu_hash=menu_hash,
+        spec_count=4,
+        run_id=run_id,
+        estimand={"outcome": "uninsured_rate"},
+        menu={"control_sets": [[]]},
     )
+    save_frozen_menu_record(run_id, record)
 
 
 def _isolate_store_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -270,6 +270,44 @@ def test_variance_panel_shows_no_record_message_when_run_untracked(
     _load_variance_panel(app, _results_file(tmp_path))
 
     assert any("kaydı bulunamadı" in caption.value for caption in app.caption)
+
+
+def test_variance_panel_provenance_follows_inspected_run_not_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Provenance, oturumdaki koşuyu değil bakılan dosyanın koşusunu anlatmalı.
+
+    Sonuç yolu serbest metin: kullanıcı eski bir koşunun `results.json`'ını
+    açtığında karşılaştırma o koşuya ait olmalı. Oturuma öncelik verilirse
+    gösterge tam da uyarması gereken anda susar ve üstüne yanlış koşu için
+    "eşleşiyor" güvencesi verir.
+    """
+    _isolate_store_dir(monkeypatch, tmp_path)
+
+    frozen_estimand = _frozen_estimand()
+    inspected_run_id = "run-on-disk-001"
+    session_run_id = "run-session-002"
+
+    # Bakılan koşu oturumdaki estimand ile ÜRETİLMEMİŞ; oturumdaki koşu üretilmiş.
+    _persist_frozen_menu_record(
+        inspected_run_id, estimand_hash="stale0000000000", menu_hash="deadbeefdeadbeef"
+    )
+    _persist_frozen_menu_record(
+        session_run_id, estimand_hash=frozen_estimand.freeze_hash, menu_hash="deadbeefdeadbeef"
+    )
+
+    results_path = _results_file(tmp_path)
+    results_path.with_name("run_id.txt").write_text(inspected_run_id, encoding="utf-8")
+
+    app = AppTest.from_file(PAGE_PATH, default_timeout=10)
+    app.session_state["clean_df"] = _panel_missing_cohort_columns()
+    app.session_state["frozen_estimand"] = frozen_estimand
+    app.session_state["multiverse_run_id"] = session_run_id
+
+    _load_variance_panel(app, results_path)
+
+    assert any("eşleşmiyor" in warning.value for warning in app.warning)
+    assert not any("estimand" in success.value for success in app.success)
 
 
 def test_spec_curve_colors_points_by_significance_and_direction(tmp_path: Path) -> None:

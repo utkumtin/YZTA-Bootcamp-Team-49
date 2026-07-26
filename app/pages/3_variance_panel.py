@@ -31,7 +31,7 @@ from pareto.analysis.variance import ROBUST_RULE_TEXT, diagnose_axes, summarize
 from pareto.config import SETTINGS
 from pareto.contracts import EstimationResult
 from pareto.llm.narrative import generate_narrative
-from pareto.memory.store import ProjectStore
+from pareto.memory.frozen_menu import load_frozen_menu_record
 from pareto.repro import (
     ARTIFACT_LABELS,
     ReproInputs,
@@ -70,24 +70,20 @@ else:
     specs = []
 
 
-def _load_frozen_menu_record(run_id: str | None) -> dict | None:
-    """ProjectStore'da dondurulan estimand/menu kaydını okur (#50/12).
+def _resolve_run_id(results_file: Path) -> str:
+    """Sonuç dizininin gerçek run_id'si.
 
-    NEDEN: `2_analysis.py` her multiverse başlatmasında `_persist_frozen_menu`
-    ile `frozen_menu` kaydını ProjectStore'a (`{run_id}/frozen_menu.json`) yazıyordu
-    ama hiçbir yer bunu okumuyordu — yazılan provenance bilgisi ölü koddu. Artık
-    varyans paneli bu kaydı okuyup run'ın hangi estimand/menu hash'inden üretildiğini
-    gösteriyor ve oturumdaki mevcut estimand ile karşılaştırıyor.
-
-    `ProjectStore.load` var olmayan anahtarda None döner (exception atmaz), bu
-    yüzden geniş bir try/except'e gerek yok — yalnız beklenmedik şekil (dict
-    olmayan içerik) durumuna karşı savunuluyoruz.
+    Öncelik dizinin yanındaki `run_id.txt`tedir: `runs/latest` bir aynadır, dizin
+    adı "latest"tir ve oturumdaki run_id kullanıcının elle girdiği eski bir koşuya
+    ait olabilir. run_id yanlış çözülürse donmuş menü bulunamaz ve METHODS.md
+    estimand bölümünü tamamen kaybeder.
     """
-    if not run_id:
-        return None
-    store = ProjectStore(project_id=str(run_id))
-    record = store.load("frozen_menu")
-    return record if isinstance(record, dict) else None
+    marker = results_file.with_name("run_id.txt")
+    if marker.exists():
+        recorded = marker.read_text(encoding="utf-8").strip()
+        if recorded:
+            return recorded
+    return str(st.session_state.get("multiverse_run_id") or results_file.parent.name)
 
 
 # Panelde çizilen figürler reprodüksiyon paketine de girer: dosya adı -> HTML gövdesi.
@@ -100,8 +96,12 @@ def _capture_figure(name: str, figure: go.Figure) -> None:
 
 
 def _render_run_provenance(results_path: str) -> None:
-    run_id = st.session_state.get("multiverse_run_id") or Path(results_path).parent.name
-    record = _load_frozen_menu_record(run_id)
+    # Kimlik bakılan dosyadan çözülür, oturumdan değil: kullanıcı eski bir
+    # koşunun sonuç yolunu elle yazdığında aşağıdaki hash karşılaştırması o
+    # koşuya ait olmalı. Oturuma öncelik verilirse gösterge tam da uyarması
+    # gereken durumda yanlış koşuyu doğruluyor.
+    run_id = _resolve_run_id(Path(results_path))
+    record = load_frozen_menu_record(run_id)
 
     st.subheader("Run provenance")
     if record is None:
@@ -488,22 +488,6 @@ st.dataframe(pd.DataFrame([r.model_dump() for r in results]), use_container_widt
 # --------------------------------------------------------------------------- #
 # Reprodüksiyon paketi
 # --------------------------------------------------------------------------- #
-def _resolve_run_id(results_file: Path) -> str:
-    """Sonuç dizininin gerçek run_id'si.
-
-    Öncelik dizinin yanındaki `run_id.txt`tedir: `runs/latest` bir aynadır, dizin
-    adı "latest"tir ve oturumdaki run_id kullanıcının elle girdiği eski bir koşuya
-    ait olabilir. run_id yanlış çözülürse donmuş menü bulunamaz ve METHODS.md
-    estimand bölümünü tamamen kaybeder.
-    """
-    marker = results_file.with_name("run_id.txt")
-    if marker.exists():
-        recorded = marker.read_text(encoding="utf-8").strip()
-        if recorded:
-            return recorded
-    return str(st.session_state.get("multiverse_run_id") or results_file.parent.name)
-
-
 def _repro_inputs() -> ReproInputs:
     """Koşunun artefakt yollarını oturumdan ve disk düzeninden çözer.
 

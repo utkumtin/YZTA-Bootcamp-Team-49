@@ -57,6 +57,12 @@ exclude = ["notebooks/"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Depoda bir `.env` varsa `pareto.config` import edilirken anahtarlar
+# `os.environ`'a yazılır; canlı smoke testlerinin `skipif` koşulu o anda False
+# çıkar ve düz `pytest` sessizce gerçek sağlayıcı API'lerine çağrı yapar.
+# Varsayılan koşu bu yüzden `live`'ı dışarıda bırakır; canlı testler `pytest -m live`
+# ile açıkça istendiğinde koşar.
+addopts = "-m 'not live'"
 markers = [
     "live: gerçek sağlayıcı API çağrısı yapar (BYOK env anahtarı gerekir, yoksa atlanır)",
 ]

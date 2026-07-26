@@ -44,6 +44,11 @@ def test_build_event_study_payload_skips_without_dataframe() -> None:
 
 
 def test_build_event_study_payload_reports_missing_required_columns() -> None:
+    """Outcome çözülemediğinde payload atlanmalı; kolon alanları hiç üretilmemeli.
+
+    Panel `status` üzerinden dallanıyor: "skipped" yerine "pending_columns"
+    dönerse sayfa var olmayan kolonlarla pre-trend hesabı teklif eder.
+    """
     df = pd.DataFrame({"state": ["a"], "year": [2014], "uninsured_rate": [10.0]})
     payload = build_event_study_payload(
         df,
@@ -52,7 +57,7 @@ def test_build_event_study_payload_reports_missing_required_columns() -> None:
     )
     assert payload is not None
     assert payload["status"] == "skipped"
-    assert "required columns" in payload["reason"]
+    assert "outcome_col" not in payload
 
 
 def test_build_event_study_payload_uses_estimand_outcome_first() -> None:

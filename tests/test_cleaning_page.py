@@ -198,9 +198,9 @@ def test_clearing_session_empties_uploader_so_file_is_not_reingested(
 
     Dinamik widget anahtarları (`resolution_choice_*` vb.) burada bilerek
     iddia EDİLMİYOR: ölçüldüğünde Streamlit'in kendi widget-state toplayıcısı
-    onları zaten düşürüyor, yani böyle bir assertion sayfadaki temizlik
-    çağrısı kaldırılsa bile yeşil kalırdı (bkz. `_purge_dynamic_widget_keys`
-    docstring'i). Düşemeyen assertion test değildir.
+    onları zaten düşürüyor, yani böyle bir assertion sayfada hiçbir temizlik
+    kodu olmasa da yeşil kalırdı. Düşemeyen assertion test değildir; sayfadaki
+    elle temizlik döngüsü de aynı ölçüm yüzünden kaldırıldı.
     """
     _patch_uploader(monkeypatch)
     _patch_pipeline(monkeypatch, _flagged_entry())
