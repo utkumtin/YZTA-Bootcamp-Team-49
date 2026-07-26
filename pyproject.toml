@@ -9,7 +9,7 @@ dependencies = [
     "pandas>=2.0",
     "numpy>=1.24",
     "pyfixest>=0.18",
-    "streamlit>=1.32",
+    "streamlit>=1.55",  # st.expander(key=...) bu sürümde geldi (streamlit_ui: gizlilik notu)
     "plotly>=5.20",
     "pydantic>=2.6",
     "pydantic-ai[groq]>=0.0.14",

@@ -326,7 +326,9 @@ def chain_for(role: ModelRole, privacy: PrivacyMode) -> tuple[ProviderModel, ...
     slotun pinli olduğudur, failover'a girip girmeyeceği değil.
 
     MECHANICAL: UI'da hiç gösterilmez. PUBLIC modda 3 sağlayıcılı failover zinciri;
-    PRIVATE modda deploy sahibinin kontrolündeki tek uçtur (no-train + paid anahtar).
+    PRIVATE modda tek uca (Groq) sabittir. Anahtarı JUDGE'ın Groq slotuyla ORTAKTIR
+    (`GROQ_API_KEY`): kullanıcı BYOK ile kendi Groq anahtarını verdiyse mekanik çağrı
+    da onun hesabından gider — uç seçime kapalı, anahtar değil (bkz. PRIVACY.md).
     """
     if role is ModelRole.JUDGE:
         by_provider = judge_slots_for(privacy)
