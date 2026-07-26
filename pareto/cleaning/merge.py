@@ -88,6 +88,19 @@ def _read_source_file(path: Path, fmt: str, read: dict[str, Any]) -> pd.DataFram
     )
 
 
+def resolve_source_paths(pattern: str, base_dir: str | Path) -> list[Path]:
+    """Kaynak `file:` deseninden dosya yollarını çözer.
+
+    Glob deseni sıralı eşleşmelere, düz ad tek yola açılır. Var olup olmadıkları
+    burada kontrol edilmez: aynı kural hem okuma hem de ön-kontrol yollarında
+    kullanılsın, "eksik dosya" kararını çağıran versin diye ayrıldı.
+    """
+    base = Path(base_dir)
+    if any(ch in pattern for ch in "*?["):
+        return sorted(base.glob(pattern))
+    return [base / pattern]
+
+
 def load_sources(config: dict[str, Any], base_dir: str | Path) -> dict[str, pd.DataFrame]:
     """Config'teki her kaynağı ham DataFrame'e okur.
 
@@ -98,8 +111,7 @@ def load_sources(config: dict[str, Any], base_dir: str | Path) -> dict[str, pd.D
     out: dict[str, pd.DataFrame] = {}
     for name, src in config["sources"].items():
         pattern = str(src["file"])
-        is_glob = any(ch in pattern for ch in "*?[")
-        paths = sorted(base.glob(pattern)) if is_glob else [base / pattern]
+        paths = resolve_source_paths(pattern, base)
         if not paths or any(not p.exists() for p in paths):
             raise FileNotFoundError(f"'{name}' kaynağı için dosya yok: {base / pattern}")
         fmt = str(src.get("format") or Path(pattern).suffix.lstrip("."))
@@ -258,9 +270,19 @@ def merge_to_panel(sources: dict[str, pd.DataFrame], config: dict[str, Any]) -> 
             panel[col] = pd.to_numeric(panel[col], errors="raise")
 
     # Tedavi türetmesi (config-güdümlü, deterministik) → Tier1.
+    treatment_col: str | None = None
     treatment_cohort_col: str | None = None
     never_treated_col: str | None = None
     treat_cfg = config.get("treatment") or {}
+    # Hazır gösterge taşıyan tasarımlar (iki dönemli 2x2 gibi) için: tedavi kohortu bir
+    # yıl olmadığından kohort türetmesi bu setlerde anlamsız, ama gösterge veride hazır.
+    # Bu anahtar olmasaydı böyle bir panel yalnız kohort eksikliği yüzünden Tier2 raporlar,
+    # yani geçerli bir tasarım "nedensel değil" diye etiketlenirdi.
+    indicator_from = treat_cfg.get("indicator_from")
+    if indicator_from:
+        if indicator_from not in panel.columns:
+            raise ValueError(f"treatment.indicator_from kolonu panelde yok: {indicator_from}")
+        treatment_col = indicator_from
     cohort_from = treat_cfg.get("cohort_from")
     if cohort_from:
         if cohort_from not in panel.columns:
@@ -281,6 +303,7 @@ def merge_to_panel(sources: dict[str, pd.DataFrame], config: dict[str, Any]) -> 
     manifest = PanelManifest(
         unit_col=unit,
         time_col=time,
+        treatment_col=treatment_col,
         treatment_cohort_col=treatment_cohort_col,
         never_treated_col=never_treated_col,
         outcome_cols=outcomes,

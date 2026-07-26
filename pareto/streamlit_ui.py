@@ -78,7 +78,8 @@ _MODE_LABELS: dict[str, str] = {
 # `kind`/`data-testid` değişimini izliyor ki Streamlit her rerun'da butonları güncellediğinde
 # (React reconciliation ile aynı DOM node'ları yeniden kullanıyor — tab-highlight'ın da
 # dayandığı varsayım) overlay senkronize kalsın.
-_MODE_HIGHLIGHT_HTML = """
+# Raw string: gövdedeki JS regex'i Python kaçış dizisi olarak yorumlanmasın.
+_MODE_HIGHLIGHT_HTML = r"""
 <style>
 /* Native "seçili" arka planı (`kind=segmented_controlActive`) açık temaya sabit bir gri
    koyuyor — koyu temada okunaksız beyaza dönüşüyor (Streamlit tema renklerini CSS custom
