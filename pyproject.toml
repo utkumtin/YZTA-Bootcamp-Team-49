@@ -47,7 +47,6 @@ ignore = ["S101"]  # assert testlerde/validatorlarda serbest
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S"]  # assert testlerde/validatorlarda serbest
 "pareto/streamlit_ui.py" = ["E501"]  # JS/CSS string literalleri; satır kırmak kodu bozar
-"scripts/run_flip_spike.py" = ["S607"]  # git komutu sabit, kullanıcı girdisi yok
 
 [tool.mypy]
 python_version = "3.11"

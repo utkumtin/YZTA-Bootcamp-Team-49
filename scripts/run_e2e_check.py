@@ -20,7 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import platform
-import subprocess
+import shutil
 import sys
 import time
 from collections.abc import Callable
@@ -67,9 +67,12 @@ from pareto.config import SETTINGS  # noqa: E402
 from pareto.llm.narrative import generate_narrative  # noqa: E402
 from pareto.llm.router import use_test_model  # noqa: E402
 from pareto.profiling import profile_dataframe  # noqa: E402
+from scripts._report import jsonable, platform_name, source_commit, write_report  # noqa: E402
 
 DATASET = "medicaid"
-RUN_ID = "s2-13-e2e"  # sabit: her koşu aynı çalışma dizinini tazeler, artık birikmez
+# Sabit run id: koşu başına yeni dizin birikmesin. Dizin, multiverse dikişinin
+# başında silinip yeniden kurulur; önceki koşudan kalan sonuç okunmaz.
+RUN_ID = "s2-13-e2e"
 MULTIVERSE_TIMEOUT_SECONDS = 900
 MULTIVERSE_POLL_SECONDS = 0.5
 GENERATION_COMMAND = (
@@ -218,16 +221,6 @@ RESEARCH_STORY = (
 # --------------------------------------------------------------------------- #
 # Yardımcılar
 # --------------------------------------------------------------------------- #
-def _jsonable(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {str(key): _jsonable(val) for key, val in value.items()}
-    if isinstance(value, tuple | list):
-        return [_jsonable(item) for item in value]
-    if value is None or isinstance(value, str | int | float | bool):
-        return value
-    return str(value)
-
-
 def _repo_path(path: Path) -> str:
     """Artefakt yolunu raporda repo köküne göre yazar.
 
@@ -435,11 +428,17 @@ def _seam_multiverse(state: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     specs = state["specs"]
     timeout = float(state["timeout"])
 
+    # Runner çalışma dizinini exist_ok ile açar ve yalnız girdi dosyalarını
+    # tazeler; önceki koşunun results/progress çıktısı yerinde kalırdı. Sabit
+    # run id ile bu, farklı bir koşunun sonucunu okuma riski demek.
+    shutil.rmtree(Path(SETTINGS.runs_dir) / RUN_ID, ignore_errors=True)
+
     handle = launch_multiverse(state["sample"], specs, RUN_ID)
     deadline = time.monotonic() + timeout
     while not handle.is_done():
         if time.monotonic() > deadline:
             handle.process.kill()
+            handle.process.wait()  # kill sinyali yeter değil; süreç reap edilmezse zombie kalır
             raise TimeoutError(f"Multiverse worker {timeout:.0f}s içinde bitmedi.")
         time.sleep(MULTIVERSE_POLL_SECONDS)
 
@@ -576,7 +575,7 @@ def run_seams(state: dict[str, Any]) -> list[dict[str, Any]]:
                 "title": title,
                 "status": STATUS_OK,
                 "detail": detail,
-                "metrics": _jsonable(metrics),
+                "metrics": jsonable(metrics),
             }
         )
     return reports
@@ -616,32 +615,13 @@ def build_checklist(seam_reports: list[dict[str, Any]]) -> list[dict[str, str]]:
     return items
 
 
-def _source_commit(repo_root: Path = REPO_ROOT) -> str:
-    try:
-        completed = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],  # noqa: S607  # provenance; PATH'teki git yeter
-            cwd=repo_root,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except (OSError, subprocess.CalledProcessError):
-        return "unknown"
-    return completed.stdout.strip() or "unknown"
-
-
-def _platform_name() -> str:
-    system = platform.system()
-    return "macOS" if system == "Darwin" else system or "unknown"
-
-
 def _report_provenance(repo_root: Path = REPO_ROOT) -> dict[str, str]:
     # Zaman damgası yok: kod, veri ve commit değişmediğinde rapor tekrar üretilebilir kalsın.
     return {
         "generation_command": GENERATION_COMMAND,
-        "source_commit": _source_commit(repo_root=repo_root),
+        "source_commit": source_commit(repo_root=repo_root),
         "python": platform.python_version(),
-        "platform": _platform_name(),
+        "platform": platform_name(),
         "judge_mode": "PydanticAI test modeli (sahte tipli çıktı, canlı sağlayıcı çağrısı yok)",
     }
 
@@ -751,16 +731,6 @@ def render_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def write_report(report: dict[str, Any], out_path: Path) -> None:
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    if out_path.suffix == ".json":
-        out_path.write_text(
-            json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-        )
-    else:
-        out_path.write_text(render_markdown(report), encoding="utf-8")
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Pareto S2-13 uçtan uca entegrasyon doğrulaması")
     parser.add_argument(
@@ -777,7 +747,7 @@ def main() -> int:
     args = parse_args()
     report = run_e2e_check(timeout=args.timeout)
     if args.out:
-        write_report(report, Path(args.out))
+        write_report(report, Path(args.out), render=render_markdown)
     else:
         print(render_markdown(report), end="")
     return 0 if report["overall"]["status"] == STATUS_OK else 1
