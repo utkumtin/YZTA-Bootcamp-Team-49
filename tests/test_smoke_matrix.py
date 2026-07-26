@@ -114,9 +114,15 @@ def test_profile_outcome_matches_the_dataset_descriptor(profile: DatasetProfile)
 def test_profile_treatment_column_is_declared_or_derivable(profile: DatasetProfile) -> None:
     """Tedavi göstergesi ne descriptor'da ne kohortta varsa zincir menü adımında kopar."""
     config = _config(profile)
-    derivable = bool((config.get("treatment") or {}).get("cohort_from"))
+    treatment = config.get("treatment") or {}
+    declared = profile.treatment_col in _declared_columns(config)
+    derivable = bool(treatment.get("cohort_from"))
 
-    assert profile.treatment_col in _declared_columns(config) or derivable
+    assert declared or derivable
+    # Descriptor'da hazır gelen gösterge `indicator_from` ile bildirilmezse merge onu
+    # manifest'e taşımaz ve panel yalnız bu yüzden bir tier aşağı raporlar.
+    if declared and not derivable:
+        assert treatment.get("indicator_from") == profile.treatment_col
 
 
 @pytest.mark.parametrize("profile", PROFILES, ids=[p.key for p in PROFILES])
@@ -168,12 +174,34 @@ def test_treatment_is_derived_only_for_cohort_units_after_their_cohort_year() ->
 def test_existing_treatment_column_is_used_as_is() -> None:
     """Panelde hazır dummy varken kohorttan yeniden türetmek göstergeyi sessizce değiştirirdi."""
     df = _cohort_panel()
-    df["treated_post"] = 1
+    # Kohorttan türetilse (a,2014), (a,2015), (b,2015) işaretlenirdi; buradaki desen
+    # bilerek başka, "olduğu gibi kullanıldı" iddiası ancak böyle ayırt edilebilir.
+    df["treated_post"] = [1, 0] * (len(df) // 2) + [0] * (len(df) % 2)
 
     column, source = resolve_treatment(df, _profile(), "year")
 
     assert (column, source) == ("treated_post", TREATMENT_FROM_PANEL)
-    assert int(df["treated_post"].sum()) == len(df)
+    assert df["treated_post"].tolist() == [1, 0] * (len(df) // 2) + [0] * (len(df) % 2)
+
+
+@pytest.mark.parametrize("level", [0, 1], ids=["hepsi-kontrol", "hepsi-tedavi"])
+def test_panel_supplied_indicator_must_carry_both_arms(level: int) -> None:
+    """Tek kollu gösterge zinciri geçer ama hiçbir karşılaştırma ölçmez; sessiz yeşil olur."""
+    df = _cohort_panel()
+    df["treated_post"] = level
+
+    with pytest.raises(ValueError, match="0/1 ikilisini taşımıyor"):
+        resolve_treatment(df, _profile(), "year")
+
+
+def test_derived_indicator_must_carry_both_arms() -> None:
+    """Kohort yolu da aynı korumayı ister: her birim kohortluysa kontrol grubu kalmaz."""
+    df = _cohort_panel()
+    df["treatment_cohort"] = 2013  # her birim ilk yıldan itibaren tedavili
+    df["never_treated"] = False
+
+    with pytest.raises(ValueError, match="0/1 ikilisini taşımıyor"):
+        resolve_treatment(df, _profile(), "year")
 
 
 def test_treatment_derivation_fails_loud_on_units_that_are_neither_cohorted_nor_control() -> None:
@@ -302,8 +330,10 @@ def test_exit_code_is_zero_when_only_local_only_datasets_are_skipped(
     assert "ATLANDI" in output and "medicaid" in output
 
 
-def test_report_states_the_time_budget(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Süre bütçesi raporlanmazsa CI toplamının makul kaldığı iddiası ölçülemez."""
+def test_time_threshold_is_reported_as_a_warning_and_not_enforced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Eşik raporlanmazsa performans regresyonu görünmez; zorlanırsa yeşil zincir kırılır."""
 
     def fake_run(profile: DatasetProfile, **_kwargs: Any) -> DatasetRun:
         return DatasetRun(key=profile.key, status=STATUS_OK, reason="koştu", seconds=1000.0)
@@ -313,8 +343,33 @@ def test_report_states_the_time_budget(monkeypatch: pytest.MonkeyPatch) -> None:
     report = run_smoke_matrix()
 
     assert report["budget"]["total_seconds"] == 1000.0 * len(PROFILES)
-    assert report["budget"]["within_budget"] is False
-    assert "BÜTÇE AŞILDI" in smoke.render_markdown(report)
+    assert report["budget"]["within_threshold"] is False
+    assert "EŞİK AŞILDI" in smoke.render_markdown(report)
+    # Aşım yalnız uyarıdır: zincirin kendisi koştuğu için koşu geçerli sayılır.
+    assert report["overall"]["status"] == STATUS_OK
+
+
+def test_a_matrix_where_nothing_ran_is_reported_as_broken(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Boşalmış matris yeşil dönerse iddia doğrulanmamışken doğrulanmış görünür."""
+
+    def fake_run(profile: DatasetProfile, **_kwargs: Any) -> DatasetRun:
+        return DatasetRun(key=profile.key, status=STATUS_SKIPPED, reason="ham veri eksik")
+
+    monkeypatch.setattr(smoke, "run_dataset", fake_run)
+
+    exit_code = main([])
+
+    assert exit_code == 1
+    assert "hiçbir dataset koşmadı" in capsys.readouterr().out
+
+
+def test_an_empty_dataset_selection_is_reported_as_broken() -> None:
+    """Sıfır profille koşan bir matris de hiçbir şey kanıtlamaz; yeşil dönmemeli."""
+    report = run_smoke_matrix(())
+
+    assert report["overall"]["status"] == STATUS_FAILED
 
 
 def test_per_dataset_timeout_stays_under_the_ci_job_limit() -> None:
@@ -370,7 +425,7 @@ def test_load_step_fails_loud_when_the_panel_tier_changes(
     """Tier sessizce değişirse aynı rapor başka bir analiz sınıfını doğrulamış olur."""
     monkeypatch.chdir(tmp_path)
 
-    run = run_dataset(replace(smoke.CARD_KRUEGER, expected_tier=Tier.TIER1_PANEL_DID))
+    run = run_dataset(replace(smoke.CARD_KRUEGER, expected_tier=Tier.TIER2_CROSS_OLS))
 
     assert run.status == STATUS_FAILED
     assert "tier'ı beklenenden farklı" in run.reason

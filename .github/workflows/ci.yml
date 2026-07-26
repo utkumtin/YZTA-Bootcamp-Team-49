@@ -68,8 +68,10 @@ jobs:
       # JUDGE adımları test modeliyle koşar, anahtar gerekmez. Ham verisi repoda
       # olmayan set (medicaid'in CDC export'u) raporda atlanır; koşan
       # setlerde bir adım kırılırsa çıkış kodu sıfırdan farklı gelir.
+      # Rapor job özetine yazılır: yalnız stdout'a basılan bir matrise koşu kırılmadıkça
+      # kimse bakmaz, oysa hangi setin atlandığı yeşil koşularda da okunmalı.
       - name: Uçtan uca smoke matrisi
-        run: uv run python scripts/run_smoke_matrix.py
+        run: uv run python scripts/run_smoke_matrix.py --out "$GITHUB_STEP_SUMMARY"
 
   secret-scan:
     name: Secret scan (gitleaks)

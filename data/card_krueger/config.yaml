@@ -39,6 +39,7 @@ panel:
 
 treatment:
   # `cohort_from` yok: iki dönemli 2×2'de tedavi kohortu bir YIL değil, dalga numarası;
-  # merge'ün kohort türetmesi yıl semantiği bekler. Tedavi göstergesi `treated_post` olarak
-  # hazır gelir, panel bu yüzden Tier2 (kesitsel/OLS) rapor eder.
+  # merge'ün kohort türetmesi yıl semantiği bekler. Gösterge veride hazır olduğu için
+  # kohort makinesine gerek yok, `indicator_from` ile doğrudan bildirilir.
+  indicator_from: treated_post
   never_treated_when: { treated_state: "0" }   # tırnak şart: merge kaynakları dtype=str okur

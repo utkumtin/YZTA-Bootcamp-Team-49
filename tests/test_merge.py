@@ -177,6 +177,30 @@ def test_treatment_cohort_and_never_treated_derived_to_tier1():
     assert panel.validate_contract() is Tier.TIER1_PANEL_DID
 
 
+_CARD_KRUEGER_DIR = Path(__file__).resolve().parents[1] / "data" / "card_krueger"
+
+
+def test_declared_treatment_indicator_reaches_tier1_without_a_cohort():
+    # NEDEN: iki dönemli tasarımda tedavi kohortu bir yıl değil dalga numarasıdır, kohort
+    # türetmesi burada anlamsız. Gösterge manifest'e taşınmazsa geçerli bir DiD tasarımı
+    # yalnız kohort eksikliği yüzünden Tier2'ye düşer, yani ürün onu "nedensel değil"
+    # diye etiketler ve tier sinyali güvenilirliğini kaybeder.
+    panel = build_panel(_CARD_KRUEGER_DIR)
+    assert panel.manifest.treatment_col == "treated_post"
+    assert panel.manifest.treatment_cohort_col is None
+    assert panel.validate_contract() is Tier.TIER1_PANEL_DID
+
+
+def test_declared_treatment_indicator_missing_from_the_panel_fails_loud():
+    # NEDEN: sessizce yok sayılan bir gösterge paneli fark edilmeden bir tier aşağı
+    # düşürür; descriptor ile panel ayrışması gürültüyle durmalı.
+    config = load_dataset_config(_CARD_KRUEGER_DIR)
+    config["treatment"]["indicator_from"] = "boyle_bir_kolon_yok"
+
+    with pytest.raises(ValueError, match="indicator_from"):
+        merge_to_panel(load_sources(config, _CARD_KRUEGER_DIR), config)
+
+
 # --------------------------------------------------------------------------- fail-loud
 
 

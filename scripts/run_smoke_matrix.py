@@ -13,8 +13,10 @@ matris deterministik kalır ve API anahtarı gerektirmez. Ölçülen şey model 
 çekirdeğin farklı veri şekillerini taşıyabilmesidir.
 
 Ham verisi repoda olmayan dataset (medicaid'in CDC export'u gitignore'lu) `local_only`
-işaretlidir: CI'da nedeni raporlanarak atlanır, lokalde koşar. Sessiz atlama yoktur —
-işaretsiz bir dataset'in verisi eksikse koşu kırık sayılır ve çıkış kodu sıfırdan farklı olur.
+işaretlidir: CI'da nedeni raporlanarak atlanır, lokalde koşar. Sessiz atlama yoktur:
+işaretsiz bir dataset'in verisi eksikse koşu kırık sayılır, ve hiçbir dataset koşmadıysa
+matris atlananların hepsi işaretli olsa bile kırık sayılır. Her iki durumda da çıkış kodu
+sıfırdan farklı olur, çünkü boş bir matris genelleme hakkında hiçbir şey kanıtlamaz.
 
 İki yan etki bilinçli: (1) her multiverse koşusu `runs/latest` aynasını günceller, yani
 matrisin ardından varyans paneli son dataset'in smoke sonucunu gösterir; (2) rapor duvar
@@ -63,14 +65,18 @@ from pareto.analysis.variance import diagnose_axes, summarize  # noqa: E402
 from pareto.cleaning.agent import entries_to_apply, generate_ledger, resolve  # noqa: E402
 from pareto.cleaning.codegen import apply_ledger  # noqa: E402
 from pareto.cleaning.ledger import LedgerEntry  # noqa: E402
-from pareto.cleaning.merge import build_panel, load_dataset_config  # noqa: E402
+from pareto.cleaning.merge import (  # noqa: E402
+    build_panel,
+    load_dataset_config,
+    resolve_source_paths,
+)
 from pareto.config import SETTINGS  # noqa: E402
 from pareto.contracts import Tier  # noqa: E402
 from pareto.llm.router import use_test_model  # noqa: E402
 from pareto.profiling import profile_dataframe  # noqa: E402
 from scripts._report import jsonable, platform_name, source_commit, write_report  # noqa: E402
 
-GENERATION_COMMAND = ".venv/bin/python scripts/run_smoke_matrix.py"
+GENERATION_COMMAND = "uv run python scripts/run_smoke_matrix.py"
 
 STATUS_OK = "ok"
 STATUS_FAILED = "failed"
@@ -80,9 +86,10 @@ STATUS_SKIPPED = "skipped"
 TREATMENT_FROM_PANEL = "panelde hazır"
 TREATMENT_FROM_COHORT = "kohort kolonlarından türetildi"
 
-# CI'da tüm matrisin makul kabul edildiği üst sınır; aşılırsa rapor uyarı basar.
-# Kart maddesi "süre bütçesi": aşımda medicaid gibi ağır setler nightly'ye ayrılır.
-TIME_BUDGET_SECONDS = 300.0
+# Uyarı eşiği, zorlanan bir sınır DEĞİL: aşım koşuyu kırmaz, yalnız raporda görünür.
+# Amacı bir performans regresyonunu görünür kılmak ve ağır setleri nightly'ye ayırma
+# kararını beslemek; bir dataset yavaşladı diye yeşil bir zinciri kırmak istemiyoruz.
+TIME_BUDGET_WARN_SECONDS = 300.0
 
 # Dataset başına multiverse üst sınırı. CI job'ının timeout'undan (15 dk) küçük kalmalı:
 # üç dataset × 240 sn = 720 sn, yani takılan bir koşuda harness kendi TimeoutError'ını
@@ -203,8 +210,8 @@ CARD_KRUEGER = DatasetProfile(
         expected_sign="negative",
     ),
     treatment_col="treated_post",
-    # İki dönemli 2×2'de kohort yılı yok, descriptor kohort türetmiyor: panel bilinçli Tier2.
-    expected_tier=Tier.TIER2_CROSS_OLS,
+    # Kohort yılı yok ama gösterge descriptor'da bildirildiği için panel Tier1 raporlar.
+    expected_tier=Tier.TIER1_PANEL_DID,
     judge_ledger={
         "decisions": [
             {
@@ -371,18 +378,34 @@ PROFILE_BY_KEY = {profile.key: profile for profile in PROFILES}
 def missing_source_files(config: dict[str, Any], dataset_dir: Path) -> list[str]:
     """Config'in deklare ettiği ama diskte olmayan kaynak dosyalar.
 
-    `load_sources` ile aynı glob kuralını izler. Kontrol koşudan önce yapılır: böylece
-    "veri yok" durumu, akışın ortasında çıkan bir merge hatasından ayrılabilir.
+    Yol çözümü okuma yolunun kullandığı fonksiyonun aynısıdır: iki kural ayrışırsa
+    "veri var" denip okuma aşamasında kırılan ya da tersi bir sessiz sapma doğardı.
+    Kontrol koşudan önce yapılır, böylece "veri yok" durumu akışın ortasında çıkan
+    bir merge hatasından ayrılabilir.
     """
     missing: list[str] = []
     for src in config["sources"].values():
         pattern = str(src["file"])
-        if any(ch in pattern for ch in "*?["):
-            if not sorted(dataset_dir.glob(pattern)):
-                missing.append(pattern)
-        elif not (dataset_dir / pattern).exists():
+        paths = resolve_source_paths(pattern, dataset_dir)
+        if not paths or any(not path.exists() for path in paths):
             missing.append(pattern)
     return missing
+
+
+def _require_both_arms(values: pd.Series, col: str, origin: str) -> None:
+    """Gösterge hem tedavi hem kontrol satırı taşımalı; tek kollu bir gösterge sessizdir.
+
+    Tek seviyeye çökmüş bir dummy ile zincirin altı adımı da geçer: menü açılır,
+    spesifikasyonlar koşar, özet yazılır. Ama karşılaştırılacak iki grup olmadığı için
+    o yeşil rapor hiçbir şey ölçmemiş olur. Kontrol iki yolda da aynıdır: göstergenin
+    panelden gelmesi doğru olduğu anlamına gelmez.
+    """
+    levels = set(pd.to_numeric(values, errors="raise").dropna().unique())
+    if levels != {0, 1}:
+        raise ValueError(
+            f"'{col}' göstergesi ({origin}) 0/1 ikilisini taşımıyor, bulunan: {sorted(levels)}. "
+            "Tedavi ile kontrol ayrışmadan multiverse hiçbir karşılaştırma ölçmez."
+        )
 
 
 def resolve_treatment(df: pd.DataFrame, profile: DatasetProfile, time_col: str) -> tuple[str, str]:
@@ -392,10 +415,11 @@ def resolve_treatment(df: pd.DataFrame, profile: DatasetProfile, time_col: str) 
     kullanılır. Taşımayanlarda gösterge merge'ün ürettiği `treatment_cohort` +
     `never_treated` kolonlarından üretilir: birim kohortluysa ve zaman kohorta
     ulaştıysa tedavili. Kohortsuz ama never-treated de olmayan satır belirsizdir,
-    sessizce kontrol sayılmaz.
+    sessizce kontrol sayılmaz. Hangi yoldan gelirse gelsin gösterge iki kollu olmalıdır.
     """
     col = profile.treatment_col
     if col in df.columns:
+        _require_both_arms(df[col], col, TREATMENT_FROM_PANEL)
         return col, TREATMENT_FROM_PANEL
 
     required = ["treatment_cohort", "never_treated"]
@@ -415,8 +439,7 @@ def resolve_treatment(df: pd.DataFrame, profile: DatasetProfile, time_col: str) 
 
     time = pd.to_numeric(df[time_col], errors="raise")
     df[col] = (cohort.notna() & (time >= cohort)).astype(int)
-    if int(df[col].sum()) == 0:
-        raise ValueError("Türetilen tedavi göstergesi hiçbir satırı işaretlemedi.")
+    _require_both_arms(df[col], col, TREATMENT_FROM_COHORT)
     return col, TREATMENT_FROM_COHORT
 
 
@@ -794,13 +817,23 @@ def run_smoke_matrix(
     runs = [run_dataset(profile, repo_root=repo_root, timeout=timeout) for profile in profiles]
     failed = [run for run in runs if run.status == STATUS_FAILED]
     skipped = [run for run in runs if run.status == STATUS_SKIPPED]
+    completed = [run for run in runs if run.status == STATUS_OK]
     total_seconds = sum(run.seconds for run in runs)
 
     if failed:
         overall_reason = f"{len(failed)} dataset kırıldı: {', '.join(r.key for r in failed)}"
+    elif not completed:
+        # Boşalmış bir matris yeşil dönerse en tehlikeli hâline gelir: kimse log'a bakmaz
+        # ve genelleme iddiası doğrulanmamışken doğrulanmış görünür.
+        atlanan = ", ".join(r.key for r in skipped) or "yok"
+        overall_reason = (
+            "hiçbir dataset koşmadı, matris bu hâliyle çekirdek hakkında hiçbir şey "
+            f"kanıtlamıyor (atlanan: {atlanan})"
+        )
     elif skipped:
         overall_reason = (
-            f"koşan dataset'lerde zincir çalıştı; atlanan: {', '.join(r.key for r in skipped)}"
+            f"{len(completed)} dataset zinciri yürüttü; "
+            f"atlanan: {', '.join(r.key for r in skipped)}"
         )
     else:
         overall_reason = f"koşan {len(runs)} dataset zinciri baştan sona yürüttü"
@@ -809,13 +842,13 @@ def run_smoke_matrix(
         "check": "S3-08 CI smoke matrisi",
         "provenance": _report_provenance(repo_root=repo_root),
         "overall": {
-            "status": STATUS_FAILED if failed else STATUS_OK,
+            "status": STATUS_OK if completed and not failed else STATUS_FAILED,
             "reason": overall_reason,
         },
         "budget": {
             "total_seconds": round(total_seconds, 1),
-            "budget_seconds": TIME_BUDGET_SECONDS,
-            "within_budget": total_seconds <= TIME_BUDGET_SECONDS,
+            "warn_threshold_seconds": TIME_BUDGET_WARN_SECONDS,
+            "within_threshold": total_seconds <= TIME_BUDGET_WARN_SECONDS,
         },
         "notes": list(RUN_NOTES),
         "datasets": [
@@ -880,14 +913,15 @@ def render_markdown(report: dict[str, Any]) -> str:
         for run in report["datasets"]
     )
 
-    budget_label = "bütçe içinde" if budget["within_budget"] else "BÜTÇE AŞILDI"
+    budget_label = "eşik altında" if budget["within_threshold"] else "UYARI: EŞİK AŞILDI"
     lines.extend(
         [
             "",
-            "## Süre Bütçesi",
+            "## Süre Eşiği",
             "",
             f"- Toplam: {budget['total_seconds']} sn "
-            f"(üst sınır {budget['budget_seconds']} sn — {budget_label})",
+            f"(uyarı eşiği {budget['warn_threshold_seconds']} sn, {budget_label})",
+            "- Eşik aşımı koşuyu kırmaz; ağır setleri nightly'ye ayırma kararı içindir.",
             "",
             "## Koşu Notları",
             "",
@@ -945,10 +979,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     selected = selected_profiles(args.dataset)
     report = run_smoke_matrix(selected, timeout=args.timeout)
+    # `--out` verilse de rapor stdout'ta kalır: dosyaya yazdırıp log'u boşaltmak,
+    # kırık bir koşuda nedeni okunabilir tek yerden kaldırırdı.
     if args.out:
         write_report(report, Path(args.out), render=render_markdown)
-    else:
-        print(render_markdown(report), end="")
+    print(render_markdown(report), end="")
     return 0 if report["overall"]["status"] == STATUS_OK else 1
 
 
