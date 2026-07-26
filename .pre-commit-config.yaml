@@ -1,22 +1,53 @@
-# ruff lint(--fix)→format + hijyen + gitleaks secret-scan.
+# ruff lint(--fix)→format + mypy + hijyen + gitleaks secret-scan.
+#
+# Kurulum isteğe bağlıdır (CI kapısı ayrıca koşar):
+#   uv sync --extra dev && uv run pre-commit install
+#
+# ruff ve mypy bilerek `local` hook: upstream'e pinli bir `rev` yerine projenin
+# kendi venv'inden (uv.lock ne çözüyorsa) koşarlar. Böylece ci.yml ile aynı sürüm
+# garanti edilir; "lokalde yeşil, CI'da kırmızı" sürüm kayması yapıları oluşamaz.
 repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.4.10
+  - repo: local
     hooks:
-      - id: ruff
-        args: [--fix]
+      - id: ruff-check
+        name: ruff check (--fix)
+        entry: uv run ruff check --fix --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
       - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: mypy
+        name: mypy (ci.yml ile aynı kapsam)
+        # mypy paket bütününe bakar; tek tek dosya vermek yanlış sonuç üretir.
+        entry: uv run mypy pareto app scripts tests
+        language: system
+        types: [python]
+        pass_filenames: false
+        require_serial: true
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.6.0
+    rev: v6.0.0
     hooks:
+      # Ham veri kaynağından geldiği gibi durmalı: boşluk/newline "düzeltmek" bile
+      # dosyayı upstream ile bit-bit karşılaştırılamaz hale getirir, repro iddiasını
+      # zayıflatır. (Card & Krueger codebook/read.me bu hook'lara takılıyordu.)
       - id: trailing-whitespace
+        exclude: ^data/.*/raw/
       - id: end-of-file-fixer
+        exclude: ^data/.*/raw/
       - id: check-yaml
       - id: check-added-large-files
         args: [--maxkb=2048]
 
   - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.18.4
+    # .github/workflows/ci.yml içindeki GITLEAKS_VERSION ile aynı kalmalı.
+    rev: v8.30.1
     hooks:
       - id: gitleaks

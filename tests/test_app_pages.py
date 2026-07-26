@@ -270,3 +270,59 @@ def test_variance_panel_shows_no_record_message_when_run_untracked(
     _load_variance_panel(app, _results_file(tmp_path))
 
     assert any("kaydı bulunamadı" in caption.value for caption in app.caption)
+
+
+def test_spec_curve_colors_points_by_significance_and_direction(tmp_path: Path) -> None:
+    """Spec-curve'ün tek okunur sinyali renk: gri anlamsız, yeşil/kırmızı anlamlı yön.
+
+    Renk düşerse eğri hâlâ çizilir ama "hangi spesifikasyon anlamlı ve hangi yönde"
+    sorusu grafikten okunamaz hale gelir; panelin sattığı şey tam olarak budur.
+    """
+    results = [
+        EstimationResult(
+            spec_id="anlamli_negatif",
+            estimator="OLS",
+            coefficient=-0.4,
+            ci_low=-0.6,
+            ci_high=-0.2,
+            p_value=0.001,
+            n_obs=10,
+        ),
+        EstimationResult(
+            spec_id="anlamsiz",
+            estimator="OLS",
+            coefficient=0.1,
+            ci_low=-0.3,
+            ci_high=0.5,
+            p_value=0.7,
+            n_obs=10,
+        ),
+        EstimationResult(
+            spec_id="anlamli_pozitif",
+            estimator="OLS",
+            coefficient=0.4,
+            ci_low=0.2,
+            ci_high=0.6,
+            p_value=0.01,
+            n_obs=10,
+        ),
+    ]
+    results_path = tmp_path / "results.json"
+    results_path.write_text(
+        json.dumps([r.model_dump() for r in results], ensure_ascii=False), encoding="utf-8"
+    )
+
+    app = AppTest.from_file(PAGE_PATH, default_timeout=10)
+    app.session_state["clean_df"] = _panel_missing_cohort_columns()
+    app.session_state["frozen_estimand"] = _frozen_estimand()
+
+    _load_variance_panel(app, results_path)
+
+    figure = json.loads(app.get("plotly_chart")[0].proto.spec)
+    trace = figure["data"][0]
+    # Eğri katsayıya göre sıralı çizilir; renk ile spec_id aynı noktayı göstermeli.
+    colors_by_spec = dict(zip(trace["text"], trace["marker"]["color"], strict=True))
+
+    assert colors_by_spec["anlamli_negatif"] == "indianred"
+    assert colors_by_spec["anlamli_pozitif"] == "seagreen"
+    assert colors_by_spec["anlamsiz"] == "gray"

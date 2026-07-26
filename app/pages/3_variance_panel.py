@@ -14,6 +14,7 @@ import io
 import json
 import zipfile
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -145,6 +146,7 @@ def _plot_coefficient_series(
     yaxis_title: str,
     hovertemplate: str,
     marker_size: int = 8,
+    marker_color: list[str] | None = None,
     connectgaps: bool = False,
     add_zero_line: bool = True,
     zero_line_y: float = 0.0,
@@ -155,11 +157,14 @@ def _plot_coefficient_series(
     error_y: dict | None = None,
 ) -> go.Figure:
     fig = go.Figure()
+    marker: dict[str, Any] = {"size": marker_size}
+    if marker_color is not None:
+        marker["color"] = marker_color
     trace_kwargs = {
         "x": x,
         "y": y,
         "mode": trace_mode,
-        "marker": {"size": marker_size},
+        "marker": marker,
         "hovertemplate": hovertemplate,
     }
     if trace_name is not None:
@@ -184,7 +189,7 @@ def _plot_coefficient_series(
 
 
 @st.cache_data(show_spinner=False)
-def _diagnose_axes_cached(results_json: str, specs_json: str) -> dict[str, object]:
+def _diagnose_axes_cached(results_json: str, specs_json: str) -> dict[str, Any]:
     return diagnose_axes(
         [EstimationResult(**item) for item in json.loads(results_json)],
         [Specification(**item) for item in json.loads(specs_json)],
@@ -201,7 +206,7 @@ c4.metric(
 )
 
 band = summary.get("band")
-band_style = {"robust": "success", "mixed": "warning", "fragile": "error"}.get(band, "info")
+band_style = {"robust": "success", "mixed": "warning", "fragile": "error"}.get(str(band), "info")
 getattr(st, band_style)(f"**Etiket: {str(band).upper()}** — {ROBUST_RULE_TEXT}")
 
 
@@ -213,30 +218,33 @@ def _color(r: EstimationResult) -> str:
     return "seagreen" if r.coefficient > 0 else "indianred"
 
 
-ok = [r for r in results if r.status == "ok" and r.coefficient is not None]
+# (sonuç, katsayı) çifti: katsayının None olmadığı filtrede bir kez daraltılır,
+# aşağıdaki sıralama ve hata çubuğu hesapları aynı daraltılmış değeri kullanır.
+ok = [(r, r.coefficient) for r in results if r.status == "ok" and r.coefficient is not None]
 if ok:
-    ok.sort(key=lambda r: r.coefficient)
+    ok.sort(key=lambda pair: pair[1])
     fig = _plot_coefficient_series(
         x=list(range(len(ok))),
-        y=[r.coefficient for r in ok],
+        y=[coefficient for _result, coefficient in ok],
         title="Specification Curve (katsayıya göre sıralı)",
         xaxis_title="Spesifikasyonlar",
         yaxis_title="Tahmini etki (katsayı)",
         hovertemplate="%{text}<br>katsayı=%{y:.4f}<extra></extra>",
         marker_size=8,
+        marker_color=[_color(r) for r, _coefficient in ok],
         trace_mode="markers",
         add_zero_line=True,
         height=480,
         error_y={
             "type": "data",
             "symmetric": False,
-            "array": [(r.ci_high - r.coefficient) if r.ci_high else 0 for r in ok],
-            "arrayminus": [(r.coefficient - r.ci_low) if r.ci_low else 0 for r in ok],
+            "array": [(r.ci_high - coefficient) if r.ci_high else 0 for r, coefficient in ok],
+            "arrayminus": [(coefficient - r.ci_low) if r.ci_low else 0 for r, coefficient in ok],
             "thickness": 1,
             "width": 0,
         },
     )
-    fig.data[0].text = [r.spec_id for r in ok]
+    fig.data[0].text = [r.spec_id for r, _coefficient in ok]
     st.plotly_chart(fig, use_container_width=True)
     _capture_figure("specification_curve.html", fig)
 
@@ -565,12 +573,12 @@ def _forget_package() -> None:
 if st.button("Reprodüksiyon paketini hazırla"):
     try:
         with st.spinner("Paket hazırlanıyor..."):
-            payload = build_reproduction_package(repro_inputs)
-        st.session_state["_repro_package"] = payload
+            package_bytes = build_reproduction_package(repro_inputs)
+        st.session_state["_repro_package"] = package_bytes
         st.session_state["_repro_package_key"] = repro_key
         # Provenans denetimi paketin içinde yapılır; arayüz sonucu manifest'ten
         # okur ki uyarı ile pakete yazılan kayıt tek kaynaktan gelsin.
-        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        with zipfile.ZipFile(io.BytesIO(package_bytes)) as archive:
             manifest = json.loads(archive.read("MANIFEST.json").decode("utf-8"))
         st.session_state["_repro_package_provenance"] = manifest.get("provenance") or {}
         st.session_state["_repro_package_stale"] = False

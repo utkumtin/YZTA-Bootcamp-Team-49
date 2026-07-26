@@ -453,6 +453,15 @@ cp .env.example .env         # BYOK anahtarları + model seçimleri (her slot bi
 streamlit run app/main.py
 ```
 
+Commit öncesi kontrolleri lokalde koşturmak isteyenler için (isteğe bağlı; CI kapısı
+ayrıca koşar). `ruff` ve `mypy` hook'ları projenin kendi venv'inden çalışır, yani
+CI ile aynı sürümü kullanır:
+
+```bash
+uv run pre-commit install     # hook'u kur
+uv run pre-commit run --all-files   # tüm depoyu bir kez tara
+```
+
 ## License
 
 Apache-2.0.

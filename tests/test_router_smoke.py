@@ -2,7 +2,8 @@
 
 Mekanik testler API yakmadan cache ve failover davranışını doğrular.
 `live` işaretli testler yalnız ilgili BYOK anahtarı ortamda tanımlıysa koşar;
-CI'da anahtar olmadığından otomatik atlanır.
+CI'da anahtar olmadığından otomatik atlanır. Anahtar varken sağlayıcı kotası
+tükenirse (HTTP 429) test kırmızıya düşmez, atlanır.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ import os
 import pytest
 from pydantic import BaseModel
 from pydantic_ai import Agent
-from pydantic_ai.exceptions import ModelAPIError
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.models.fallback import FallbackModel
 from pydantic_ai.models.function import FunctionModel
@@ -457,6 +458,20 @@ _gemini_key_var = bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGL
 _groq_key_var = bool(os.environ.get("GROQ_API_KEY"))
 
 
+def _run_or_skip(agent: Agent, prompt: str):
+    """Kota tükenmesi sağlayıcı sınırıdır, kod hatası değil: yalnız 429 atlanır.
+
+    Diğer tüm HTTP hataları (ör. thinking/structured-output uyumsuzluğunun döndürdüğü
+    400) yükselmeye devam eder; testin koruduğu şey budur.
+    """
+    try:
+        return agent.run_sync(prompt)
+    except ModelHTTPError as exc:
+        if exc.status_code == 429:
+            pytest.skip(f"sağlayıcı kotası tükendi (HTTP {exc.status_code})")
+        raise
+
+
 @pytest.mark.live
 @pytest.mark.skipif(not _gemini_key_var, reason="GEMINI_API_KEY tanımlı değil")
 def test_gemini_canli_smoke_deterministik(tmp_path):
@@ -467,8 +482,8 @@ def test_gemini_canli_smoke_deterministik(tmp_path):
         model_settings={"temperature": 0.0},
     )
 
-    first = agent.run_sync("Şu kelimeyi aynen tekrar et: PARETO")
-    second = agent.run_sync("Şu kelimeyi aynen tekrar et: PARETO")
+    first = _run_or_skip(agent, "Şu kelimeyi aynen tekrar et: PARETO")
+    second = _run_or_skip(agent, "Şu kelimeyi aynen tekrar et: PARETO")
 
     assert "PARETO" in first.output.upper()
     assert first.output == second.output, "temp=0 + cache → birebir aynı yanıt"
@@ -493,7 +508,7 @@ def test_gemini_canli_thinking_ile_yapili_cikti_uretir():
         output_type=_Cevap,
     )
 
-    result = agent.run_sync("PARETO")
+    result = _run_or_skip(agent, "PARETO")
 
     assert result.output.kelime.strip().upper() == "PARETO"
 
@@ -509,6 +524,6 @@ def test_groq_canli_smoke_deterministik():
         model_settings={"temperature": 0.0},
     )
 
-    result = agent.run_sync("Şu kelimeyi aynen tekrar et: MULTIVERSE")
+    result = _run_or_skip(agent, "Şu kelimeyi aynen tekrar et: MULTIVERSE")
 
     assert "MULTIVERSE" in result.output.upper()

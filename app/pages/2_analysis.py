@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import cast
 
 import pandas as pd
 import streamlit as st
@@ -15,7 +16,9 @@ from pareto.analysis.hypothesis import (
 )
 from pareto.analysis.menu import (
     ALL_AXES,
+    FrozenSpecMenu,
     SpecMenu,
+    SpecMenuProposal,
     build_deterministic_menu,
     evaluate_menu_defensibility,
     expand_to_specs,
@@ -533,12 +536,14 @@ else:
 
             st.stop()
 
-    menu_proposal = st.session_state.get("menu_proposal")
+    stored_proposal = st.session_state.get("menu_proposal")
 
-    if menu_proposal is None:
+    if stored_proposal is None:
         st.info("Önce JUDGE menü önerisi oluşturun.")
 
         st.stop()
+
+    menu_proposal = cast(SpecMenuProposal, stored_proposal)
 
     st.caption(menu_proposal.overall_rationale)
 
@@ -684,12 +689,14 @@ else:
         except ValueError as exc:
             st.error(str(exc))
 
-    frozen_menu_obj = st.session_state.get("frozen_spec_menu")
+    stored_frozen_menu = st.session_state.get("frozen_spec_menu")
 
-    if frozen_menu_obj is None:
+    if stored_frozen_menu is None:
         st.info("Menüyü onaylayarak devam edin.")
 
         st.stop()
+
+    frozen_menu_obj = cast(FrozenSpecMenu, stored_frozen_menu)
 
     menu = frozen_menu_obj.menu
 

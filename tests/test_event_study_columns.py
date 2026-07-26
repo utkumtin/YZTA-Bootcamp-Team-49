@@ -50,6 +50,7 @@ def test_build_event_study_payload_reports_missing_required_columns() -> None:
         estimand=None,
         analysis_state={"unit_col": "state", "time_col": "year", "controls": ["pop"]},
     )
+    assert payload is not None
     assert payload["status"] == "skipped"
     assert "required columns" in payload["reason"]
 
@@ -67,6 +68,7 @@ def test_build_event_study_payload_uses_estimand_outcome_first() -> None:
         estimand=_FakeFrozen(),
         analysis_state={"unit_col": "state", "time_col": "year", "controls": []},
     )
+    assert payload is not None
     assert payload["status"] == "pending_columns"
     assert payload["outcome_col"] == "uninsured_rate"
     assert payload["sources"]["outcome_col"] == "estimand"

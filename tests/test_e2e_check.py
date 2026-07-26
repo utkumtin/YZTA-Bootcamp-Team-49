@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -297,14 +298,14 @@ def isolated_artifacts(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _profiled_state() -> dict[str, object]:
+def _profiled_state() -> dict[str, Any]:
     panel = _committed_panel()
     return {"panel": SimpleNamespace(df=panel), "profile": profile_dataframe(panel)}
 
 
-def _analysis_state(isolated: object) -> dict[str, object]:
+def _analysis_state(isolated: object) -> dict[str, Any]:
     """Estimand ve menü dikişlerini gerçekten koşturup panel dikişinin girdisini üretir."""
-    state: dict[str, object] = {"clean_df": _committed_panel(), "config": _committed_config()}
+    state: dict[str, Any] = {"clean_df": _committed_panel(), "config": _committed_config()}
     e2e._seam_estimand(state)
     e2e._seam_menu(state)
     return state
@@ -368,7 +369,7 @@ def test_clean_seam_fails_when_no_decision_is_flagged(isolated_artifacts, monkey
 
 def test_estimand_seam_freezes_from_the_committed_baseline_sample(isolated_artifacts) -> None:
     """Dondurma temizlenmiş panelden türetilmezse sonraki her adım başka bir örneklemi ölçer."""
-    state: dict[str, object] = {"clean_df": _committed_panel(), "config": _committed_config()}
+    state: dict[str, Any] = {"clean_df": _committed_panel(), "config": _committed_config()}
 
     _detail, metrics = e2e._seam_estimand(state)
 

@@ -42,7 +42,7 @@ jobs:
         run: uv run ruff check .
 
       - name: Type check (mypy)
-        run: uv run mypy pareto
+        run: uv run mypy pareto app scripts tests
 
       - name: Run tests
         run: uv run pytest -m "not live"
