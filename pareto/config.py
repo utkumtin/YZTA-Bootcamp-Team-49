@@ -99,6 +99,8 @@ def _from_secrets(candidates: tuple[str, ...]) -> str:
                 if key:
                     return key
     except Exception as exc:
+        # Süreç başına bir kez uyar: her anahtar/model slotu için tekrarlanırsa
+        # (zincir kurulumu başına 5+) log okunmaz hale gelir.
         global _secrets_warned
         if not _secrets_warned:
             logger.warning("st.secrets okunamadı: %s", exc)
@@ -107,7 +109,13 @@ def _from_secrets(candidates: tuple[str, ...]) -> str:
 
 
 def _from_session_byok(candidates: tuple[str, ...]) -> str:
-    """Oturumdaki BYOK anahtarını oku."""
+    """Oturumdaki BYOK anahtarını oku — yalnız ilgili switch açıksa (veya hiç
+    ayarlanmamışsa, geriye dönük uyumluluk için varsayılan AÇIK).
+
+    `_from_secrets` ile aynı desen: Streamlit yoksa veya session_state'e
+    erişim başarısızsa (headless/test bağlamı) sessizce boş döner —
+    `resolve_api_key` env/secrets'a düşsün.
+    """
     try:
         import streamlit as st
     except ImportError:
@@ -141,17 +149,25 @@ def resolve_api_key(provider_env: str) -> tuple[str, str]:
 
 
 def get_api_key(provider_env: str) -> str:
-    """Önce env, yoksa st.secrets'dan API anahtarını döndür. Yoksa canned mode anahtarı döner."""
+    """Önce env, yoksa st.secrets'dan API anahtarını döndür."""
     key, _source = resolve_api_key(provider_env)
     if key:
         return key
 
-    # S3-05: Anahtar yoksa fail-loud yerine canned moda düş (frozen replay)
-    logger.info(f"{provider_env} bulunamadı, Canned Mode (Dummy Key) aktif.")
-    return "CANNED_MODE_DUMMY_KEY_NO_NETWORK"
+    raise OSError(
+        f"{provider_env} tanımlı değil. Şunlardan biriyle ayarlayın:\n"
+        f"  • Ayarlar sekmesi: **Anahtarı kaydet** (BYOK, oturum boyunca)\n"
+        f"  • proje kökünde `.env`: {provider_env}=...\n"
+        f"  • terminal: `export {provider_env}=...` (Streamlit'i yeniden başlat)"
+    )
 
 
 def resolve_setting(env_name: str, default: str) -> str:
-    """Sır olmayan bir ayarı çöz: env → `st.secrets` → kod defaultu."""
+    """Sır olmayan bir ayarı çöz: env → `st.secrets` → kod defaultu.
+
+    `resolve_api_key`'in kardeşi; aynı arama sırasını kullanır ama eksiklik
+    hata değildir — model ID'si gibi ayarlarda defaulta düşmek doğru davranış.
+    Boş/whitespace değer "tanımsız" sayılır.
+    """
     candidates = (env_name,)
     return _from_env(candidates) or _from_secrets(candidates) or default

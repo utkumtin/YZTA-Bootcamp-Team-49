@@ -509,7 +509,10 @@ def test_zincirde_anahtari_eksik_uyeler_canned_key_ile_kurulur(monkeypatch):
 
     # Tüm modeller dummy key ile de olsa başlatıldığı için zincir korunur (FallbackModel)
     from pydantic_ai.models.fallback import FallbackModel
-    assert isinstance(model, FallbackModel), "eksik üyeler atlanmaz, dummy key ile zincire dahil edilir"
+
+    assert isinstance(model, FallbackModel), (
+        "eksik üyeler atlanmaz, dummy key ile zincire dahil edilir"
+    )
     assert canned_mode is False, "GEMINI_API_KEY gerçek: zincir tamamen canned değil"
 
 
@@ -523,6 +526,7 @@ def test_zincirde_hic_anahtar_yoksa_canned_moda_duser(monkeypatch):
 
     assert model is not None, "Hiç anahtar yoksa bile Canned Mod için zincir kurulmalı"
     assert canned_mode is True, "Hiçbir üye gerçek anahtar bulamadı, canned mode açık olmalı"
+
 
 # ---------------------------------------------------------------------------
 # Canlı smoke — anahtar ortamda yoksa atlanır

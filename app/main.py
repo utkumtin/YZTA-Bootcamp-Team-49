@@ -29,7 +29,8 @@ if source == "none":
     st.info(
         "🧊 **Canned Mod Aktif:** API anahtarı bulunamadı. "
         "Şu an önceden kaydedilmiş Golden-path (dondurulmuş) senaryo üzerinden yürütülüyorsunuz. "
-        "Kendi verinizle analiz yapmak ve modeli canlı kullanmak için **Ayarlar** sekmesinden kendi API anahtarınızı (BYOK) girin."
+        "Kendi verinizle analiz yapmak ve modeli canlı kullanmak için"
+        "**Ayarlar** sekmesinden kendi API anahtarınızı (BYOK) girin."
     )
 
 with st.sidebar:
