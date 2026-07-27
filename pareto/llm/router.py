@@ -15,7 +15,7 @@ import logging
 from contextlib import contextmanager
 from typing import Any
 
-from ..config import SETTINGS, ModelRole, PrivacyMode, get_api_key
+from ..config import SETTINGS, ModelRole, PrivacyMode, get_api_key, resolve_api_key
 from .providers import ProviderModel, chain_for
 
 logger = logging.getLogger(__name__)
@@ -49,9 +49,10 @@ def _model_from_provider(pm: ProviderModel) -> Any:
         from pydantic_ai.models.openrouter import OpenRouterModel
         from pydantic_ai.providers.openrouter import OpenRouterProvider
 
-        # get_api_key() ÖNCE çağrılır: eksik anahtar burada fail-loud OSError
-        # olarak yükselsin (_chain_model'in yakaladığı hata), OpenRouterProvider'ın
-        # kendi UserError'ına düşmesin — o hata _chain_model'de yakalanmaz.
+        # get_api_key() gerçek bir anahtar yoksa dummy key döner (S3-05, canned
+        # mode) — OpenRouterProvider'a her zaman geçerli bir string gider.
+        # get_api_key() artık hiç OSError fırlatmaz (bkz. config.get_api_key),
+        # dolayısıyla burada yakalanacak bir "eksik anahtar" hatası riski yok.
         return OpenRouterModel(
             pm.model_id,
             provider=OpenRouterProvider(api_key=get_api_key(pm.api_key_env)),
@@ -77,33 +78,36 @@ def _get_effective_privacy_mode() -> PrivacyMode:
     return PrivacyMode.PRIVATE if str(raw) == PrivacyMode.PRIVATE.value else PrivacyMode.PUBLIC
 
 
-def _chain_model(chain: tuple[ProviderModel, ...]) -> Any:
+def _chain_model(chain: tuple[ProviderModel, ...]) -> tuple[Any, bool]:
     """Zinciri tek modele indirger: tek üye → kendisi, çok üye → FallbackModel.
 
-    Anahtarı eksik yedek üyeler uyarıyla atlanır (kısmi BYOK ile failover çalışsın);
-    zincirde hiç kullanılabilir üye kalmazsa fail-loud.
+    S3-05 sonrası `config.get_api_key` artık hiç OSError fırlatmıyor (gerçek anahtar
+    yoksa dummy key ile canned moda düşüyor) — dolayısıyla burada eskiden var olan
+    "anahtarı eksik üye uyarıyla atlanır" davranışı artık hiç tetiklenmiyordu (ölü
+    kod), kaldırıldı. Her üye — gerçek ya da dummy bir anahtarla — zincire girer.
+
+    İkinci dönüş değeri (`canned_mode`), zincirdeki HİÇBİR üyenin gerçek bir anahtar
+    bulamadığını (byok/env/secrets'ın hiçbirinde eşleşme olmadığını, hepsinin dummy
+    key ile kurulduğunu) işaret eder. Bunu `_resolve_model` cache katmanına taşır:
+    `CachedModel` cache-miss'te bu bayrak açıkken sahte bir ağ isteği atıp çirkin bir
+    401/auth hatasına düşmek yerine açık bir hata fırlatır (bkz. cache.py, S3-05
+    review Sorun B).
     """
     models: list[Any] = []
-    missing: list[str] = []
+    any_real_key = False
     for pm in chain:
-        try:
-            models.append(_model_from_provider(pm))
-        except OSError:
-            logger.warning(
-                "Zincir üyesi atlandı (anahtar yok): %s:%s (%s)",
-                pm.provider,
-                pm.model_id,
-                pm.api_key_env,
-            )
-            missing.append(pm.api_key_env)
-    if not models:
-        raise OSError(f"Zincirde kullanılabilir model yok; eksik anahtarlar: {', '.join(missing)}")
+        _key, source = resolve_api_key(pm.api_key_env)
+        if source != "none":
+            any_real_key = True
+        models.append(_model_from_provider(pm))
+
+    canned_mode = not any_real_key
     if len(models) == 1:
-        return models[0]
+        return models[0], canned_mode
 
     from pydantic_ai.models.fallback import FallbackModel
 
-    return FallbackModel(*models)
+    return FallbackModel(*models), canned_mode
 
 
 def _resolve_model(role: ModelRole) -> tuple[Any, dict[str, Any]]:
@@ -124,14 +128,25 @@ def _resolve_model(role: ModelRole) -> tuple[Any, dict[str, Any]]:
         return _TEST_MODEL, {}
     from .cache import wrap_with_cache
 
-    chain = chain_for(role, _get_effective_privacy_mode())
+    effective_privacy_mode = _get_effective_privacy_mode()
+    chain = chain_for(role, effective_privacy_mode)
     extra_model_settings: dict[str, Any] = {}
     if len(chain) == 1:
         pm = chain[0]
         extra_model_settings = dict(pm.extra_model_settings or {})
         if pm.thinking != "off":
             extra_model_settings["thinking"] = pm.thinking
-    return wrap_with_cache(_chain_model(chain)), extra_model_settings
+
+    if effective_privacy_mode is PrivacyMode.PRIVATE and any(
+        pm.api_key_env == "GEMINI_PAID_API_KEY" for pm in chain
+    ):
+        _paid_key, paid_source = resolve_api_key("GEMINI_PAID_API_KEY")
+        _free_key, free_source = resolve_api_key("GEMINI_API_KEY")
+        if paid_source == "none" and free_source != "none":
+            raise OSError("eksik anahtarlar: GEMINI_PAID_API_KEY")
+
+    model, canned_mode = _chain_model(chain)
+    return wrap_with_cache(model, canned_mode=canned_mode), extra_model_settings
 
 
 def build_agent(role: ModelRole, *, system_prompt: str, output_type: Any | None = None):

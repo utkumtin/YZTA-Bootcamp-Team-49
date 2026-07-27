@@ -1,0 +1,9 @@
+.PHONY: requirements check-requirements
+
+# uv'nin ürettiği lock'ı saf requirements formatında dışa aktarır
+requirements:
+	uv export --frozen --no-hashes --format requirements-txt > requirements.txt
+
+# CI/CD ve local commit hook'ları için drift kontrolü
+check-requirements: requirements
+	git diff --exit-code requirements.txt || (echo "🚨 DRIFT FAIL-LOUD: requirements.txt uv.lock ile senkron değil! 'make requirements' çalıştırıp commitleyin." && exit 1)

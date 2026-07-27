@@ -7,6 +7,16 @@ anahtardan ayıklanır, yoksa aynı istek her seferinde farklı anahtara düşer
 
 temp=0 dışındaki isteklerde cache atlanır çünkü yanıt deterministik değildir.
 `PARETO_LLM_CACHE=0` ortam değişkeni cache'i tamamen kapatır.
+
+S3-05 (canned mode): gerçek bir API anahtarı bulunamadığında `router._chain_model`
+zinciri dummy key ile kurar (`config.get_api_key`). Bu, "temiz tarayıcı → canned akış
+panele kadar yürür" (Definition of Success) garantisinin, golden-path cache
+dosyalarının runtime isteğiyle birebir aynı hash'e düşmesine bağlı olduğu anlamına
+gelir. Sistem promptu/model adı/ayar bir karakter bile değişirse hash değişir, cache
+miss olur ve dummy key ile gerçek bir HTTPS isteği atılmaya çalışılırdı — kullanıcı
+network hatası değil çirkin bir 401/auth hatası görürdü. `CachedModel` artık bu
+durumu (`canned_mode=True` + cache miss) açıkça algılayıp anlaşılır bir hata
+fırlatır, ham sağlayıcı hatasına düşmeden önce.
 """
 
 from __future__ import annotations
@@ -38,16 +48,31 @@ _CACHE_ENV_FLAG = "PARETO_LLM_CACHE"
 _RESPONSE_ADAPTER: TypeAdapter[ModelResponse] = TypeAdapter(ModelResponse)
 
 
+class CannedModeCacheMissError(RuntimeError):
+    """Canned mode aktifken (gerçek anahtar yok) cache'te karşılık bulunamadı.
+
+    Bu, golden-path cache dosyalarının runtime isteğiyle (sistem promptu, model adı,
+    ayarlar) birebir eşleşmediği anlamına gelir. Gerçek anahtar olmadan sağlayıcıya
+    istek atmak yalnız anlamsız bir 401/auth hatasına yol açar; bunun yerine burada
+    açıkça durulur.
+    """
+
+
 def cache_enabled() -> bool:
     """Cache açık mı? `PARETO_LLM_CACHE=0` ile kapatılır, varsayılan açık."""
     return os.environ.get(_CACHE_ENV_FLAG, "1") != "0"
 
 
-def wrap_with_cache(model: Model | str) -> Model | str:
-    """Cache açıksa modeli `CachedModel` ile sarar, kapalıysa aynen döndürür."""
+def wrap_with_cache(model: Model | str, *, canned_mode: bool = False) -> Model | str:
+    """Cache açıksa modeli `CachedModel` ile sarar, kapalıysa aynen döndürür.
+
+    `canned_mode=True`, çağıranın (router._chain_model) zincirdeki hiçbir üye için
+    gerçek bir anahtar bulamadığını (hepsinin dummy key ile kurulduğunu) bildirir —
+    bkz. `CachedModel` docstring'i.
+    """
     if not cache_enabled():
         return model
-    return CachedModel(model, Path(SETTINGS.llm_cache_dir))
+    return CachedModel(model, Path(SETTINGS.llm_cache_dir), canned_mode=canned_mode)
 
 
 # İstek içeriğinden bağımsız, her koşuda değişen alanlar; cache anahtarına giremez.
@@ -69,12 +94,18 @@ class CachedModel(WrapperModel):
     Deterministik olmayan (temp != 0) istekler sarmalanan modele aynen geçer.
     Bozuk cache dosyası sessizce yutulmaz; uyarı loglanır ve yanıt yeniden
     üretilip dosyanın üstüne yazılır.
+
+    `canned_mode=True` iken (gerçek anahtar yok, yalnız dummy key ile kurulmuş bir
+    model sarmalanıyor) cache miss durumunda sarmalanan modele hiç gidilmez — bunun
+    yerine `CannedModeCacheMissError` fırlatılır. Aksi halde dummy key ile gerçek bir
+    ağ isteği denenir ve kullanıcıya anlamsız bir 401/auth hatası olarak döner.
     """
 
-    def __init__(self, wrapped: Model | str, cache_dir: Path) -> None:
+    def __init__(self, wrapped: Model | str, cache_dir: Path, *, canned_mode: bool = False) -> None:
         # KnownModelName Literal'ı dışındaki "provider:model" stringleri de geçerli
         super().__init__(wrapped)  # type: ignore[arg-type]
         self._cache_dir = cache_dir
+        self._canned_mode = canned_mode
 
     async def request(
         self,
@@ -90,6 +121,17 @@ class CachedModel(WrapperModel):
         if cached is not None:
             logger.debug("LLM cache isabet: %s", path.name)
             return cached
+
+        if self._canned_mode:
+            logger.warning("Canned mode cache miss: %s", path.name)
+            raise CannedModeCacheMissError(
+                "Canned mode aktif (gerçek bir API anahtarı bulunamadı) ve bu istek için "
+                "cache'te karşılık yok. Golden-path cache dosyaları runtime isteğiyle "
+                "(sistem promptu, model adı, ayarlar) birebir eşleşmiyor olabilir. "
+                "Gerçek bir sağlayıcıya anahtarsız istek atılmayacak — devam etmek için "
+                "geçerli bir BYOK anahtarı girin ya da cache'i golden-path isteğiyle "
+                "senkronize edin."
+            )
 
         response = await super().request(messages, model_settings, model_request_parameters)
         self._write(path, response)

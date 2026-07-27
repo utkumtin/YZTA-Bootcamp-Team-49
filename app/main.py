@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from pareto.config import load_dotenv_file
+from pareto.config import load_dotenv_file, resolve_api_key
 from pareto.streamlit_ui import (
     render_compact_sidebar,
     render_main_nav_style,
@@ -22,6 +22,16 @@ from pareto.streamlit_ui import (
 load_dotenv_file()
 
 st.set_page_config(page_title="Pareto", page_icon="📊", layout="wide")
+
+# S3-05: Canned Mode Bildirimi
+key, source = resolve_api_key("GEMINI_API_KEY")
+if source == "none":
+    st.info(
+        "🧊 **Canned Mod Aktif:** API anahtarı bulunamadı. "
+        "Şu an önceden kaydedilmiş Golden-path (dondurulmuş) senaryo üzerinden yürütülüyorsunuz. "
+        "Kendi verinizle analiz yapmak ve modeli canlı kullanmak için"
+        "**Ayarlar** sekmesinden kendi API anahtarınızı (BYOK) girin."
+    )
 
 with st.sidebar:
     render_compact_sidebar()

@@ -149,17 +149,20 @@ def resolve_api_key(provider_env: str) -> tuple[str, str]:
 
 
 def get_api_key(provider_env: str) -> str:
-    """Önce env, yoksa st.secrets'dan API anahtarını döndür."""
+    """API anahtarını döndür.
+
+    Gerçek anahtar yoksa constructor'ın kurulabilmesi için dummy key döndürülür.
+    Çağrının gerçekten canned mode'da olup olmadığı resolve_api_key() üzerinden
+    takip edilir.
+    """
     key, _source = resolve_api_key(provider_env)
+
     if key:
         return key
 
-    raise OSError(
-        f"{provider_env} tanımlı değil. Şunlardan biriyle ayarlayın:\n"
-        f"  • Ayarlar sekmesi: **Anahtarı kaydet** (BYOK, oturum boyunca)\n"
-        f"  • proje kökünde `.env`: {provider_env}=...\n"
-        f"  • terminal: `export {provider_env}=...` (Streamlit'i yeniden başlat)"
-    )
+    # S3-05: constructor'ın kurulabilmesi için dummy key.
+    # Gerçek ağ isteği CachedModel tarafından canned_mode'da engellenir.
+    return "PARETO_CANNED_MODE_DUMMY_KEY"
 
 
 def resolve_setting(env_name: str, default: str) -> str:

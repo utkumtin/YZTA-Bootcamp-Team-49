@@ -9,6 +9,7 @@ tükenirse (HTTP 429) test kırmızıya düşmez, atlanır.
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 
 import pytest
 from pydantic import BaseModel
@@ -20,7 +21,8 @@ from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.test import TestModel
 
 from pareto.config import ModelRole, PrivacyMode, load_dotenv_file
-from pareto.llm.cache import CachedModel, cache_enabled
+from pareto.llm import cache as cache_module
+from pareto.llm.cache import CachedModel, CannedModeCacheMissError, cache_enabled
 from pareto.llm.providers import (
     _JUDGE_SLOTS,
     _MECHANICAL_SLOTS,
@@ -137,6 +139,67 @@ def test_cache_env_bayragiyla_kapanir(monkeypatch):
     assert not cache_enabled()
     monkeypatch.setenv("PARETO_LLM_CACHE", "1")
     assert cache_enabled()
+
+
+# ---------------------------------------------------------------------------
+# Canned mode + cache miss — S3-05 review Sorun B
+# ---------------------------------------------------------------------------
+
+
+def test_cache_canned_modda_cache_miss_acik_hata_verir(tmp_path):
+    """Canned mode'da (gerçek anahtar yok) cache miss olursa sarmalanan modele hiç
+    gidilmemeli — aksi halde dummy key ile gerçek bir ağ isteği denenir ve kullanıcı
+    anlamsız bir 401/auth hatası görür."""
+    counter = {"n": 0}
+    agent = Agent(
+        CachedModel(_counting_model(counter), tmp_path, canned_mode=True),
+        model_settings={"temperature": 0.0},
+    )
+
+    with pytest.raises(CannedModeCacheMissError, match="Canned mode"):
+        agent.run_sync("merhaba")
+
+    assert counter["n"] == 0, "canned modda sarmalanan modele hiç gidilmemeli"
+    assert list(tmp_path.glob("*.json")) == [], "başarısız istek cache'e yazılmamalı"
+
+
+def test_cache_canned_modda_cache_hit_hatasiz_doner(tmp_path):
+    """Canned mode'da bile cache'te karşılığı olan bir istek normal şekilde dönmeli —
+    frozen replay tam olarak bunun için var."""
+    counter = {"n": 0}
+    warm_agent = Agent(
+        CachedModel(_counting_model(counter), tmp_path, canned_mode=False),
+        model_settings={"temperature": 0.0},
+    )
+    warm_agent.run_sync("merhaba")
+    assert counter["n"] == 1
+
+    canned_agent = Agent(
+        CachedModel(_counting_model(counter), tmp_path, canned_mode=True),
+        model_settings={"temperature": 0.0},
+    )
+    result = canned_agent.run_sync("merhaba")
+
+    assert result.output == "sabit yanıt"
+    assert counter["n"] == 1, "cache hit'te gerçek modele hiç gidilmemeli"
+
+
+def test_resolve_model_canned_modda_cache_miss_uctan_uca_hata_verir(monkeypatch, tmp_path):
+    """`_resolve_model` → `CachedModel` zincirinin bütünü: hiç anahtar yokken ve
+    cache'te karşılık yokken kullanıcı ham bir sağlayıcı hatası yerine açıklayıcı bir
+    hata görmeli."""
+    for env in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY"):
+        monkeypatch.delenv(env, raising=False)
+    monkeypatch.setattr(
+        cache_module, "SETTINGS", replace(cache_module.SETTINGS, llm_cache_dir=str(tmp_path))
+    )
+    monkeypatch.setattr("streamlit.session_state", {"privacy_mode": "public"})
+
+    model, _extra = _resolve_model(ModelRole.JUDGE)
+    agent = Agent(model, model_settings={"temperature": 0.0})
+
+    with pytest.raises(CannedModeCacheMissError):
+        agent.run_sync("merhaba")
 
 
 # ---------------------------------------------------------------------------
@@ -384,28 +447,53 @@ def test_mekanik_zincir_fallback_modele_indirgenir(monkeypatch):
     monkeypatch.setenv("GROQ_API_KEY", "test-anahtar")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-anahtar")
 
-    model = _chain_model(chain_for(ModelRole.MECHANICAL, PrivacyMode.PUBLIC))
+    model, canned_mode = _chain_model(chain_for(ModelRole.MECHANICAL, PrivacyMode.PUBLIC))
 
     assert isinstance(model, FallbackModel)
+    assert canned_mode is False, "en az bir üye gerçek anahtar buldu, canned mode olmamalı"
 
 
-def test_zincirde_anahtari_eksik_uye_atlanir(monkeypatch):
+def test_zincirde_anahtari_eksik_uyeler_canned_key_ile_kurulur(monkeypatch):
+    """S3-05: Eksik anahtarlar OSError fırlatmak yerine dummy key alarak cache'e hit
+    edecekleri beklentisiyle başlatılır. Bu üye grubunda GEMINI_API_KEY gerçek olduğu
+    için `canned_mode` False kalmalı — yalnız o üyenin görmediği bir gerçek anahtar
+    yokluğu, zincirin tamamını canned moda düşürmez."""
     monkeypatch.setenv("GEMINI_API_KEY", "test-anahtar")
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 
-    model = _chain_model(chain_for(ModelRole.MECHANICAL, PrivacyMode.PUBLIC))
+    model, canned_mode = _chain_model(chain_for(ModelRole.MECHANICAL, PrivacyMode.PUBLIC))
 
-    assert not isinstance(model, FallbackModel), "tek kullanılabilir üye kaldıysa sarmalanmaz"
+    # Tüm modeller dummy key ile de olsa başlatıldığı için zincir korunur (FallbackModel)
+    from pydantic_ai.models.fallback import FallbackModel
+
+    assert isinstance(model, FallbackModel), (
+        "eksik üyeler atlanmaz, dummy key ile zincire dahil edilir"
+    )
+    assert canned_mode is False, "GEMINI_API_KEY gerçek: zincir tamamen canned değil"
 
 
-def test_zincirde_hic_anahtar_yoksa_fail_loud(monkeypatch):
+def test_zincirde_hic_anahtar_yoksa_canned_moda_duser(monkeypatch):
+    """S3-05: Önceden OSError atan bu durum, artık modeli Canned Dummy Key ile başlatır
+    ve akışı kesmez; hiçbir üye gerçek anahtar bulamadığı için `canned_mode` True olmalı."""
     for env in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY"):
         monkeypatch.delenv(env, raising=False)
 
+    model, canned_mode = _chain_model(chain_for(ModelRole.MECHANICAL, PrivacyMode.PUBLIC))
+
+    assert model is not None, "Hiç anahtar yoksa bile Canned Mod için zincir kurulmalı"
+    assert canned_mode is True, "Hiçbir üye gerçek anahtar bulamadı, canned mode açık olmalı"
+
+
+def test_ozel_modda_ucretsiz_gemini_anahtariyla_istek_kurulmaz(monkeypatch):
+    """Private modda yalnız free-tier anahtar varken sessiz fallback olmamalı."""
+    monkeypatch.setenv("GEMINI_API_KEY", "ucretsiz-anahtar")
+    monkeypatch.delenv("GEMINI_PAID_API_KEY", raising=False)
+    monkeypatch.setattr("streamlit.session_state", {"privacy_mode": "private"})
+
     with pytest.raises(OSError, match="eksik anahtarlar"):
-        _chain_model(chain_for(ModelRole.MECHANICAL, PrivacyMode.PUBLIC))
+        _resolve_model(ModelRole.JUDGE)
 
 
 # ---------------------------------------------------------------------------
