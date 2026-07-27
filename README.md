@@ -420,36 +420,53 @@ Board state at the end of Sprint 2 (WIP limits and Fibonacci `Estimate` field un
 
 ## Technical Details
 
-**Single engine.** The atomic unit is a **Specification** (`pareto/spec.py`):
-`{outcome, regressors, fixed_effects, clustering, sample, estimator}`. OLS, TWFE-DiD and staggered
-estimators are different points in this space; the estimator is just one axis → no "two forked
-systems" risk.
+**Single engine.** The atomic unit is **Specification** ([pareto/spec.py](pareto/spec.py)):
+`{outcome, regressors, fixed_effects, clustering, sample, estimator}`. OLS and TWFE are different points in the same space; there is no forked dual-engine path.
+
+**Architecture document.** Up-to-date system map lives in [ARCHITECTURE.md](ARCHITECTURE.md):
+
+- single-engine flow
+- deterministic vs judgment lanes
+- current 7-layer defense-in-depth map (L1-L7)
+
+**Current repo map (technical core):**
 
 ```
 app/                     # Streamlit UI (main + pages: 1_cleaning, 2_analysis, 3_variance_panel)
 pareto/
-  spec.py                # Specification (Pydantic atom)
-  profiling.py           # deterministik kolon profilleme (LLM'e özet payload)
-  contracts.py           # CleanPanel kontratı + fail-loud validate_contract() + EstimationResult
-  config.py              # ayarlar: model-router rolleri, privacy modu, sert tavan 24
-  cleaning/              # agent, ledger, merge, codegen, transforms (kapalı/vetted kütüphane)
-  analysis/              # hypothesis (estimand), menu (dondurma+faktöriyel), runner, estimators, variance
-  llm/                   # router (PydanticAI), providers (model zincirleri), guardrails (spotlighting)
-  memory/store.py        # proje-store / hafıza (disk)
-data/  notebooks/  docs/{adr,scrum}  tests/
-PRIVACY.md               # veri minimizasyonu + no-train yönlendirme: kodun zorladığı vs taahhüde dayanan
+  spec.py                # Specification atom (Pydantic)
+  profiling.py           # deterministic profile extraction (no raw row payload)
+  contracts.py           # panel contract + estimation result schemas
+  config.py              # global settings (privacy mode, caps, deterministic env)
+  cleaning/              # agent, ledger, merge, vetted transforms, codegen, L4 reproduction gate
+  analysis/              # hypothesis, menu, runner, estimators, variance diagnostics
+  llm/                   # router/providers/cache/guardrails
+  memory/store.py        # project memory store
+data/                    # dataset configs + raw/extract artifacts + SOURCES.md
+docs/adr/                # architecture decisions
+tests/                   # unit/integration/privacy/regression tests
+PRIVACY.md               # privacy claims: enforced vs provider-assumed
 ```
 
-**Stack:** Python · Streamlit (Community Cloud, canned-default + BYOK) · pandas · **pyfixest**
-(OLS/TWFE, ADR 0005) · **PydanticAI** + model router (judge pinned = Gemini Flash, thinking on;
-mechanical → Gemini Flash-Lite / Groq failover; `TestModel` for API-free tests) · subprocess
-multiverse runner (seed + `PYTHONHASHSEED` pinned) · uv · ruff · mypy · pre-commit + gitleaks ·
-GitHub Actions. Independent validation via R (`did` / `differences`) in `notebooks/` only.
+**Stack (current):** Python · Streamlit (Community Cloud, canned-default + BYOK) · pandas · **pyfixest** (committed estimator lib) · **PydanticAI** router/providers/cache · subprocess multiverse runner · uv · ruff · mypy · pre-commit + gitleaks · GitHub Actions.
 
-**Privacy.** [PRIVACY.md](PRIVACY.md) ayırt eder: hangi garanti kodun kendisi tarafından
-zorlanıyor (özel modda no-train yönlendirme, LLM'e yalnız kolon düzeyinde özet) ve hangi
-noktada üçüncü tarafın taahhüdüne güveniliyor. Zorlanan maddelerin her biri
-`tests/test_privacy_routing.py` altında testlidir.
+**Model routing (current):**
+
+- JUDGE: single-slot (no failover), provider/model selection via curated slots in public and private mode.
+- MECHANICAL: failover chain in public mode; private mode pinned to no-train path.
+- Cache layer enforces canned-mode behavior on cache miss.
+
+**Defense-in-depth (current):**
+
+- L1 minimization (no raw rows to LLM)
+- L2 spotlight sanitization
+- L3 vetted transform taxonomy
+- L4 subprocess reproduction gate
+- L5 high-impact cleaning gate (row-dropping decisions require approval)
+- L6 private routing/no-train enforcement
+- L7 Prompt Guard detective scan (fail-open + trace/log)
+
+**Privacy.** [PRIVACY.md](PRIVACY.md) separates guarantees that are code-enforced from provider-level assumptions. Enforced rules are covered by [tests/test_privacy_routing.py](tests/test_privacy_routing.py).
 
 ## Setup
 
