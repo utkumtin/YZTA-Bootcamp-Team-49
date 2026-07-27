@@ -528,6 +528,16 @@ def test_zincirde_hic_anahtar_yoksa_canned_moda_duser(monkeypatch):
     assert canned_mode is True, "Hiçbir üye gerçek anahtar bulamadı, canned mode açık olmalı"
 
 
+def test_ozel_modda_ucretsiz_gemini_anahtariyla_istek_kurulmaz(monkeypatch):
+    """Private modda yalnız free-tier anahtar varken sessiz fallback olmamalı."""
+    monkeypatch.setenv("GEMINI_API_KEY", "ucretsiz-anahtar")
+    monkeypatch.delenv("GEMINI_PAID_API_KEY", raising=False)
+    monkeypatch.setattr("streamlit.session_state", {"privacy_mode": "private"})
+
+    with pytest.raises(OSError, match="eksik anahtarlar"):
+        _resolve_model(ModelRole.JUDGE)
+
+
 # ---------------------------------------------------------------------------
 # Canlı smoke — anahtar ortamda yoksa atlanır
 # ---------------------------------------------------------------------------
