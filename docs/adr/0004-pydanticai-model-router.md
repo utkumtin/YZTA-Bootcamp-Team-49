@@ -1,7 +1,10 @@
 # 4. LLM katmanı: PydanticAI + model router
 
 - Durum: accepted
-- Tarih: 2026-07-05
+- Karar tarihi: 2026-07-05
+- Son gözden geçirme: 2026-07-27
+- Supersedes: -
+- Superseded by: -
 - İlgili: review.md sorun #3
 
 ## Bağlam
