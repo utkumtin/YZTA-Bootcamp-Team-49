@@ -430,8 +430,8 @@ def test_mekanik_zincir_fallback_modele_indirgenir(monkeypatch):
 
     assert isinstance(model, FallbackModel)
 
-
-def test_zincirde_anahtari_eksik_uye_atlanir(monkeypatch):
+def test_zincirde_anahtari_eksik_uyeler_canned_key_ile_kurulur(monkeypatch):
+    """S3-05: Eksik anahtarlar OSError fırlatmak yerine dummy key alarak cache'e hit edecekleri beklentisiyle başlatılır."""
     monkeypatch.setenv("GEMINI_API_KEY", "test-anahtar")
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
@@ -439,16 +439,17 @@ def test_zincirde_anahtari_eksik_uye_atlanir(monkeypatch):
 
     model = _chain_model(chain_for(ModelRole.MECHANICAL, PrivacyMode.PUBLIC))
 
-    assert not isinstance(model, FallbackModel), "tek kullanılabilir üye kaldıysa sarmalanmaz"
+    # Tüm modeller dummy key ile de olsa başlatıldığı için zincir korunur (FallbackModel)
+    from pydantic_ai.models.fallback import FallbackModel
+    assert isinstance(model, FallbackModel), "eksik üyeler atlanmaz, dummy key ile zincire dahil edilir"
 
-
-def test_zincirde_hic_anahtar_yoksa_fail_loud(monkeypatch):
+def test_zincirde_hic_anahtar_yoksa_canned_moda_duser(monkeypatch):
+    """S3-05: Önceden OSError atan bu durum, artık modeli Canned Dummy Key ile başlatır ve akışı kesmez."""
     for env in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY"):
         monkeypatch.delenv(env, raising=False)
 
-    with pytest.raises(OSError, match="eksik anahtarlar"):
-        _chain_model(chain_for(ModelRole.MECHANICAL, PrivacyMode.PUBLIC))
-
+    model = _chain_model(chain_for(ModelRole.MECHANICAL, PrivacyMode.PUBLIC))
+    assert model is not None, "Hiç anahtar yoksa bile Canned Mod için zincir kurulmalı"
 
 # ---------------------------------------------------------------------------
 # Canlı smoke — anahtar ortamda yoksa atlanır

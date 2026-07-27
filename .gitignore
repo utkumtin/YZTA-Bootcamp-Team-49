@@ -27,3 +27,10 @@ venv/
 # Büyük ham veri — yalnız türev/temiz extract'ler repo'da
 data/**/raw/*.tsv
 data/**/raw/*.dta
+
+# Dizin içindeki diğer gereksiz çalıştırma çıktılarını yoksay
+runs/*
+
+# Ancak S3-05 Canned Mode gereği Golden-path LLM cache yanıtları repoda paketlenmelidir!
+!runs/llm_cache/
+!runs/llm_cache/*.json

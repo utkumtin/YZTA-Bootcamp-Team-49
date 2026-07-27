@@ -1,15 +1,17 @@
-# NOT: Bu dosya normalde `uv export --no-hashes -o requirements.txt` ile üretilir
-# (Streamlit Community Cloud uv.lock okumaz → pyproject'i Poetry sanar). pre-commit'te
-# pyproject ile senkron tutulur; drift fail-loud. Tek kaynak = pyproject.toml.
-pandas>=2.0
+# requirements.txt
+# NOT: Bu dosya normalde `uv export --frozen --no-hashes --format requirements-txt > requirements.txt` ile üretilir.
+# Streamlit Community Cloud uv.lock okumaz.
+# uv.lock değişirse terminalde 'make requirements' komutunu çalıştırarak güncelleyin.
+
+pandas>=2.2.2
 numpy>=1.24
 pyfixest>=0.18
-streamlit>=1.32
+streamlit>=1.36.0
 plotly>=5.20
-pydantic>=2.6
-pydantic-ai>=0.0.14
+pydantic>=2.8.2
+pydantic-ai>=0.0.18
 pyreadstat>=1.2
 openpyxl>=3.1
 charset-normalizer>=3.3
 pyyaml>=6.0
-python-dotenv>=1.0
+python-dotenv>=1.0.1
