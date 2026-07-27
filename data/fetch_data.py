@@ -297,7 +297,9 @@ def _card_krueger_long(wide_csv: Path, dest: Path) -> None:
 
     # Eksik FTE satırları düşürülmez: örneklem daralması temizleme/analiz aşamasının kararı.
     long = pd.concat(frames, ignore_index=True).sort_values(["store_id", "wave"])
-    long.to_csv(dest, index=False, na_rep="")
+    # Byte-for-byte reproducibility across OS: commitli extract Linux'ta LF ile
+    # üretildiği için burada da satır sonunu sabitliyoruz.
+    long.to_csv(dest, index=False, na_rep="", lineterminator="\n")
     print(f"[OK  ] {dest.relative_to(HERE)} yazıldı ({len(long)} gözlem)")
 
 
