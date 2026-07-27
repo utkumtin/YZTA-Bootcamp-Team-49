@@ -11,16 +11,19 @@ Yüksek güvenli kararlar otomatik yola gider; gerçek yargı gerektirenler
 from __future__ import annotations
 
 import json
+import logging
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from ..config import SETTINGS, ModelRole
-from ..llm.guardrails import sanitize_profile
+from ..llm.guardrails import prompt_guard_scan, sanitize_profile
 from ..llm.router import build_agent
 from .ledger import LedgerEntry
 from .transforms import REGISTRY
+
+logger = logging.getLogger(__name__)
 
 
 class Resolution(StrEnum):
@@ -251,7 +254,9 @@ def _transform_catalog() -> str:
 
 def _build_judge_prompt(profile: dict[str, Any]) -> str:
     """Profili L2 sanitizasyondan geçirip deterministik JUDGE istemini kurar."""
-    payload = json.dumps(sanitize_profile(profile), ensure_ascii=False, sort_keys=True, default=str)
+    sanitized = sanitize_profile(profile)
+    sanitized["_l7_prompt_guard"] = prompt_guard_scan(sanitized)
+    payload = json.dumps(sanitized, ensure_ascii=False, sort_keys=True, default=str)
     return (
         "Dataset profile (summary statistics only, raw rows are never shared):\n"
         f"{payload}\n\n"
@@ -283,6 +288,14 @@ def _uncertainty_flag(decision: TransformDecision, profile: dict[str, Any]) -> b
 
     Eksik oranı eşiği aşan kolonda LLM güveni geçersizdir; her zaman insana sorulur.
     """
+    if decision.transform.transform_name == "drop_duplicates":
+        logger.warning(
+            "L5 high-impact decision flagged for approval: %s on %s",
+            decision.transform.transform_name,
+            list(decision.transform.referenced_columns()),
+        )
+        return True
+
     if decision.confidence == "low":
         return True
     columns = profile.get("columns", {})
