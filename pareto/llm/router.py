@@ -78,9 +78,7 @@ def _get_effective_privacy_mode() -> PrivacyMode:
     return PrivacyMode.PRIVATE if str(raw) == PrivacyMode.PRIVATE.value else PrivacyMode.PUBLIC
 
 
-def _chain_model(
-    chain: tuple[ProviderModel, ...], *, fail_on_missing_keys: bool = False
-) -> tuple[Any, bool]:
+def _chain_model(chain: tuple[ProviderModel, ...]) -> tuple[Any, bool]:
     """Zinciri tek modele indirger: tek üye → kendisi, çok üye → FallbackModel.
 
     S3-05 sonrası `config.get_api_key` artık hiç OSError fırlatmıyor (gerçek anahtar
@@ -97,18 +95,11 @@ def _chain_model(
     """
     models: list[Any] = []
     any_real_key = False
-    missing_key_envs: list[str] = []
     for pm in chain:
         _key, source = resolve_api_key(pm.api_key_env)
         if source != "none":
             any_real_key = True
-        else:
-            missing_key_envs.append(pm.api_key_env)
         models.append(_model_from_provider(pm))
-
-    if fail_on_missing_keys and missing_key_envs:
-        eksik = ", ".join(sorted(set(missing_key_envs)))
-        raise OSError(f"eksik anahtarlar: {eksik}")
 
     canned_mode = not any_real_key
     if len(models) == 1:
@@ -137,7 +128,8 @@ def _resolve_model(role: ModelRole) -> tuple[Any, dict[str, Any]]:
         return _TEST_MODEL, {}
     from .cache import wrap_with_cache
 
-    chain = chain_for(role, _get_effective_privacy_mode())
+    effective_privacy_mode = _get_effective_privacy_mode()
+    chain = chain_for(role, effective_privacy_mode)
     extra_model_settings: dict[str, Any] = {}
     if len(chain) == 1:
         pm = chain[0]
@@ -145,9 +137,15 @@ def _resolve_model(role: ModelRole) -> tuple[Any, dict[str, Any]]:
         if pm.thinking != "off":
             extra_model_settings["thinking"] = pm.thinking
 
-    model, canned_mode = _chain_model(
-        chain, fail_on_missing_keys=_get_effective_privacy_mode() is PrivacyMode.PRIVATE
-    )
+    if effective_privacy_mode is PrivacyMode.PRIVATE and any(
+        pm.api_key_env == "GEMINI_PAID_API_KEY" for pm in chain
+    ):
+        _paid_key, paid_source = resolve_api_key("GEMINI_PAID_API_KEY")
+        _free_key, free_source = resolve_api_key("GEMINI_API_KEY")
+        if paid_source == "none" and free_source != "none":
+            raise OSError("eksik anahtarlar: GEMINI_PAID_API_KEY")
+
+    model, canned_mode = _chain_model(chain)
     return wrap_with_cache(model, canned_mode=canned_mode), extra_model_settings
 
 
