@@ -32,6 +32,7 @@ from pareto.llm.router import use_test_model
 from pareto.profiling import profile_dataframe
 from scripts.run_model_benchmark import (
     GOLD_DIR,
+    ORDER_CHECK_VARIANT,
     REPO_ROOT,
     Meter,
     QuotaExhausted,
@@ -39,6 +40,7 @@ from scripts.run_model_benchmark import (
     _run_cleaning,
     _run_estimand,
     _run_narrative,
+    answer_fingerprint,
     build_report,
     by_priority,
     classify_error,
@@ -47,6 +49,7 @@ from scripts.run_model_benchmark import (
     load_models,
     looks_turkish,
     pinned_model,
+    plan_lines,
     preflight_one,
     quota_cap,
     quota_pool,
@@ -54,6 +57,7 @@ from scripts.run_model_benchmark import (
     read_rows,
     require_cache_disabled,
     result_id,
+    run_matrix,
     schema_verdict,
     score_cleaning,
     score_estimand,
@@ -218,6 +222,57 @@ def test_cleaning_scorer_penalises_extraneous_proposals() -> None:
     assert scores["precision"] == 0.5
 
 
+def test_cleaning_scorer_reports_full_proposed_set() -> None:
+    """`proposed`, cevap parmak izinin (answer_fingerprint) girdisi.
+
+    Tekrarlar-arası tutarlılık ölçümü tam bu alanı karşılaştırır — eksik ya da
+    yanlış sıralı gelirse iki özdeş öneri seti 'farklı cevap' sayılır.
+    """
+    case = _case("cleaning", "medicaid")
+    scores = score_cleaning(
+        [_entry("coerce_numeric", {"col": "deaths"}), _entry("drop_duplicates", {"subset": None})],
+        case,
+    )
+
+    assert scores["proposed"] == ["coerce_numeric:deaths", "drop_duplicates:"]
+
+
+def test_cleaning_scorer_flags_unnecessary_hesitation_on_known_correct_decision() -> None:
+    """Bilinen-doğru (must_fix) bir kararı yine de insana sormak gereksiz çekingenliktir.
+
+    `structurally_missing`'in TAMAMLAYICISI yanlış çapa olurdu: çoğu kolon ne
+    must_fix'te ne structurally_missing'te, oraya flag koymak meşru bir
+    belirsizlik olabilir. Yalnız gold'un zaten 'belirsizliksiz' dediği bir çifti
+    (must_fix ya da acceptable) flag'lemek ölçülür — README:166-172'deki
+    bad_control/config çelişkisiyle aynı hata sınıfını (yanlış çapa, doğru
+    davranışı cezalandırma) abstention yönünde tekrarlamamak için.
+    """
+    case = _case("cleaning", "medicaid")
+    hesitant = score_cleaning([_entry("coerce_numeric", {"col": "deaths"}, flagged=True)], case)
+    confident = score_cleaning([_entry("coerce_numeric", {"col": "deaths"}, flagged=False)], case)
+
+    assert hesitant["unnecessary_flags"] == ["coerce_numeric:deaths"]
+    assert confident["unnecessary_flags"] == []
+
+
+def test_cleaning_scorer_does_not_call_structural_hesitation_unnecessary() -> None:
+    """implementation_date hem must_fix HEM structurally_missing.
+
+    Flag'lemek gatekeeper'ın istediği TAM davranış (bkz.
+    test_cleaning_scorer_flags_overconfidence_on_structural_missing — 'humble'
+    varyantı burada `overconfident_on_structural_missing == []` alıyor). İki sayaç
+    aynı eylemi biri ödüllendirip diğeri cezalandıramaz; `unnecessary_flags`
+    structural kolonları hariç tutmalı.
+    """
+    case = _case("cleaning", "medicaid")
+    scores = score_cleaning(
+        [_entry("parse_date", {"col": "implementation_date", "fmt": None}, flagged=True)], case
+    )
+
+    assert scores["overconfident_on_structural_missing"] == []
+    assert scores["unnecessary_flags"] == []
+
+
 # --------------------------------------------------------------------------- #
 # Estimand puanlayıcısı
 # --------------------------------------------------------------------------- #
@@ -299,6 +354,28 @@ def test_estimand_scorer_does_not_reward_clarification_on_clean_case() -> None:
     )
 
     assert scores["clarification_correct"] is False
+
+
+def test_estimand_scorer_echoes_gold_expectation_for_confusion_matrix() -> None:
+    """Rapor confusion matrix'i (TP/FP/FN/TN) bu alandan okur, gold'u ikinci kez yüklemez.
+
+    Diğer puanlayıcılar zaten aynı deseni kullanıyor (narrative'de
+    expected_driving_axes) — saf 'çıktı + altın kayıt -> metrik sözlüğü'
+    sözleşmesini bozmuyor.
+    """
+    adversarial = score_estimand(
+        _tac(outcome="crude_rate", expected_sign="positive"),
+        _case("estimand", "medicaid_olmayan_kolon"),
+        available_columns=["crude_rate"],
+    )
+    clean = score_estimand(
+        _tac(),
+        _case("estimand", "card_krueger"),
+        available_columns=["treated_post", "fte_employment"],
+    )
+
+    assert adversarial["expect_needs_clarification"] is True
+    assert clean["expect_needs_clarification"] is False
 
 
 # --------------------------------------------------------------------------- #
@@ -405,6 +482,15 @@ def test_spec_menu_scorer_accepts_defensible_menu() -> None:
     assert scores["bad_control_hits"] == []
     assert scores["baseline_violations"] == []
     assert scores["deterministic_gate_passed"] is True
+
+
+def test_spec_menu_scorer_reports_baseline_by_axis() -> None:
+    """Cevap parmak izinin (answer_fingerprint) ve order-check karşılaştırmasının girdisi."""
+    kwargs = _menu_kwargs("castle")
+    scores = score_spec_menu(_menu(clustering="state"), **kwargs)
+
+    assert scores["baseline_by_axis"]["clustering"] == "state"
+    assert set(scores["baseline_by_axis"]) == set(ALL_AXES)
 
 
 # --------------------------------------------------------------------------- #
@@ -913,6 +999,317 @@ def test_report_median_latency_ignores_instant_failures() -> None:
     report = build_report(rows, ("cleaning",))
 
     assert "| 5.00 |" in report
+
+
+# --------------------------------------------------------------------------- #
+# Cevap parmak izi + tekrar-tutarlılığı
+# --------------------------------------------------------------------------- #
+def test_answer_fingerprint_distinguishes_different_cleaning_proposals() -> None:
+    case = _case("cleaning", "medicaid")
+    same_a = score_cleaning([_entry("coerce_numeric", {"col": "deaths"})], case)
+    same_b = score_cleaning([_entry("coerce_numeric", {"col": "deaths"})], case)
+    different = score_cleaning([_entry("coerce_numeric", {"col": "county_fips"})], case)
+
+    assert answer_fingerprint("cleaning", same_a) == answer_fingerprint("cleaning", same_b)
+    assert answer_fingerprint("cleaning", same_a) != answer_fingerprint("cleaning", different)
+
+
+def test_answer_fingerprint_estimand_tracks_treatment_and_outcome() -> None:
+    case = _case("estimand", "card_krueger")
+    columns = ["treated_post", "fte_employment"]
+    a = score_estimand(_tac(), case, available_columns=columns)
+    b = score_estimand(_tac(outcome="istihdam_orani"), case, available_columns=columns)
+
+    assert answer_fingerprint("estimand", a) != answer_fingerprint("estimand", b)
+
+
+def test_answer_fingerprint_spec_menu_tracks_baseline_choice() -> None:
+    kwargs = _menu_kwargs("castle")
+    a = score_spec_menu(_menu(clustering="state"), **kwargs)
+    b = score_spec_menu(_menu(clustering="none"), **kwargs)
+
+    assert answer_fingerprint("spec_menu", a) != answer_fingerprint("spec_menu", b)
+
+
+def test_percentile_uses_nearest_rank_not_interpolation() -> None:
+    """Nearest-rank yalnız GÖRÜLMÜŞ bir değer döndürür.
+
+    `statistics.quantiles(..., n=100)` model başına ~onlarca çağrılık ölçekte
+    enterpolasyonla var olmayan bir hassasiyet uydurur; bu benchmark'ın kendisi
+    uydurma sayıyı ağır ihlal sayıyor (bkz. `fabricated_numbers`) — p95'in
+    kendisi uydurulamaz.
+    """
+    assert bench._percentile([], 95) is None
+    assert bench._percentile([3.0], 95) == 3.0
+    assert bench._percentile([1.0, 2.0, 3.0, 4.0], 95) == 4.0
+
+
+def test_answer_consistency_requires_at_least_two_successful_repeats() -> None:
+    """Tek tekrarlı grup '%100 tutarlı' okunmamalı.
+
+    README'nin kota takvimi gemini-3.6-flash'ı günde 20 istekle en dar havuz
+    ilan ediyor — kota bitince tam da bu model tek-tekrarlı gruplarla kalır. Grup
+    büyüklüğü sayılmadan ortalanırsa en çok kotaya çarpan model en tutarlı görünür.
+    """
+    rows = [_row("google/x", task="narrative", case_id="c1", scores={"axes_commented": ["sample"]})]
+
+    rate, n = bench._answer_consistency(rows)
+
+    assert (rate, n) == (None, 0)
+
+
+def test_answer_consistency_flags_disagreement_across_repeats() -> None:
+    rows = [
+        _row("google/x", task="narrative", case_id="c1", scores={"axes_commented": ["sample"]}),
+        _row("google/x", task="narrative", case_id="c1", scores={"axes_commented": ["sample"]}),
+        _row("google/x", task="narrative", case_id="c2", scores={"axes_commented": ["sample"]}),
+        _row("google/x", task="narrative", case_id="c2", scores={"axes_commented": ["estimator"]}),
+    ]
+
+    rate, n = bench._answer_consistency(rows)
+
+    assert n == 2  # iki sayılabilir grup: c1, c2
+    assert rate == 0.5  # yalnız c1 tekrarları aynı cevaba varıyor
+
+
+def test_answer_consistency_excludes_errored_and_order_variant_rows() -> None:
+    """429/model_yok bir 'tutarsızlık' değil, YOKLUKTUR; order-check ayrı bir soru sorar."""
+    rows = [
+        _row("google/x", task="narrative", case_id="c1", scores={"axes_commented": ["sample"]}),
+        _row("google/x", task="narrative", case_id="c1", error="kota", scores=None),
+        _row(
+            "google/x",
+            task="narrative",
+            case_id="c1",
+            scores={"axes_commented": ["farkli"]},
+            order_variant="reversed",
+        ),
+    ]
+
+    rate, n = bench._answer_consistency(rows)
+
+    assert (rate, n) == (None, 0)  # hatasız/non-variant tek tekrar kaldı
+
+
+# --------------------------------------------------------------------------- #
+# Abstention sayaçları
+# --------------------------------------------------------------------------- #
+def test_cleaning_abstention_counts_separate_missed_gate_from_over_caution() -> None:
+    case = _case("cleaning", "medicaid")
+    overconfident = score_cleaning(
+        [_entry("parse_date", {"col": "implementation_date", "fmt": None}, flagged=False)], case
+    )
+    hesitant = score_cleaning([_entry("coerce_numeric", {"col": "deaths"}, flagged=True)], case)
+    rows = [
+        _row("google/x", task="cleaning", scores=overconfident),
+        _row("google/x", task="cleaning", scores=hesitant),
+    ]
+
+    missed_gate, over_caution = bench._cleaning_abstention_counts(rows)
+
+    assert missed_gate == 1
+    assert over_caution == 1
+
+
+def test_estimand_confusion_counts_all_four_outcomes() -> None:
+    clean_case = _case("estimand", "card_krueger")
+    adversarial_case = _case("estimand", "medicaid_olmayan_kolon")
+    clean_columns = ["treated_post", "fte_employment"]
+    adv_columns = ["crude_rate"]
+
+    tn = score_estimand(_tac(), clean_case, available_columns=clean_columns)
+    fp = score_estimand(
+        _tac(needs_clarification=True, clarification_question="?"),
+        clean_case,
+        available_columns=clean_columns,
+    )
+    fn = score_estimand(
+        _tac(outcome="crude_rate", expected_sign="positive"),
+        adversarial_case,
+        available_columns=adv_columns,
+    )
+    tp = score_estimand(
+        _tac(
+            outcome="crude_rate",
+            expected_sign="positive",
+            needs_clarification=True,
+            clarification_question="?",
+        ),
+        adversarial_case,
+        available_columns=adv_columns,
+    )
+    rows = [
+        _row("google/x", task="estimand", scores=tn),
+        _row("google/x", task="estimand", scores=fp),
+        _row("google/x", task="estimand", scores=fn),
+        _row("google/x", task="estimand", scores=tp),
+    ]
+
+    counts = bench._estimand_confusion(rows)
+
+    assert counts == {"tp": 1, "fp": 1, "fn": 1, "tn": 1, "n": 4}
+
+
+def test_estimand_confusion_excludes_order_check_variants() -> None:
+    """--order-check'in 4. örneği farklı bir deneysel koşuldan gelir.
+
+    Dahil edilirse rapordaki 'tekrar=3'te 9/3 örnek' notu yanlış olur — n görünen
+    tekrar sayısıyla uyuşmalı.
+    """
+    case = _case("estimand", "card_krueger")
+    tn = score_estimand(_tac(), case, available_columns=["treated_post", "fte_employment"])
+    rows = [
+        _row("google/x", task="estimand", scores=tn),
+        _row("google/x", task="estimand", scores=tn, order_variant="reversed"),
+    ]
+
+    counts = bench._estimand_confusion(rows)
+
+    assert counts["n"] == 1
+
+
+def test_report_includes_token_p95_and_consistency_columns() -> None:
+    rows = [
+        _row("groq/x", latency_s=4.0, output_tokens=100),
+        _row("groq/x", latency_s=6.0, output_tokens=200),
+    ]
+
+    report = build_report(rows, ("cleaning",))
+
+    assert "p95 gecikme (s)" in report
+    assert "Çıktı token (medyan)" in report
+    assert "Cevap tutarlılığı" in report
+    assert "maliyet hesaplanmadı" in report
+
+
+def test_report_includes_abstention_counters_section() -> None:
+    case = _case("cleaning", "medicaid")
+    overconfident = score_cleaning(
+        [_entry("parse_date", {"col": "implementation_date", "fmt": None}, flagged=False)], case
+    )
+    report = build_report([_row("google/x", task="cleaning", scores=overconfident)], ("cleaning",))
+
+    assert "Abstention (gatekeeper) sayaçları" in report
+    assert "| `google/x` | 1 | 0 | 0/0/0/0 (n=0) |" in report
+
+
+# --------------------------------------------------------------------------- #
+# Sıra duyarlılığı (--order-check)
+# --------------------------------------------------------------------------- #
+def test_report_omits_order_check_section_when_not_run() -> None:
+    report = build_report([_row("google/x")], ("cleaning",))
+
+    assert "Sıra duyarlılığı" not in report
+
+
+def test_report_flags_unstable_answer_across_order_check_variant() -> None:
+    """Kolon sırası ters çevrilince farklı outcome seçmek sıra duyarlılığıdır."""
+    baseline = _row(
+        "google/x",
+        task="estimand",
+        case_id="card_krueger",
+        scores={
+            "proposed_treatment": "treated_post",
+            "proposed_outcome": "fte_employment",
+            "needs_clarification": False,
+        },
+    )
+    reversed_variant = _row(
+        "google/x",
+        task="estimand",
+        case_id="card_krueger",
+        order_variant="reversed",
+        scores={
+            "proposed_treatment": "treated_post",
+            "proposed_outcome": "istihdam_orani",
+            "needs_clarification": False,
+        },
+    )
+
+    report = build_report([baseline, reversed_variant], ("estimand",))
+
+    assert "Sıra duyarlılığı" in report
+    assert "HAYIR" in report
+
+
+def test_report_marks_stable_answer_across_order_check_variant() -> None:
+    baseline = _row(
+        "google/x",
+        task="estimand",
+        case_id="card_krueger",
+        scores={
+            "proposed_treatment": "treated_post",
+            "proposed_outcome": "fte_employment",
+            "needs_clarification": False,
+        },
+    )
+    reversed_variant = _row(
+        "google/x",
+        task="estimand",
+        case_id="card_krueger",
+        order_variant="reversed",
+        scores=dict(baseline["scores"]),
+    )
+
+    report = build_report([baseline, reversed_variant], ("estimand",))
+
+    assert "| `google/x` | estimand/card_krueger | evet |" in report
+
+
+def test_plan_lines_accounts_for_order_check_extra_calls() -> None:
+    """--order-check tavan hesabına girmezse koşu ortasında beklenmedik 429 yer."""
+    models = [{"id": "m", "provider": "google", "rpm": 5, "rpd": 20}]
+    n_estimand = len(load_gold("estimand"))
+    n_narrative = len(load_gold("narrative"))
+
+    without = plan_lines(models, ("estimand", "narrative"), repeats=3, order_check=False)
+    with_check = plan_lines(models, ("estimand", "narrative"), repeats=3, order_check=True)
+
+    assert f"toplam: {(n_estimand + n_narrative) * 3}" in without[1]
+    # narrative order-check'e dahil değil (yalnız estimand+spec_menu, bkz.
+    # ORDER_CHECK_RUNNERS); yalnız estimand vaka sayısı kadar ekstra çağrı beklenir.
+    assert f"+{n_estimand}/model" in with_check[0]
+    assert f"toplam: {(n_estimand + n_narrative) * 3 + n_estimand}" in with_check[1]
+
+
+def test_run_matrix_order_check_adds_a_reversed_column_variant(tmp_path) -> None:
+    """--order-check estimand vakalarına, kolon sırası ters olan 1 ekstra çağrı ekler.
+
+    Skorlayıcı kümeye bakıyor (score_estimand: `set(available_columns)`), sıraya
+    değil — bu test doğru cevabın sıradan etkilenmediğini ve ekstra satırın
+    doğru etiketlerle (result_id, order_variant) emitted olduğunu doğrular.
+    """
+    case = _case("estimand", "divorce")
+    output = {
+        "treatment": "tek-taraflı boşanma",
+        "treatment_coding": "post",
+        "outcome": "suicide_rate_f",
+        "outcome_unit": "1M kadın başına",
+        "population": "ABD eyaletleri",
+        "time_scope": "1964-1996",
+        "expected_sign": "negative",
+        "h0": "Etki yoktur.",
+        "h1": "Düşürür.",
+        "implied_result_translation": "...",
+        "confirmation_question": "...",
+    }
+    model = {"id": "gemma-4-31b-it", "provider": "google", "rpm": None, "rpd": None}
+
+    with use_test_model(TestModel(custom_output_args=output)):
+        rows = run_matrix(
+            [model],
+            ("estimand",),
+            repeats=1,
+            out_dir=tmp_path,
+            throttle=Throttle(),
+            order_check=True,
+        )
+
+    variant_rows = [r for r in rows if r.get("order_variant")]
+    assert len(variant_rows) == len(load_gold("estimand"))
+    divorce_variant = next(r for r in variant_rows if r["case_id"] == case["case_id"])
+    assert divorce_variant["result_id"].endswith(f"|{ORDER_CHECK_VARIANT}")
+    assert divorce_variant["scores"]["treatment_ok"] is True
 
 
 # --------------------------------------------------------------------------- #

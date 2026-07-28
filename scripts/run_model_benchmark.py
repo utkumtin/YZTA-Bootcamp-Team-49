@@ -366,9 +366,27 @@ def score_cleaning(entries: list[LedgerEntry], case: dict[str, Any]) -> dict[str
         if c in structural and not flagged
     ]
 
+    # Gereksiz çekingenlik: bilinen-doğru bir çifti (must_fix ya da acceptable,
+    # yani gold zaten belirsizliksiz kabul ediyor) yine de insana sormak.
+    # `structurally_missing`'in TAMAMLAYICISI değil — orası yalnız never-treated
+    # sinyalini enumerate ediyor, "flag'in gerekçesiz olduğu her yer" değil. Gerçek
+    # ölçüde belirsiz bir karara flag koymak gatekeeper'ın istediği davranıştır;
+    # yanlış çapa (README:166-172'deki bad_control/config çelişkisiyle aynı hata
+    # sınıfı) doğru davranan modeli cezalandırırdı. `c not in structural` şart:
+    # medicaid'de implementation_date HEM must_fix HEM structurally_missing —
+    # onu flag'lemek `overconfident_on_structural_missing`'i temiz tutan TAM
+    # davranış; structural hariç tutulmazsa aynı eylem bir sayaçta ödüllenip
+    # diğerinde cezalandırılır.
+    unnecessary_flags = [
+        f"{t}:{c}"
+        for (t, c), flagged in sorted(flag_by_pair.items())
+        if flagged and (t, c) in known and c not in structural
+    ]
+
     n_prop = len(proposed_set)
     return {
         "n_decisions": len(entries),
+        "proposed": sorted(f"{t}:{c}" for t, c in proposed_set),
         "must_fix_recall": (len(found) / len(must)) if must else None,
         "must_fix_missed": [f"{t}:{c}" for t, c in missed],
         "forbidden_hits": [f"{t}:{c}" for t, c in hit_forbidden],
@@ -377,6 +395,7 @@ def score_cleaning(entries: list[LedgerEntry], case: dict[str, Any]) -> dict[str
         # Yapısal eksikliği olan kolona (never-treated sinyali) insana sormadan
         # dokunmak: gatekeeper'ın atlanması.
         "overconfident_on_structural_missing": overconfident,
+        "unnecessary_flags": unnecessary_flags,
     }
 
 
@@ -413,6 +432,11 @@ def score_estimand(
         # İhlali her zaman hatadır, adversarial vakada bile.
         "sign_preserved": proposal.expected_sign == declared_sign,
         "needs_clarification": proposal.needs_clarification,
+        # Abstention confusion matrix raporda burayı gold'u ikinci kez yüklemeden
+        # okuyabilsin diye: puanlayıcılar "çıktı + altın kayıt -> metrik sözlüğü"
+        # saf, ama gold'un beklentisini metrik sözlüğüne kopyalamak sözleşmeyi
+        # bozmuyor (narrative zaten expected_driving_axes için aynısını yapıyor).
+        "expect_needs_clarification": expect_clarify,
         "clarification_correct": proposal.needs_clarification == expect_clarify,
         "hallucinated_columns": hallucinated,
     }
@@ -476,6 +500,10 @@ def score_spec_menu(
         "deterministic_reasons": reasons,
         "n_specs": n_specs,
         "missing_axes": missing_axes,
+        # Cevap parmak izi: tekrarlar-arası tutarlılık ve order-check hem bu
+        # alanı hem cleaning'in `proposed`'ını, estimand'ın treatment/outcome'ını
+        # aynı mekanizmayla karşılaştırır (bkz. answer_fingerprint).
+        "baseline_by_axis": {axis.axis_name: axis.baseline_level for axis in proposal.axes},
         "baseline_violations": baseline_violations,
         "indefensible_levels": sorted(set(indefensible_hits)),
         "bad_control_hits": sorted(set(bad_control_hits)),
@@ -589,6 +617,33 @@ def score_narrative(narrative: VarianceNarrative, case: dict[str, Any]) -> dict[
 
 
 # --------------------------------------------------------------------------- #
+# Cevap parmak izi — tekrarlar-arası tutarlılık + order-check için tek mekanizma
+# --------------------------------------------------------------------------- #
+def answer_fingerprint(task: str, scores: dict[str, Any]) -> tuple[Any, ...]:
+    """Görevin 'cevabı'nı karşılaştırılabilir, deterministik bir tuple'a indirger.
+
+    Aynı vaka + aynı model iki kez koşulduğunda (tekrar ya da kolon sırası
+    değişince) bu iki sonucun AYNI cevaba mı vardığını ölçer — yalnız ikisinin
+    de geçip geçmediğini değil. İki-üç doğru ama farklı cevap, üç kez aynı yanlış
+    cevaptan daha güvenilir bir JUDGE adayı gibi görünebilir; parmak izi bunu
+    ayırt eder.
+    """
+    if task == "cleaning":
+        return tuple(scores.get("proposed") or ())
+    if task == "estimand":
+        return (
+            scores.get("proposed_treatment"),
+            scores.get("proposed_outcome"),
+            scores.get("needs_clarification"),
+        )
+    if task == "spec_menu":
+        return tuple(sorted((scores.get("baseline_by_axis") or {}).items()))
+    if task == "narrative":
+        return tuple(sorted(scores.get("axes_commented") or ()))
+    raise ValueError(f"bilinmeyen görev: {task}")
+
+
+# --------------------------------------------------------------------------- #
 # Görev kayıt defteri
 # --------------------------------------------------------------------------- #
 def _run_cleaning(case: dict[str, Any]) -> dict[str, Any]:
@@ -626,6 +681,42 @@ TASK_RUNNERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "estimand": _run_estimand,
     "spec_menu": _run_spec_menu,
     "narrative": _run_narrative,
+}
+
+
+# --------------------------------------------------------------------------- #
+# Sıra duyarlılığı (--order-check, isteğe bağlı) — yalnız kolon sırası
+# GİRDİDE ters çevrilir; skorlayıcıya gerçek (ters çevrilmemiş) kolonlar gider,
+# çünkü skorlama kümeye bakıyor (bkz. score_estimand/score_spec_menu), sıraya
+# değil. Cleaning/narrative'de model girdisi bir kolon LİSTESİ değil (narrative
+# hiç kolon görmüyor, cleaning profildeki sırayı zaten kendi üretiyor), o yüzden
+# yalnız estimand + spec_menu'de anlamlı.
+# --------------------------------------------------------------------------- #
+ORDER_CHECK_VARIANT = "order-reversed"
+
+
+def _run_estimand_reversed(case: dict[str, Any]) -> dict[str, Any]:
+    data = dataset_inputs(case["dataset_dir"])
+    proposal = draft_tac_proposal(
+        research_story=case["research_story"],
+        available_columns=list(reversed(data.columns)),
+        declaration=SocraticDeclaration(**case["declaration"]),
+    )
+    return score_estimand(proposal, case, available_columns=data.columns)
+
+
+def _run_spec_menu_reversed(case: dict[str, Any]) -> dict[str, Any]:
+    data = dataset_inputs(case["dataset_dir"])
+    proposal = generate_spec_menu(
+        frozen=frozen_estimand_from_gold(case),
+        available_columns=list(reversed(data.columns)),
+    )
+    return score_spec_menu(proposal, case, available_columns=data.columns, panel_cfg=data.panel_cfg)
+
+
+ORDER_CHECK_RUNNERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
+    "estimand": _run_estimand_reversed,
+    "spec_menu": _run_spec_menu_reversed,
 }
 
 
@@ -738,7 +829,7 @@ def preflight_one(model: dict[str, Any]) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # Koşu
 # --------------------------------------------------------------------------- #
-def result_id(model: dict[str, Any], task: str, case_id: str, repeat: int) -> str:
+def result_id(model: dict[str, Any], task: str, case_id: str, repeat: int | str) -> str:
     return f"{model_key(model)}|{task}|{case_id}|{repeat}"
 
 
@@ -768,14 +859,71 @@ def read_done(path: Path) -> dict[str, int]:
     return {row["result_id"]: 1 for row in read_rows(path) if row.get("result_id")}
 
 
+def _call_and_score(
+    model: dict[str, Any],
+    task: str,
+    case: dict[str, Any],
+    *,
+    rid: str,
+    runner: Callable[[dict[str, Any]], dict[str, Any]],
+    extra: dict[str, Any],
+) -> dict[str, Any]:
+    """Tek çağrının ortak iskeleti: pin -> ölç -> puanla -> hatayı sınıflandır.
+
+    Normal tekrar döngüsü ve --order-check aynı iskeleti paylaşır; ayrılırlarsa
+    order-check satırları farklı bir ölçüm yoluna gider ve ana satırlarla
+    karşılaştırılamaz hale gelir.
+    """
+    meter = Meter()
+    started = time.monotonic()
+    row: dict[str, Any] = {
+        "result_id": rid,
+        "model": model_key(model),
+        "provider": model["provider"],
+        "model_id": model["id"],
+        "task": task,
+        "case_id": case["case_id"],
+        **extra,
+    }
+    try:
+        with pinned_model(model), metered(meter):
+            scores = runner(case)
+        row.update(schema_ok=True, validator_passed=True, error=None, scores=scores)
+    except Exception as exc:  # noqa: BLE001 — sessiz atlama yok
+        kind = classify_error(exc)
+        row.update(
+            schema_ok=schema_verdict(kind),
+            validator_passed=False,
+            error=kind,
+            error_detail=str(exc)[:400],
+            scores=None,
+        )
+    row.update(
+        latency_s=round(time.monotonic() - started, 3),
+        requests=meter.requests,
+        retries=meter.retries,
+        input_tokens=meter.input_tokens,
+        output_tokens=meter.output_tokens,
+    )
+    return row
+
+
 def run_matrix(
     models: list[dict[str, Any]],
     tasks: tuple[str, ...],
     repeats: int,
     out_dir: Path,
     throttle: Throttle,
+    *,
+    order_check: bool = False,
 ) -> list[dict[str, Any]]:
-    """Matrisi koşar; her sonuç anında diske yazılır (resume edilebilirlik)."""
+    """Matrisi koşar; her sonuç anında diske yazılır (resume edilebilirlik).
+
+    `order_check=True` ise estimand + spec_menu vakalarına, normal tekrarlardan
+    SONRA, kolon sırası ters çevrilmiş bir ekstra çağrı eklenir (bkz.
+    ORDER_CHECK_RUNNERS). Varsayılan kapalı: kota zaten en dar havuzda (Gemini
+    Flash 20/gün) tam matrisi zar zor karşılıyor, bunu ikiye katlamak opt-in olmalı.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     results_path = out_dir / "results.jsonl"
     done = read_done(results_path)
@@ -809,71 +957,207 @@ def run_matrix(
                         exhausted = True
                         break
 
-                    meter = Meter()
-                    started = time.monotonic()
-                    row: dict[str, Any] = {
-                        "result_id": rid,
-                        "model": key,
-                        "provider": model["provider"],
-                        "model_id": model["id"],
-                        "task": task,
-                        "case_id": case["case_id"],
-                        "repeat": repeat,
-                    }
-                    try:
-                        with pinned_model(model), metered(meter):
-                            scores = TASK_RUNNERS[task](case)
-                        row.update(
-                            schema_ok=True,
-                            validator_passed=True,
-                            error=None,
-                            scores=scores,
-                        )
-                    except Exception as exc:  # noqa: BLE001 — sessiz atlama yok
-                        kind = classify_error(exc)
-                        row.update(
-                            schema_ok=schema_verdict(kind),
-                            validator_passed=False,
-                            error=kind,
-                            error_detail=str(exc)[:400],
-                            scores=None,
-                        )
-                    row.update(
-                        latency_s=round(time.monotonic() - started, 3),
-                        requests=meter.requests,
-                        retries=meter.retries,
-                        input_tokens=meter.input_tokens,
-                        output_tokens=meter.output_tokens,
+                    row = _call_and_score(
+                        model,
+                        task,
+                        case,
+                        rid=rid,
+                        runner=TASK_RUNNERS[task],
+                        extra={"repeat": repeat},
                     )
                     with results_path.open("a", encoding="utf-8") as handle:
                         handle.write(json.dumps(row, ensure_ascii=False) + "\n")
                     rows.append(row)
                     flag = "ok" if row.get("error") is None else row["error"]
                     print(f"  {key} · {task}/{case['case_id']}#{repeat} → {flag}")
+
+                if exhausted or not order_check or task not in ORDER_CHECK_RUNNERS:
+                    continue
+                rid = result_id(model, task, case["case_id"], ORDER_CHECK_VARIANT)
+                if rid in done:
+                    continue
+                try:
+                    throttle.acquire(pool, rpm=rpm, cap=cap)
+                except QuotaExhausted as exc:
+                    print(f"  [kota] {exc} — bu havuzdaki kalan işler atlanıyor")
+                    exhausted = True
+                    continue
+
+                row = _call_and_score(
+                    model,
+                    task,
+                    case,
+                    rid=rid,
+                    runner=ORDER_CHECK_RUNNERS[task],
+                    extra={"repeat": ORDER_CHECK_VARIANT, "order_variant": "reversed"},
+                )
+                with results_path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+                rows.append(row)
+                flag = "ok" if row.get("error") is None else row["error"]
+                print(f"  {key} · {task}/{case['case_id']}#order-reversed → {flag}")
     return rows
 
 
 # --------------------------------------------------------------------------- #
 # Rapor
 # --------------------------------------------------------------------------- #
+def _percentile(values: list[float], pct: int) -> float | None:
+    """En yakın-sıra (nearest-rank) yüzdelik — yalnız GÖRÜLMÜŞ bir değeri döndürür.
+
+    `statistics.quantiles(..., n=100)` bu ölçekte (model başına ~onlarca çağrı)
+    enterpolasyonla var olmayan bir hassasiyet uydurur; nearest-rank uydurmaz.
+    """
+    if not values:
+        return None
+    ordered = sorted(values)
+    rank = max(1, -(-(pct * len(ordered)) // 100))  # ceil(pct/100 * n)
+    return ordered[min(rank, len(ordered)) - 1]
+
+
+def _answer_consistency(rows: list[dict[str, Any]]) -> tuple[float | None, int]:
+    """Aynı (görev, vaka) için tekrarlar aynı cevaba mı varıyor (bkz. answer_fingerprint).
+
+    Yalnız BAŞARILI çağrılar sayılır (kota/hata 'tutarsızlık' değil, yokluktur) ve
+    grup büyüklüğü >=2 olmalı — tek tekrarlı bir grup otomatik '%100 tutarlı'
+    okunursa, kotaya en sık çarpan model (gemini-3.6-flash: 20/gün, bkz. README)
+    en tutarlı görünür. Dönen ikinci değer (sayılabilir grup sayısı) bu yüzden
+    orana eşlik etmeden raporlanmamalı.
+    """
+    groups: dict[tuple[str, str], list[tuple[Any, ...]]] = {}
+    for row in rows:
+        if row.get("error") is not None or not row.get("scores") or row.get("order_variant"):
+            continue
+        key = (row["task"], row["case_id"])
+        fp = answer_fingerprint(row["task"], row["scores"])
+        groups.setdefault(key, []).append(fp)
+
+    countable = [fps for fps in groups.values() if len(fps) >= 2]
+    if not countable:
+        return None, 0
+    agree = sum(1 for fps in countable if len(set(fps)) == 1)
+    return agree / len(countable), len(countable)
+
+
 def _agg(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    # order-check varyantları ayrı bir soruya cevap veriyor (sıra değişince cevap
+    # değişiyor mu); ana eleme tablosunun ok_rate/latency/token istatistiklerine
+    # karışırsa o istatistikleri gerçekte koşulmamış bir yük dağılımıyla kirletir.
+    rows = [r for r in rows if not r.get("order_variant")]
     n = len(rows)
     ok = [r for r in rows if r.get("error") is None]
     # Gecikme yalnız BAŞARILI çağrılardan: hemen dönen bir 404, yavaş ama çalışan
     # bir modeli hızlı gösterirdi.
     lat = [r["latency_s"] for r in ok if r.get("latency_s") is not None]
+    out_tokens = [r["output_tokens"] for r in ok if r.get("output_tokens") is not None]
+    consistency, consistency_n = _answer_consistency(rows)
     return {
         "n": n,
         "ok": len(ok),
         "ok_rate": (len(ok) / n) if n else None,
         "retries": sum(int(r.get("retries") or 0) for r in rows),
         "latency_median": (statistics.median(lat) if lat else None),
+        "latency_p95": _percentile(lat, 95),
+        "tokens_out_median": (statistics.median(out_tokens) if out_tokens else None),
+        "tokens_in_total": sum(int(r.get("input_tokens") or 0) for r in rows),
+        "tokens_out_total": sum(int(r.get("output_tokens") or 0) for r in rows),
+        "answer_consistency": consistency,
+        "answer_consistency_n": consistency_n,
         "errors": sorted({str(r["error"]) for r in rows if r.get("error")}),
     }
 
 
+def _cleaning_abstention_counts(rows: list[dict[str, Any]]) -> tuple[int, int]:
+    """(gatekeeper atlandı, gereksiz flag) — cleaning satırları üzerinden toplam.
+
+    order-check varyantları hariç (bkz. _estimand_confusion) — bugün cleaning'de
+    order-check yok ama sayaç sözleşmesi ikisinde de aynı olmalı.
+    """
+    missed_gate = 0
+    over_caution = 0
+    for row in rows:
+        if row.get("task") != "cleaning" or row.get("order_variant"):
+            continue
+        scores = row.get("scores") or {}
+        missed_gate += len(scores.get("overconfident_on_structural_missing") or ())
+        over_caution += len(scores.get("unnecessary_flags") or ())
+    return missed_gate, over_caution
+
+
+def _estimand_confusion(rows: list[dict[str, Any]]) -> dict[str, int]:
+    """Clarification confusion matrix — SAYIM, precision/recall değil (bkz. build_report notu).
+
+    order-check varyantları hariç: dahil edilirse "tekrar=3'te 9/3 örnek" notu
+    yanlış olur (--order-check ile 4. bir örnek farklı bir deneysel koşuldan gelir).
+    """
+    counts = {"tp": 0, "fp": 0, "fn": 0, "tn": 0, "n": 0}
+    for row in rows:
+        if row.get("task") != "estimand" or row.get("order_variant"):
+            continue
+        scores = row.get("scores") or {}
+        if "expect_needs_clarification" not in scores:
+            continue
+        actual = bool(scores.get("needs_clarification"))
+        expect = bool(scores.get("expect_needs_clarification"))
+        counts["n"] += 1
+        counts["tp" if actual and expect else "fp" if actual else "fn" if expect else "tn"] += 1
+    return counts
+
+
+def _order_check_lines(rows: list[dict[str, Any]]) -> list[str]:
+    """--order-check ile üretilmiş varyant satırlarını temel çağrıyla karşılaştırır.
+
+    Hiç order-check koşulmadıysa boş liste döner (bölüm hiç basılmaz) — sessiz bir
+    'karşılaştırılamadı' satırıyla var olmayan bir ölçüm varmış izlenimi vermez.
+    """
+    variants = [r for r in rows if r.get("order_variant")]
+    if not variants:
+        return []
+
+    baseline_fp: dict[tuple[str, str, str], tuple[Any, ...]] = {}
+    for row in rows:
+        if row.get("order_variant") or row.get("error") is not None or not row.get("scores"):
+            continue
+        key = (row["model"], row["task"], row["case_id"])
+        baseline_fp.setdefault(key, answer_fingerprint(row["task"], row["scores"]))
+
+    lines = [
+        "",
+        "## Sıra duyarlılığı (order-check)",
+        "",
+        "Kolon listesi TERS çevrilip aynı vaka bir kez daha koşuldu. Cevap değiştiyse",
+        "model girdi sırasına duyarlı — literatürde belgeli bir kırılganlık (order/position",
+        "bias). Baz alınan cevap aynı vakanın normal-sıra tekrarlarından ilkidir.",
+        "",
+        "UYARI: aynı vakanın normal-sıra tekrarları zaten kendi aralarında tutarsızsa",
+        "(yukarıdaki Cevap tutarlılığı sütununa bakın) bir HAYIR burada sıra duyarlılığını",
+        "değil, modelin genel kararsızlığını gösterebilir — ikisini birlikte okuyun.",
+        "",
+        "| Model | Görev/Vaka | Sıra-kararlı mı |",
+        "|---|---|---|",
+    ]
+    for row in sorted(variants, key=lambda r: (r["model"], r["task"], r["case_id"])):
+        key = (row["model"], row["task"], row["case_id"])
+        base = baseline_fp.get(key)
+        if base is None or row.get("error") is not None or not row.get("scores"):
+            verdict = "? karşılaştırılamadı (biri hata verdi)"
+        else:
+            verdict = (
+                "evet"
+                if answer_fingerprint(row["task"], row["scores"]) == base
+                else "HAYIR — cevap değişti"
+            )
+        lines.append(f"| `{row['model']}` | {row['task']}/{row['case_id']} | {verdict} |")
+    return lines
+
+
 def build_report(rows: list[dict[str, Any]], tasks: tuple[str, ...]) -> str:
-    """Model x görev tablosu + ağır ihlaller. Elenen/hatalı hiçbir şey gizlenmez."""
+    """Model tablosu (tüm görevler havuzlu) + ağır ihlaller. Elenen/hatalı hiçbir şey gizlenmez.
+
+    Görev kırılımı yok: bu tablo sıralama değil eleme aracı, tek bir ağır ihlal
+    zaten yeterli diskalifiye nedeni (bkz. 'Nasıl okunmalı'). Görev başına kırılım
+    isteniyorsa `results.jsonl`'i `task` alanına göre filtrelemek yeterli.
+    """
     by_model: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         by_model.setdefault(row["model"], []).append(row)
@@ -882,17 +1166,31 @@ def build_report(rows: list[dict[str, Any]], tasks: tuple[str, ...]) -> str:
     lines.append(f"Toplam çağrı: {len(rows)} · model: {len(by_model)} · görev: {', '.join(tasks)}")
     lines.append("")
     lines.append(
-        "| Model | Çağrı | Şema+doğrulayıcı geçti | Retry | Medyan gecikme (s) | Hatalar |"
+        "| Model | Çağrı | Şema+doğrulayıcı geçti | Retry | Medyan gecikme (s) | "
+        "p95 gecikme (s) | Çıktı token (medyan) | Cevap tutarlılığı | Hatalar |"
     )
-    lines.append("|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|")
     for name in sorted(by_model):
         a = _agg(by_model[name])
         rate = f"{a['ok']}/{a['n']}" if a["n"] else "-"
         med = f"{a['latency_median']:.2f}" if a["latency_median"] is not None else "-"
+        p95 = f"{a['latency_p95']:.2f}" if a["latency_p95"] is not None else "-"
+        tok = f"{a['tokens_out_median']:.0f}" if a["tokens_out_median"] is not None else "-"
+        cons = (
+            f"{a['answer_consistency']:.0%} (n={a['answer_consistency_n']})"
+            if a["answer_consistency"] is not None
+            else "- (yetersiz tekrar)"
+        )
         lines.append(
-            f"| `{name}` | {a['n']} | {rate} | {a['retries']} | {med} | "
+            f"| `{name}` | {a['n']} | {rate} | {a['retries']} | {med} | {p95} | {tok} | {cons} | "
             f"{', '.join(a['errors']) or '-'} |"
         )
+    lines += [
+        "",
+        "$ maliyet hesaplanmadı: aday matrisi 'bugün kalıcı ücretsiz' filtresiyle",
+        "seçildi (README), `models.json`'da fiyat alanı yok. Çıktı token medyanı bir",
+        "verimlilik proxy'si — gerçek $ maliyeti değil, uydurmamak için eklenmedi.",
+    ]
 
     lines += ["", "## Ağır ihlaller", ""]
     severe: list[str] = []
@@ -922,6 +1220,33 @@ def build_report(rows: list[dict[str, Any]], tasks: tuple[str, ...]) -> str:
 
     lines += [
         "",
+        "## Abstention (gatekeeper) sayaçları",
+        "",
+        "Oran değil SAYIM: estimand'da gold 3 olumsuz/1 olumlu vaka (tekrar=3'te 9/3",
+        "örnek) — precision/recall/F1 bu ölçekte kesinlik uydurur, sayım uydurmaz.",
+        "spec_menu'da 'sormalı mıydı' gold etiketi yok, o yüzden tabloda değil.",
+        "",
+        "| Model | Cleaning: gatekeeper atlandı | Cleaning: gereksiz flag | "
+        "Estimand TP/FP/FN/TN (n) |",
+        "|---|---|---|---|",
+    ]
+    for name in sorted(by_model):
+        missed_gate, over_caution = _cleaning_abstention_counts(by_model[name])
+        conf = _estimand_confusion(by_model[name])
+        lines.append(
+            f"| `{name}` | {missed_gate} | {over_caution} | "
+            f"{conf['tp']}/{conf['fp']}/{conf['fn']}/{conf['tn']} (n={conf['n']}) |"
+        )
+    lines += [
+        "",
+        "TP/FN: veri gerçekten eksikken doğru/yanlış davrandı (sor / sormadı).",
+        "FP/TN: veri yeterliyken gereksiz sordu / doğru şekilde sormadı.",
+    ]
+
+    lines += _order_check_lines(rows)
+
+    lines += [
+        "",
         "## Nasıl okunmalı",
         "",
         "Bu tablo sıralama değil eleme aracıdır. Ağır ihlal listesinde görünen bir model,",
@@ -938,17 +1263,31 @@ def build_report(rows: list[dict[str, Any]], tasks: tuple[str, ...]) -> str:
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
-def plan_lines(models: list[dict[str, Any]], tasks: tuple[str, ...], repeats: int) -> list[str]:
+def plan_lines(
+    models: list[dict[str, Any]],
+    tasks: tuple[str, ...],
+    repeats: int,
+    *,
+    order_check: bool = False,
+) -> list[str]:
     """--dry-run çıktısı: matris + KOTA HAVUZU başına yük ve gün tahmini.
 
     Gün tahmini havuz seviyesinde yapılır. Model başına yapmak, aynı kotayı
     paylaşan uçlarda (OpenRouter :free, NVIDIA kredileri) süreyi olduğundan
     kat kat kısa gösterirdi.
+
+    `order_check`'i saymazsak tavan tahmini gerçek koşudan düşük çıkar ve koşu
+    ortasında beklenmedik bir 429 yer — order-check her vakaya tekrar sayısından
+    BAĞIMSIZ +1 çağrı ekliyor, yalnız estimand + spec_menu'de.
     """
     n_cases = sum(len(load_gold(t)) for t in tasks)
-    per_model = n_cases * repeats
+    order_extra = 0
+    if order_check:
+        order_extra = sum(len(load_gold(t)) for t in tasks if t in ORDER_CHECK_RUNNERS)
+    per_model = n_cases * repeats + order_extra
     lines = [
-        f"Görev: {', '.join(tasks)} · vaka: {n_cases} · tekrar: {repeats}",
+        f"Görev: {', '.join(tasks)} · vaka: {n_cases} · tekrar: {repeats}"
+        + (f" · order-check: +{order_extra}/model" if order_check else ""),
         f"Model başına çağrı: {per_model} · toplam: {per_model * len(models)}",
         "",
         f"{'Model':<48} {'sağlayıcı':<11} {'havuz':<18}",
@@ -993,6 +1332,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tasks", nargs="*", choices=TASKS, help="yalnız bu görevler")
     parser.add_argument("--repeats", type=int, default=3, help="vaka başına tekrar (varsayılan 3)")
     parser.add_argument("--out", type=Path, help="çıktı dizini (varsayılan runs/benchmark/<ts>)")
+    parser.add_argument(
+        "--order-check",
+        action="store_true",
+        help=(
+            "estimand+spec_menu vakalarına kolon sırası ters çevrilmiş 1 ekstra "
+            "çağrı ekle (sıra duyarlılığı raporu); çağrı sayısını bu görevlerde "
+            "ikiye katlar, varsayılan kapalı"
+        ),
+    )
     args = parser.parse_args(argv)
 
     models = load_models()
@@ -1008,7 +1356,7 @@ def main(argv: list[str] | None = None) -> int:
     tasks: tuple[str, ...] = tuple(args.tasks) if args.tasks else TASKS
 
     if args.dry_run:
-        print("\n".join(plan_lines(models, tasks, args.repeats)))
+        print("\n".join(plan_lines(models, tasks, args.repeats, order_check=args.order_check)))
         return 0
 
     require_cache_disabled()
@@ -1028,7 +1376,9 @@ def main(argv: list[str] | None = None) -> int:
 
     out_dir = args.out or (DEFAULT_OUT_ROOT / time.strftime("%Y%m%d-%H%M%S"))
     print(f"Çıktı: {out_dir}")
-    rows = run_matrix(models, tasks, args.repeats, out_dir, Throttle())
+    rows = run_matrix(
+        models, tasks, args.repeats, out_dir, Throttle(), order_check=args.order_check
+    )
     # Rapor tüm koşuyu kapsasın: bu oturumda atlanan (resume) satırlar da dahil.
     # Dosya hiç oluşmamış olabilir (ilk çağrıdan önce kota bittiyse) — read_rows
     # bunu boş liste olarak döndürür, koşu rapor üretirken çökmez.

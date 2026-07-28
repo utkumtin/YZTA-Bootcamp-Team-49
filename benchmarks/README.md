@@ -29,6 +29,15 @@ yakalayan bir doğrulayıcı var. Altın set, doğrulayıcıların göremediği 
 
 Her çağrıda ayrıca: `schema_ok`, `retries`, `latency_s`, `input/output_tokens`, hata sınıfı.
 
+Bunun üstüne dört metrik daha, hepsi mevcut çağrılardan türetiliyor (ekstra API
+maliyeti yok): p95 gecikme, çıktı token medyanı (verimlilik proxy'si — `$`
+DEĞİL, adaylar ücretsiz ve `models.json`'da fiyat alanı yok), tekrarlar-arası
+**cevap tutarlılığı** (aynı vaka 3 kez koşulunca aynı cevaba mı varılıyor —
+"3/3 doğru" ile "2/3 doğru, hep farklı" pass-rate'te aynı görünürdü, tutarlılık
+ayırır) ve **abstention sayaçları** (gatekeeper atlandı / gereksiz flag —
+cleaning'te; TP/FP/FN/TN — estimand'ın clarification kararında). Beşinci
+metrik, `--order-check`, ekstra çağrı gerektirdiği için opsiyonel (aşağıda).
+
 ---
 
 ## Kullanım
@@ -46,13 +55,20 @@ PARETO_LLM_CACHE=0 python scripts/run_model_benchmark.py \
 
 # 4. Tam matris (resume edilebilir; aynı komut kaldığı yerden devam eder)
 PARETO_LLM_CACHE=0 python scripts/run_model_benchmark.py --out runs/benchmark/tur-1
+
+# 5. + sıra duyarlılığı: estimand/spec_menu vakalarına kolon sırası TERS
+#    çevrilmiş 1 ekstra çağrı ekler (bu iki görevde çağrı sayısı 2 katına çıkar,
+#    o yüzden ayrı bayrak; --dry-run bunu havuz tavanına dahil eder)
+PARETO_LLM_CACHE=0 python scripts/run_model_benchmark.py --order-check
 ```
 
 `PARETO_LLM_CACHE=0` zorunlu; unutulursa koşucu durur. Cache açıkken ikinci koşu
 diskten döner ve gecikme/retry sayıları gerçeği göstermez.
 
-Çıktı: `results.jsonl` (her satır bir çağrı) + `report.md` (model × görev tablosu +
-ağır ihlaller). `runs/` git'e girmez.
+Çıktı: `results.jsonl` (her satır bir çağrı) + `report.md` (model tablosu — görev
+kırılımı yok, bu bir sıralama değil eleme aracı; ağır ihlaller; abstention
+sayaçları; `--order-check` koşulduysa sıra duyarlılığı bölümü). `runs/` git'e
+girmez.
 
 ### Anahtarlar
 
