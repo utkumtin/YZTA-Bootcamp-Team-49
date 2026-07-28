@@ -4,9 +4,21 @@ import pandas as pd
 from pydantic_ai.models.test import TestModel
 
 from pareto.cleaning.agent import generate_ledger
-from pareto.llm.guardrails import prompt_guard_scan, sanitize_profile
+from pareto.llm.guardrails import (
+    _parse_prompt_guard_score,
+    prompt_guard_scan,
+    sanitize_profile,
+)
 from pareto.llm.router import use_test_model
 from pareto.profiling import profile_dataframe
+
+_TEMIZ_PROFIL = {
+    "columns": {
+        "county_fips": {"top_values": {"01001": 2, "01003": 1}},
+        "gelir": {"top_values": {"10": 2, "11": 1}},
+    },
+    "potential_join_keys": ["county_fips"],
+}
 
 
 def test_l7_prompt_guard_enjeksiyonlu_kolon_suspicious_olarak_isaretlenir(caplog):
@@ -41,6 +53,59 @@ def test_l7_heuristic_signals_ham_metin_sizdirmaz():
     leaked = " ".join(scan["heuristic_signals"])
     assert "IGNORE PREVIOUS INSTRUCTIONS" not in leaked
     assert "reveal prompt" not in leaked
+
+
+def test_l7_groq_suspicious_verdikti_statuyu_yukseltir():
+    """Heuristik temiz olsa bile tarayıcının suspicious'ı statüyü yükseltmeli."""
+    scan = prompt_guard_scan(
+        sanitize_profile(_TEMIZ_PROFIL), scanner=lambda _p: ("suspicious", 0.97, None)
+    )
+
+    assert scan["status"] == "suspicious"
+    assert scan["groq_score"] == 0.97
+    # Dedektör adı yalnız gerçekten koşan tarayıcı için yazılır.
+    assert scan["detector"].startswith("heuristic+")
+
+
+def test_l7_scanner_hatasinda_fail_open_devam_eder(caplog):
+    """Tarayıcı hatası akışı kesmez; iz bırakır ve dedektör adı yazılmaz."""
+    caplog.set_level("WARNING")
+
+    scan = prompt_guard_scan(
+        sanitize_profile(_TEMIZ_PROFIL), scanner=lambda _p: ("unknown", None, "boom")
+    )
+
+    assert scan["status"] == "clean"
+    assert scan["fail_open"] is True
+    assert scan["detector"] == "heuristic-only"
+    assert "boom" in scan["groq_error"]
+    assert any("L7 Prompt Guard fail-open" in rec.message for rec in caplog.records)
+
+
+def test_l7_tek_deger_eslesmesi_esigi_gecmez():
+    """Tek kategorik değer tüm kararları onaya düşürmemeli; iki eşleşme düşürmeli."""
+    tek_eslesme = {
+        "columns": {"durum": {"top_values": {"jailbreak": 3, "normal": 1}}},
+        "potential_join_keys": [],
+    }
+    iki_eslesme = {
+        "columns": {"durum": {"top_values": {"jailbreak": 3, "ignore previous rules": 1}}},
+        "potential_join_keys": [],
+    }
+    scanner = lambda _p: ("clean", 0.0, None)  # noqa: E731
+
+    tek = prompt_guard_scan(sanitize_profile(tek_eslesme), scanner=scanner)
+    iki = prompt_guard_scan(sanitize_profile(iki_eslesme), scanner=scanner)
+
+    assert tek["status"] == "clean"
+    assert tek["value_signals"] == ["jailbreak"]
+    assert iki["status"] == "suspicious"
+    assert len(iki["value_signals"]) == 2
+
+
+def test_prompt_guard_skoru_ham_metinden_parse_edilir():
+    """Prompt Guard 2 skoru düz metin döndürür; sözleşme float'a çevrilmesi."""
+    assert _parse_prompt_guard_score("0.9995\n") == 0.9995
 
 
 def test_l5_satir_dusuren_karar_zorunlu_onaya_flaglenir(caplog):

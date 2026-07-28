@@ -287,24 +287,27 @@ def _uncertainty_flag(
     *,
     l7_scan: dict[str, Any],
 ) -> bool:
-    """Düşük güven VEYA yüksek-eksik kolon: karar insana gider (gatekeeper).
+    """Kararın gatekeeper'a düşüp düşmediğini söyleyen saf predicate.
 
-    Eksik oranı eşiği aşan kolonda LLM güveni geçersizdir; her zaman insana sorulur.
+    Sırayla dört kural işler; ilk eşleşen `True` döndürür:
+
+    1. L5 yüksek-etki transform (ör. `drop_duplicates`): koşulsuz `True`. Satır
+       düşüren/geri alınamayan işlemde LLM güveni ne olursa olsun insan onayı
+       şart.
+    2. L7 tarama `suspicious`: koşulsuz `True`. Payload'da enjeksiyon şüphesi
+       varsa o profilden üretilen her karar şüphelidir; güven skoru bu durumda
+       modelin kendi ürettiği bir sayıdır, kanıt değildir.
+    3. LLM güveni `low`: modelin kendi beyanı yeterli sayılır.
+    4. Referans kolonlarından biri yüksek-eksik eşiğini aşıyor: eksik oranı
+       eşiği aşan kolonda LLM güveni geçersizdir.
+
+    Loglama sorumluluğu burada değil, `_log_gate_reasons`'ta.
     """
     transform = REGISTRY[decision.transform.transform_name]
     if transform.high_impact:
-        logger.warning(
-            "L5 high-impact decision flagged for approval: %s on %s",
-            decision.transform.transform_name,
-            list(decision.transform.referenced_columns()),
-        )
         return True
 
     if l7_scan.get("status") == "suspicious":
-        logger.warning(
-            "L7 suspicious payload escalated to approval gate: %s",
-            decision.transform.transform_name,
-        )
         return True
 
     if decision.confidence == "low":
@@ -315,6 +318,27 @@ def _uncertainty_flag(
         float(columns.get(col, {}).get("pct_missing", 0.0)) >= threshold
         for col in decision.transform.referenced_columns()
     )
+
+
+def _log_gate_reasons(decisions: list[TransformDecision], l7_scan: dict[str, Any]) -> None:
+    """Onay kapısına düşüren L5/L7 kurallarını logla.
+
+    `_uncertainty_flag` saf bir predicate; iz bırakma işi buraya ayrıldı.
+    Sıra predicate ile aynı: yüksek-etki kuralı L7'yi gölgeler, yani bir karar
+    için en fazla bir satır düşer.
+    """
+    for decision in decisions:
+        if REGISTRY[decision.transform.transform_name].high_impact:
+            logger.warning(
+                "L5 high-impact decision flagged for approval: %s on %s",
+                decision.transform.transform_name,
+                list(decision.transform.referenced_columns()),
+            )
+        elif l7_scan.get("status") == "suspicious":
+            logger.warning(
+                "L7 suspicious payload escalated to approval gate: %s",
+                decision.transform.transform_name,
+            )
 
 
 # --------------------------------------------------------------------------- #
@@ -341,6 +365,7 @@ def generate_ledger(profile: dict[str, Any]) -> list[LedgerEntry]:
     )
     proposal = agent.run_sync(_build_judge_prompt(sanitized_profile, already_sanitized=True)).output
     _validate_referenced_columns(proposal.decisions, profile)
+    _log_gate_reasons(proposal.decisions, l7_scan)
 
     return [
         LedgerEntry(

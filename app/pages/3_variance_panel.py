@@ -30,6 +30,7 @@ from pareto.analysis.event_study_columns import (
 from pareto.analysis.variance import ROBUST_RULE_TEXT, diagnose_axes, summarize
 from pareto.config import SETTINGS
 from pareto.contracts import EstimationResult
+from pareto.llm.cache import CannedModeCacheMissError
 from pareto.llm.narrative import generate_narrative
 from pareto.memory.frozen_menu import load_frozen_menu_record
 from pareto.repro import (
@@ -275,7 +276,9 @@ if specs:
             with st.spinner("LLM narrative hazırlanıyor..."):
                 st.session_state["_variance_narrative"] = generate_narrative(summary, diagnosis)
                 st.session_state["_variance_narrative_key"] = narrative_key
-        except ValueError as exc:
+        except (ValueError, CannedModeCacheMissError) as exc:
+            # Narrative opsiyonel bir ek: canned modda cache'te olmayan bir
+            # anlatı istendiğinde akış durmaz, uyarı ile geçilir.
             st.warning(f"Narrative oluşturulamadı: {exc}")
 
     if st.session_state.get("_variance_narrative_key") == narrative_key:

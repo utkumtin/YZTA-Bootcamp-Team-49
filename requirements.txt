@@ -153,6 +153,7 @@ httpx==0.28.1
     #   groq
     #   mcp
     #   openai
+    #   pareto
     #   pydantic-ai-slim
     #   pydantic-graph
 httpx-sse==0.4.3

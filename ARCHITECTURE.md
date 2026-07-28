@@ -6,15 +6,11 @@ Bu belge, depodaki mevcut çalışan mimarinin tek sayfalık özetidir.
 
 Çekirdeğin tek atom birimi `Specification` modelidir ([pareto/spec.py](pareto/spec.py)).
 
-- outcome
-- treatment
-- controls
-- unit_fe/time_fe
-- cluster_by
-- estimator
-- sample_filter
-- include_never_treated
-- weight_col
+- kimlik: `spec_id`
+- tahmin hedefi: `outcome`, `treatment`, `controls`
+- sabit etkiler: `unit_fe`, `time_fe`
+- örneklem: `sample_filter`, `include_never_treated`, `pre_period_window`
+- tahmin ayarları: `cluster_by`, `weight_col`, `estimator`
 
 OLS ve TWFE aynı atomun farklı noktalarıdır; staggered {CS, SA, BJS} eksen olarak tasarlanmıştır ancak henüz committed kapsamda değildir. Bu sayede runner, varyans ve raporlama akışları estimator-agnostik kalır.
 
@@ -84,6 +80,7 @@ Not: Bu akış, etkileşim sırasındaki çalışma hattını gösterir; L1-L7 n
 
 - Uygulama: [pareto/llm/guardrails.py](pareto/llm/guardrails.py)
 - İlke: Llama Prompt Guard 2 (Groq) ile detective tarama; hata durumunda fail-open (akış kesilmez), yalnız log + ledger izi bırakır.
+- Sınır: Prompt Guard 2 86m İngilizce enjeksiyon kalıplarında güçlü, Türkçe enjeksiyonu pratikte yakalamıyor; kolon adları teknik/İngilizce olduğu için bugün kritik değil, ama katman Türkçe için garanti vermez. Anahtarsız (canned) çalıştırmada Groq çağrısı hiç yapılmaz, tarama regex heuristiğine iner.
 
 ## 5) Operasyonel Özeti
 

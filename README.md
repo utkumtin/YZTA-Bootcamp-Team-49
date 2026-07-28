@@ -421,7 +421,7 @@ Board state at the end of Sprint 2 (WIP limits and Fibonacci `Estimate` field un
 ## Technical Details
 
 **Single engine.** The atomic unit is **Specification** ([pareto/spec.py](pareto/spec.py)):
-`{outcome, treatment, controls, unit_fe/time_fe, cluster_by, estimator, sample_filter, include_never_treated, weight_col}`.
+`{spec_id, outcome, treatment, controls, unit_fe/time_fe, pre_period_window, cluster_by, estimator, sample_filter, include_never_treated, weight_col}`.
 OLS and TWFE are different points in the same space; there is no forked dual-engine path.
 
 **Architecture document.** Up-to-date system map lives in [ARCHITECTURE.md](ARCHITECTURE.md):
@@ -450,6 +450,7 @@ pareto/
   repro/                 # methods narrative + one-click reproducibility package
 data/                    # dataset configs + raw/extract artifacts + SOURCES.md
 docs/adr/                # architecture decisions
+docs/scrum/              # sprint plans + backlog (bootcamp delivery artifacts)
 docs/sprint-comms/       # sprint communication logs
 docs/verification/       # verification notes/check artifacts
 scripts/                 # smoke/e2e/reference utility scripts

@@ -178,6 +178,21 @@ def get_api_key(provider_env: str, *, allow_canned: bool = False) -> str:
     )
 
 
+def get_effective_privacy_mode() -> PrivacyMode:
+    """UI seçimi varsa kullan, yoksa varsayılan ayara dön.
+
+    Privacy kararı tek merkezden okunur: router zincir seçiminde, guardrails
+    L7 tarayıcı kapısında aynı değeri görür. Streamlit yoksa (headless/test)
+    `SETTINGS.privacy_mode` geçerlidir.
+    """
+    try:
+        import streamlit as st
+    except ImportError:
+        return SETTINGS.privacy_mode
+    raw = st.session_state.get("privacy_mode", SETTINGS.privacy_mode.value)
+    return PrivacyMode.PRIVATE if str(raw) == PrivacyMode.PRIVATE.value else PrivacyMode.PUBLIC
+
+
 def resolve_setting(env_name: str, default: str) -> str:
     """Sır olmayan bir ayarı çöz: env → `st.secrets` → kod defaultu.
 

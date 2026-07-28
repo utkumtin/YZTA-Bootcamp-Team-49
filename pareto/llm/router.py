@@ -15,7 +15,14 @@ import logging
 from contextlib import contextmanager
 from typing import Any
 
-from ..config import SETTINGS, ModelRole, PrivacyMode, get_api_key, resolve_api_key
+from ..config import (
+    SETTINGS,
+    ModelRole,
+    PrivacyMode,
+    get_api_key,
+    get_effective_privacy_mode,
+    resolve_api_key,
+)
 from .providers import ProviderModel, chain_for
 
 logger = logging.getLogger(__name__)
@@ -79,27 +86,23 @@ def _model_from_provider(pm: ProviderModel) -> Any:
         from pydantic_ai.models.openai import OpenAIChatModel
         from pydantic_ai.providers.openai import OpenAIProvider
 
-        # get_api_key() ÖNCE çağrılır: openrouter dalındaki gerekçenin aynısı —
-        # eksik anahtar _chain_model'in yakaladığı OSError olarak yükselsin,
-        # sağlayıcının kendi UserError'ına düşmesin.
+        # Diğer üç dalla aynı sözleşme: anahtarsız ortamda da kurulum yapılabilsin.
+        # Zincire hangi üyenin gireceğine `_chain_model` karar verdiği için burada
+        # fail-loud olmak canned fallback'i (dummy key'lerle yeniden kurulan zincir)
+        # OSError ile düşürürdü.
         return OpenAIChatModel(
             pm.model_id,
             provider=OpenAIProvider(
-                api_key=get_api_key(pm.api_key_env),
+                api_key=get_api_key(pm.api_key_env, allow_canned=True),
                 base_url=NVIDIA_NIM_BASE_URL,
             ),
         )
     raise RuntimeError(f"Bilinmeyen sağlayıcı: {pm.provider!r}")
 
 
-def _get_effective_privacy_mode() -> PrivacyMode:
-    """UI seçimi varsa kullan, yoksa varsayılan ayara dön."""
-    try:
-        import streamlit as st
-    except ImportError:
-        return SETTINGS.privacy_mode
-    raw = st.session_state.get("privacy_mode", SETTINGS.privacy_mode.value)
-    return PrivacyMode.PRIVATE if str(raw) == PrivacyMode.PRIVATE.value else PrivacyMode.PUBLIC
+# Privacy modu artık config.py'de tek kaynak (guardrails L7 kapısı da aynı değeri
+# okuyor). Buradaki ad geriye dönük uyumluluk için korunuyor.
+_get_effective_privacy_mode = get_effective_privacy_mode
 
 
 def is_canned_mode(role: ModelRole = ModelRole.MECHANICAL) -> bool:

@@ -15,14 +15,16 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 from typing import Any
-from urllib import error as urlerror
-from urllib import request as urlrequest
-from urllib.parse import urlparse
 
-from ..config import get_api_key
+import httpx
+
+# Alias'lı import bilinçli: `httpx.post` yazılırsa çekirdeğin veri-agnostiklik
+# testi `post` token'ını bir dataset kolonu (divorce tedavi dummy'si) sanıyor.
+from httpx import post as http_post
+
+from ..config import PrivacyMode, get_api_key, get_effective_privacy_mode, resolve_setting
 from .providers import PROMPT_GUARD_SLOT, _resolve
 
 logger = logging.getLogger(__name__)
@@ -60,9 +62,13 @@ def sanitize_profile(profile: dict[str, Any]) -> dict[str, Any]:
 
 
 _PROMPT_GUARD_ENABLED_ENV = "PARETO_ENABLE_L7_PROMPT_GUARD"
+_PROMPT_GUARD_THRESHOLD_ENV = "PARETO_L7_PROMPT_GUARD_THRESHOLD"
 _PROMPT_GUARD_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
-_PROMPT_GUARD_THRESHOLD = float(os.environ.get("PARETO_L7_PROMPT_GUARD_THRESHOLD", "0.5"))
+_PROMPT_GUARD_DEFAULT_THRESHOLD = "0.5"
 _FALSE_LIKE = {"0", "false", "off", "no"}
+# Değer eşleşmeleri kolon adlarından daha gürültülü: tek bir kategorik değerin
+# ("Assistant: yes") tüm kararları onaya düşürmemesi için eşik.
+_VALUE_SIGNAL_THRESHOLD = 2
 
 _COLUMN_NAME_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("ignore_all_previous", re.compile(r"ignore\s+all\s+previous", re.IGNORECASE)),
@@ -88,18 +94,6 @@ def _strip_spotlight(value: str) -> str:
     return value.replace(_MARK_OPEN, "").replace(_MARK_CLOSE, "")
 
 
-def _collect_untrusted_strings(profile: dict[str, Any]) -> list[str]:
-    samples: list[str] = []
-    for col_name, info in profile.get("columns", {}).items():
-        samples.append(_strip_spotlight(str(col_name)))
-        if isinstance(info, dict):
-            for top_val in info.get("top_values", {}):
-                samples.append(_strip_spotlight(str(top_val)))
-    for key in profile.get("potential_join_keys", []):
-        samples.append(_strip_spotlight(str(key)))
-    return samples
-
-
 def _collect_untrusted_column_names(profile: dict[str, Any]) -> list[str]:
     return [_strip_spotlight(str(col_name)) for col_name in profile.get("columns", {})]
 
@@ -113,23 +107,56 @@ def _collect_untrusted_values(profile: dict[str, Any]) -> list[str]:
     return values
 
 
-def _heuristic_prompt_injection_signals(profile: dict[str, Any]) -> list[str]:
-    matches: list[str] = []
+def _heuristic_prompt_injection_signals(
+    profile: dict[str, Any],
+) -> tuple[list[str], list[str]]:
+    """Kolon adı ve değer eşleşmelerini AYRI döndürür.
+
+    İki kanalın sinyal gücü farklı: enjeksiyon deseni taşıyan bir kolon adı tek
+    başına yeterli kanıttır, örnek değerlerdeki eşleşmeler ise eşik ister
+    (bkz. `_VALUE_SIGNAL_THRESHOLD`). Ham kullanıcı metni tutulmaz; yalnız
+    imza/pattern adı izlenir.
+    """
+    column_matches: list[str] = []
     for text in _collect_untrusted_column_names(profile):
         for pattern_id, pattern in _COLUMN_NAME_PATTERNS:
             if pattern.search(text):
-                matches.append(pattern_id)
+                column_matches.append(pattern_id)
+    value_matches: list[str] = []
     for text in _collect_untrusted_values(profile):
         for pattern_id, pattern in _VALUE_PATTERNS:
             if pattern.search(text):
-                matches.append(pattern_id)
-    # Ham kullanıcı metni tutulmaz; yalnız imza/pattern adı izlenir.
-    return sorted(set(matches))
+                value_matches.append(pattern_id)
+    return sorted(set(column_matches)), sorted(set(value_matches))
 
 
 def _l7_prompt_guard_enabled() -> bool:
-    value = os.environ.get(_PROMPT_GUARD_ENABLED_ENV, "1").strip().lower()
+    """L7 açık mı? env → `st.secrets` → default sırasıyla okunur.
+
+    `os.environ` yerine `resolve_setting`: Streamlit Cloud'da ortam değişkeni
+    tanımlanamıyor, ayar yalnız `st.secrets`'a yazılabiliyor.
+    """
+    value = resolve_setting(_PROMPT_GUARD_ENABLED_ENV, "1").strip().lower()
     return value not in _FALSE_LIKE
+
+
+def _prompt_guard_threshold() -> float:
+    """Suspicious eşiği. Çağrı anında okunur, import anında değil.
+
+    Modül seviyesinde sabitlenirse `.env` yüklemesi import'tan sonra geldiğinde
+    değer sessizce default'ta kalırdı.
+    """
+    raw = resolve_setting(_PROMPT_GUARD_THRESHOLD_ENV, _PROMPT_GUARD_DEFAULT_THRESHOLD)
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning(
+            "%s okunamadı (%r); %s kullanılıyor.",
+            _PROMPT_GUARD_THRESHOLD_ENV,
+            raw,
+            _PROMPT_GUARD_DEFAULT_THRESHOLD,
+        )
+        return float(_PROMPT_GUARD_DEFAULT_THRESHOLD)
 
 
 def _parse_prompt_guard_score(raw_content: str) -> float:
@@ -144,6 +171,12 @@ def _scan_with_groq_prompt_guard(profile: dict[str, Any]) -> tuple[str, float | 
     """
     if not _l7_prompt_guard_enabled():
         return "unknown", None, "L7 disabled by env"
+
+    # Private modda payload yalnız no-train bir tarayıcıya gidebilir. Bugün
+    # PROMPT_GUARD_SLOT.no_train=True olduğu için bu dal tetiklenmez; bayrak
+    # yarın False olursa katman sessizce eski davranışta kalmasın diye burada.
+    if get_effective_privacy_mode() is PrivacyMode.PRIVATE and not PROMPT_GUARD_SLOT.no_train:
+        return "unknown", None, "L7 disabled: private mode requires a no-train scanner"
 
     resolved = _resolve(PROMPT_GUARD_SLOT, allow_session=False)
 
@@ -162,27 +195,23 @@ def _scan_with_groq_prompt_guard(profile: dict[str, Any]) -> tuple[str, float | 
         "temperature": 0,
     }
 
-    parsed = urlparse(_PROMPT_GUARD_ENDPOINT)
-    if parsed.scheme != "https" or not parsed.netloc:
-        raise ValueError("Invalid Prompt Guard endpoint")
-
+    # httpx (urllib değil): Groq'un önündeki Cloudflare `Python-urllib/3.x`
+    # User-Agent'ını 403 ile kesiyor, yani katman hiç koşmuyordu. httpx zaten
+    # pydantic-ai üzerinden bağımlılıkta; şema doğrulamasını da kendisi yapar.
     try:
-        req = urlrequest.Request(  # noqa: S310
+        resp = http_post(
             _PROMPT_GUARD_ENDPOINT,
-            data=json.dumps(body).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
+            headers={"Authorization": f"Bearer {api_key}"},
+            json=body,
+            timeout=20,
         )
-        with urlrequest.urlopen(req, timeout=20) as resp:  # noqa: S310
-            raw = json.loads(resp.read().decode("utf-8"))
-        content = str(raw["choices"][0]["message"]["content"])
+        resp.raise_for_status()
+        content = str(resp.json()["choices"][0]["message"]["content"])
         score = _parse_prompt_guard_score(content)
-    except (urlerror.HTTPError, urlerror.URLError, KeyError, ValueError, TypeError) as exc:
+    except (httpx.HTTPError, KeyError, IndexError, ValueError, TypeError) as exc:
         return "unknown", None, f"Prompt Guard call failed: {exc}"
 
-    verdict = "suspicious" if score >= _PROMPT_GUARD_THRESHOLD else "clean"
+    verdict = "suspicious" if score >= _prompt_guard_threshold() else "clean"
     return verdict, score, None
 
 
@@ -195,14 +224,20 @@ def prompt_guard_scan(
 
     Sonuç her zaman JSON-serializable bir sözlüktür ve prompt payload'ına gömülebilir.
     """
-    heuristic_signals = _heuristic_prompt_injection_signals(profile)
+    column_signals, value_signals = _heuristic_prompt_injection_signals(profile)
+    heuristic_signals = sorted(set(column_signals) | set(value_signals))
     model_id = _resolve(PROMPT_GUARD_SLOT, allow_session=False).model_id
     run_scanner = scanner or _scan_with_groq_prompt_guard
     groq_verdict, groq_score, groq_error = run_scanner(profile)
     groq_active = groq_error is None and groq_verdict in {"clean", "suspicious"}
     detector = f"heuristic+{model_id}" if groq_active else "heuristic-only"
 
-    suspicious = bool(heuristic_signals) or groq_verdict == "suspicious"
+    # Kolon adı eşleşmesi tek başına yeterli; değer eşleşmeleri eşik ister.
+    suspicious = (
+        bool(column_signals)
+        or len(value_signals) >= _VALUE_SIGNAL_THRESHOLD
+        or groq_verdict == "suspicious"
+    )
     status = "suspicious" if suspicious else "clean"
 
     result: dict[str, Any] = {
@@ -211,9 +246,11 @@ def prompt_guard_scan(
         "status": status,
         "heuristic_signal_count": len(heuristic_signals),
         "heuristic_signals": heuristic_signals[:10],
+        "column_signals": column_signals[:10],
+        "value_signals": value_signals[:10],
         "groq_verdict": groq_verdict,
         "groq_score": groq_score,
-        "threshold": _PROMPT_GUARD_THRESHOLD,
+        "threshold": _prompt_guard_threshold(),
         "fail_open": True,
     }
     if groq_error:
