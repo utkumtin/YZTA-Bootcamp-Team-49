@@ -8,11 +8,12 @@ manuel export (CDC WONDER, BLS LAUS — `--check` eksikleri ve yönergeleri list
 
 ## Son kontrol (2026-07-27)
 
-- Repo içi fetch/extract artefaktları mevcut: `sahie_uninsured_2009_2019.csv`,
-  `saipe_income_poverty_2009_2019.csv`, `divorce.csv`, `castle.csv`,
-  `card_krueger.csv`, `card_krueger_long.csv`.
-- LAUS dosyaları (`laucnty09..19.xlsx`) mevcut.
-- CDC WONDER ham export dosyası (`cdc_wonder_mortality_2009_2019.tsv`) manual
+- Repo içi fetch/extract artefaktları mevcut: `data/medicaid/raw/sahie_uninsured_2009_2019.csv`,
+  `data/medicaid/raw/saipe_income_poverty_2009_2019.csv`, `data/divorce/raw/divorce.csv`,
+  `data/castle/raw/castle.csv`, `data/card_krueger/raw/card_krueger.csv`,
+  `data/card_krueger/raw/card_krueger_long.csv`.
+- LAUS dosyaları (`data/medicaid/raw/laus/laucnty09..19.xlsx`) mevcut.
+- CDC WONDER ham export dosyası (`data/medicaid/raw/cdc_wonder_mortality_2009_2019.tsv`) manual
   kaynak olduğu için repoda zorunlu tutulmuyor; yerel çalıştırmada ayrıca konmalıdır.
 
 ## Dizin düzeni (SCOPE §12)

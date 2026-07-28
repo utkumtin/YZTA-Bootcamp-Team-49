@@ -27,6 +27,7 @@ class Transform:
     apply: Callable[..., pd.DataFrame]  # (df, **params) -> df
     render: Callable[..., str]  # (**params) -> reproducible code line(s)
     doc: str
+    high_impact: bool = False
 
 
 # --------------------------------------------------------------------------- #
@@ -123,6 +124,7 @@ REGISTRY: dict[str, Transform] = {
             _drop_duplicates,
             _r_drop_duplicates,
             "Tekrar eden satırları at (opsiyonel anahtar kümesiyle).",
+            high_impact=True,
         ),
     )
 }

@@ -10,7 +10,6 @@ Yüksek güvenli kararlar otomatik yola gider; gerçek yargı gerektirenler
 
 from __future__ import annotations
 
-import json
 import logging
 from enum import StrEnum
 from typing import Annotated, Any, Literal
@@ -18,7 +17,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from ..config import SETTINGS, ModelRole
-from ..llm.guardrails import prompt_guard_scan, sanitize_profile
+from ..llm.guardrails import prompt_guard_scan, prompt_json, sanitize_profile
 from ..llm.router import build_agent
 from .ledger import LedgerEntry
 from .transforms import REGISTRY
@@ -252,11 +251,10 @@ def _transform_catalog() -> str:
     return "\n".join(f"- {t.name}: {t.doc}" for t in REGISTRY.values())
 
 
-def _build_judge_prompt(profile: dict[str, Any]) -> str:
+def _build_judge_prompt(profile: dict[str, Any], *, already_sanitized: bool = False) -> str:
     """Profili L2 sanitizasyondan geçirip deterministik JUDGE istemini kurar."""
-    sanitized = sanitize_profile(profile)
-    sanitized["_l7_prompt_guard"] = prompt_guard_scan(sanitized)
-    payload = json.dumps(sanitized, ensure_ascii=False, sort_keys=True, default=str)
+    sanitized = profile if already_sanitized else sanitize_profile(profile)
+    payload = prompt_json(sanitized)
     return (
         "Dataset profile (summary statistics only, raw rows are never shared):\n"
         f"{payload}\n\n"
@@ -283,16 +281,29 @@ def _validate_referenced_columns(
         raise ValueError("JUDGE profilde olmayan kolon andı: " + "; ".join(errors))
 
 
-def _uncertainty_flag(decision: TransformDecision, profile: dict[str, Any]) -> bool:
+def _uncertainty_flag(
+    decision: TransformDecision,
+    profile: dict[str, Any],
+    *,
+    l7_scan: dict[str, Any],
+) -> bool:
     """Düşük güven VEYA yüksek-eksik kolon: karar insana gider (gatekeeper).
 
     Eksik oranı eşiği aşan kolonda LLM güveni geçersizdir; her zaman insana sorulur.
     """
-    if decision.transform.transform_name == "drop_duplicates":
+    transform = REGISTRY[decision.transform.transform_name]
+    if transform.high_impact:
         logger.warning(
             "L5 high-impact decision flagged for approval: %s on %s",
             decision.transform.transform_name,
             list(decision.transform.referenced_columns()),
+        )
+        return True
+
+    if l7_scan.get("status") == "suspicious":
+        logger.warning(
+            "L7 suspicious payload escalated to approval gate: %s",
+            decision.transform.transform_name,
         )
         return True
 
@@ -320,12 +331,15 @@ def generate_ledger(profile: dict[str, Any]) -> list[LedgerEntry]:
     if not profile.get("columns"):
         raise ValueError("Profilde kolon yok; temizleme kararı üretilemez.")
 
+    sanitized_profile = sanitize_profile(profile)
+    l7_scan = prompt_guard_scan(sanitized_profile)
+
     agent = build_agent(
         ModelRole.JUDGE,
         system_prompt=_SYSTEM_PROMPT,
         output_type=CleaningProposal,
     )
-    proposal = agent.run_sync(_build_judge_prompt(profile)).output
+    proposal = agent.run_sync(_build_judge_prompt(sanitized_profile, already_sanitized=True)).output
     _validate_referenced_columns(proposal.decisions, profile)
 
     return [
@@ -334,7 +348,9 @@ def generate_ledger(profile: dict[str, Any]) -> list[LedgerEntry]:
             transform_name=decision.transform.transform_name,
             params=decision.transform.params(),
             gerekce=decision.gerekce,
-            belirsizlik_bayragi=_uncertainty_flag(decision, profile),
+            belirsizlik_bayragi=_uncertainty_flag(decision, profile, l7_scan=l7_scan),
+            l7_prompt_guard_status=str(l7_scan.get("status", "unknown")),
+            l7_prompt_guard_suspicious=bool(l7_scan.get("status") == "suspicious"),
         ).stamped()
         for decision in proposal.decisions
     ]

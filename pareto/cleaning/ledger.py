@@ -28,6 +28,8 @@ class LedgerEntry(BaseModel):
     params: dict[str, Any]
     gerekce: str
     belirsizlik_bayragi: bool
+    l7_prompt_guard_status: str = "unknown"
+    l7_prompt_guard_suspicious: bool = False
     timestamp: str = ""
     # İnsanın gatekeeper'daki kararı: "approved" | "modified" | "rejected" | None
     # (None = henüz çözülmemiş / audit dışı ham JUDGE önerisi). persist_ledger

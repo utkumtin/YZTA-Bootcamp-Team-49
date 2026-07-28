@@ -24,12 +24,15 @@ Bu dosya, mimari karar kayıtlarını (ADR) tek bakışta izlemek için referans
 
 ```mermaid
 flowchart LR
-  ADR1[ADR-0001\nTek motor] --> ADR3[ADR-0003\nSubprocess runner]
-  ADR1 --> ADR5[ADR-0005\nTek estimator lib]
-  ADR2[ADR-0002\nVetted codegen] --> ADR3
-  ADR4[ADR-0004\nLLM router] --> ADR2
+  ADR1[ADR-0001<br/>Tek motor] --> ADR3[ADR-0003<br/>Subprocess runner]
+  ADR1 --> ADR5[ADR-0005<br/>Tek estimator lib]
+  ADR2[ADR-0002<br/>Vetted codegen] --> ADR3
+  ADR4[ADR-0004<br/>LLM router] --> ADR2
   ADR4 --> ADR1
 ```
 
 Not: Şu anda superseded bir ADR yoktur; yeni bir karar eskisini geçersiz kıldığında
 ilgili dosyalarda `Superseded by` / `Supersedes` alanları karşılıklı doldurulmalıdır.
+
+Durum alanı için tek kaynak bu dosyadaki tablo kabul edilir; ADR metinlerindeki durum
+satırları tabloyla çelişmemelidir.

@@ -167,6 +167,16 @@ JUDGE_NVIDIA_SLOT = ModelSlot(
     options=(),
     thinking_options=_JUDGE_THINKING_OPTIONS,
 )
+# L7 detective scanner (Prompt Guard): UI'da gösterilmez; merkezi model/env
+# sözleşmesine dahil edilir ki çağrı yolu diğer LLM katmanlarıyla uyumlu olsun.
+PROMPT_GUARD_SLOT = ModelSlot(
+    key="prompt_guard",
+    provider="groq",
+    api_key_env="GROQ_API_KEY",
+    no_train=True,
+    model_env="PARETO_L7_PROMPT_GUARD_MODEL",
+    default_model="meta-llama/llama-prompt-guard-2-86m",
+)
 JUDGE_OPENROUTER_PRIVATE_SLOT = ModelSlot(
     key="judge_openrouter_private",
     provider="openrouter",

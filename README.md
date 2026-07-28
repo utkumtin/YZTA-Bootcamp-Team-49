@@ -421,7 +421,8 @@ Board state at the end of Sprint 2 (WIP limits and Fibonacci `Estimate` field un
 ## Technical Details
 
 **Single engine.** The atomic unit is **Specification** ([pareto/spec.py](pareto/spec.py)):
-`{outcome, regressors, fixed_effects, clustering, sample, estimator}`. OLS and TWFE are different points in the same space; there is no forked dual-engine path.
+`{outcome, treatment, controls, unit_fe/time_fe, cluster_by, estimator, sample_filter, include_never_treated, weight_col}`.
+OLS and TWFE are different points in the same space; there is no forked dual-engine path.
 
 **Architecture document.** Up-to-date system map lives in [ARCHITECTURE.md](ARCHITECTURE.md):
 
@@ -429,26 +430,34 @@ Board state at the end of Sprint 2 (WIP limits and Fibonacci `Estimate` field un
 - deterministic vs judgment lanes
 - current 7-layer defense-in-depth map (L1-L7)
 
+**ADR index.** Architecture decision records are indexed in [docs/adr/README.md](docs/adr/README.md).
+
 **Current repo map (technical core):**
 
 ```
 app/                     # Streamlit UI (main + pages: 1_cleaning, 2_analysis, 3_variance_panel)
+  components/            # shared UI/page helpers
 pareto/
   spec.py                # Specification atom (Pydantic)
   profiling.py           # deterministic profile extraction (no raw row payload)
   contracts.py           # panel contract + estimation result schemas
   config.py              # global settings (privacy mode, caps, deterministic env)
+  streamlit_ui.py        # shared sidebar/privacy/model UI
   cleaning/              # agent, ledger, merge, vetted transforms, codegen, L4 reproduction gate
   analysis/              # hypothesis, menu, runner, estimators, variance diagnostics
   llm/                   # router/providers/cache/guardrails
   memory/store.py        # project memory store
+  repro/                 # methods narrative + one-click reproducibility package
 data/                    # dataset configs + raw/extract artifacts + SOURCES.md
 docs/adr/                # architecture decisions
+docs/sprint-comms/       # sprint communication logs
+docs/verification/       # verification notes/check artifacts
+scripts/                 # smoke/e2e/reference utility scripts
 tests/                   # unit/integration/privacy/regression tests
 PRIVACY.md               # privacy claims: enforced vs provider-assumed
 ```
 
-**Stack (current):** Python · Streamlit (Community Cloud, canned-default + BYOK) · pandas · **pyfixest** (committed estimator lib) · **PydanticAI** router/providers/cache · subprocess multiverse runner · uv · ruff · mypy · pre-commit + gitleaks · GitHub Actions.
+**Stack (current):** Python · Streamlit (Community Cloud, canned-default + BYOK) · pandas · **pyfixest** (committed estimator lib, ADR-0005) · **PydanticAI** router/providers/cache · subprocess multiverse runner · uv · ruff · mypy · pre-commit + gitleaks · GitHub Actions.
 
 **Model routing (current):**
 
@@ -464,7 +473,7 @@ PRIVACY.md               # privacy claims: enforced vs provider-assumed
 - L4 subprocess reproduction gate
 - L5 high-impact cleaning gate (row-dropping decisions require approval)
 - L6 private routing/no-train enforcement
-- L7 Prompt Guard detective scan (fail-open + trace/log)
+- L7 Prompt Guard detective scan (fail-open + log/ledger trace)
 
 **Privacy.** [PRIVACY.md](PRIVACY.md) separates guarantees that are code-enforced from provider-level assumptions. Enforced rules are covered by [tests/test_privacy_routing.py](tests/test_privacy_routing.py).
 
