@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -24,7 +25,7 @@ import scripts.run_model_benchmark as bench
 from pareto.analysis.hypothesis import TACProposal
 from pareto.analysis.menu import ALL_AXES, SpecMenuAxis, SpecMenuProposal
 from pareto.cleaning.ledger import LedgerEntry
-from pareto.cleaning.merge import build_panel, load_dataset_config
+from pareto.cleaning.merge import build_panel, load_dataset_config, resolve_source_paths
 from pareto.cleaning.transforms import REGISTRY
 from pareto.llm.narrative import AxisComment, VarianceNarrative
 from pareto.llm.router import use_test_model
@@ -79,6 +80,33 @@ def _case(task: str, case_id: str) -> dict:
         if case["case_id"] == case_id:
             return case
     raise AssertionError(f"{task} altın setinde {case_id} yok")
+
+
+def _missing_source(dataset_dir: str) -> str | None:
+    """Config'te tanımlı ama diskte olmayan ilk kaynağın adını döndürür, yoksa None.
+
+    `load_sources` ile aynı ön-kontrolü yapar (bkz. `resolve_source_paths`), ama
+    hata fırlatmak yerine karar çağırana bırakılır.
+    """
+    root = REPO_ROOT / dataset_dir
+    for name, src in load_dataset_config(root)["sources"].items():
+        paths = resolve_source_paths(str(src["file"]), root)
+        if not paths or any(not p.exists() for p in paths):
+            return name
+    return None
+
+
+def _panel_root(dataset_dir: str) -> Path:
+    """Ham verisi olan veri seti kökünü döndürür; eksikse testi atlar.
+
+    Medicaid'in CDC WONDER extract'i DUA kısıtı yüzünden repo'ya konmuyor
+    (.gitignore: `data/**/raw/*.tsv`). Panel gerçek dosyalardan kurulduğu için
+    bu testler ham veri olmadan koşamaz; CI'da beklenen sonuç hata değil atlamadır.
+    """
+    missing = _missing_source(dataset_dir)
+    if missing is not None:
+        pytest.skip(f"{dataset_dir}: '{missing}' ham kaynağı lokalde yok (CI'da atlanır)")
+    return REPO_ROOT / dataset_dir
 
 
 # --------------------------------------------------------------------------- #
@@ -304,7 +332,7 @@ def _menu_kwargs(case_id: str) -> dict:
     (castle'ın unit'i 'state' değil 'state_id').
     """
     case = _case("spec_menu", case_id)
-    root = REPO_ROOT / case["dataset_dir"]
+    root = _panel_root(case["dataset_dir"])
     return {
         "case": case,
         "available_columns": list(build_panel(root).df.columns),
@@ -650,7 +678,7 @@ def test_run_estimand_uses_real_panel_columns() -> None:
 @pytest.mark.parametrize("case", load_gold("cleaning"), ids=lambda c: c["case_id"])
 def test_cleaning_gold_columns_and_transforms_are_real(case: dict) -> None:
     """Altın setteki her kolon gerçekten profilde, her transform REGISTRY'de olmalı."""
-    profile = profile_dataframe(build_panel(REPO_ROOT / case["dataset_dir"]).df)
+    profile = profile_dataframe(build_panel(_panel_root(case["dataset_dir"])).df)
     columns = set(profile["columns"])
 
     for bucket in ("must_fix", "forbidden", "acceptable"):
@@ -668,7 +696,11 @@ def test_cleaning_gold_must_fix_columns_really_need_fixing() -> None:
     (ör. merge katmanı coerce etmeye başlarsa) burası düşer ve altın set
     güncellenir — yoksa benchmark var olmayan bir kusuru aramaya devam ederdi.
     """
+    checked = 0
     for case in load_gold("cleaning"):
+        if _missing_source(case["dataset_dir"]) is not None:
+            continue  # ham verisi repo'da olmayan set (bkz. _panel_root)
+        checked += 1
         profile = profile_dataframe(build_panel(REPO_ROOT / case["dataset_dir"]).df)
         for record in case["must_fix"]:
             if record["transform"] != "coerce_numeric":
@@ -679,10 +711,14 @@ def test_cleaning_gold_must_fix_columns_really_need_fixing() -> None:
                 "artık metin değil, coerce_numeric MUST_FIX olmaktan çıkmış"
             )
 
+    # Tek vaka bile koşmadıysa test sessizce yeşil kalırdı; atlama olduğunu söyle.
+    if checked == 0:
+        pytest.skip("hiçbir temizleme vakasının ham verisi lokalde yok")
+
 
 @pytest.mark.parametrize("case", load_gold("estimand"), ids=lambda c: c["case_id"])
 def test_estimand_gold_accepted_columns_exist(case: dict) -> None:
-    columns = set(build_panel(REPO_ROOT / case["dataset_dir"]).df.columns)
+    columns = set(build_panel(_panel_root(case["dataset_dir"])).df.columns)
     for name in [*case["accept_treatment"], *case["accept_outcome"]]:
         assert name in columns, f"{case['case_id']}: panelde olmayan kolon kabul ediliyor: {name}"
     if case["adversarial"]:
@@ -711,7 +747,7 @@ def test_spec_menu_gold_bad_controls_do_not_contradict_config(case: dict) -> Non
 
 @pytest.mark.parametrize("case", load_gold("spec_menu"), ids=lambda c: c["case_id"])
 def test_spec_menu_gold_labels_reference_real_axes_and_columns(case: dict) -> None:
-    columns = set(build_panel(REPO_ROOT / case["dataset_dir"]).df.columns)
+    columns = set(build_panel(_panel_root(case["dataset_dir"])).df.columns)
 
     for axis in [*case.get("baseline_must_be_in", {}), *case.get("indefensible_levels", {})]:
         assert axis in ALL_AXES, f"{case['case_id']}: bilinmeyen eksen {axis}"
