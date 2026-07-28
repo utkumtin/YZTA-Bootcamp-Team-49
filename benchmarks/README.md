@@ -42,7 +42,7 @@ PARETO_LLM_CACHE=0 python scripts/run_model_benchmark.py --preflight
 
 # 3. Tek model dumanı
 PARETO_LLM_CACHE=0 python scripts/run_model_benchmark.py \
-    --models gemini-3.5-flash --tasks narrative --repeats 1
+    --models gemini-3.6-flash --tasks narrative --repeats 1
 
 # 4. Tam matris (resume edilebilir; aynı komut kaldığı yerden devam eder)
 PARETO_LLM_CACHE=0 python scripts/run_model_benchmark.py --out runs/benchmark/tur-1
@@ -75,9 +75,9 @@ havuzdur; model başına saymak kotayı kat kat büyük gösterir ve koşu 429 y
 | `nvidia:hesap` | **1.000 kredi, tek seferlik** | Günlük yenilenmiyor. Telefon doğrulaması gerekiyor. |
 | `openrouter:free` | 50/gün (hesapta $10 kredi varsa 1.000) | Tüm `:free` modeller **ortak havuz** |
 
-22 model × 4 görev × 4 vaka × 3 tekrar = 1.104 çağrı. `--dry-run` havuz başına dağılımı
+17 model × 4 görev × 4 vaka × 3 tekrar = 816 çağrı. `--dry-run` havuz başına dağılımı
 ve gün tahminini basar. Şu anki matriste en yavaş havuz Gemini Flash (3 koşu-günü);
-NVIDIA tek seferlik bütçenin ~%53'ünü kullanır.
+NVIDIA tek seferlik bütçenin ~%29'unu kullanır.
 
 Koşu sırası `models.json`'daki `priority` alanına göre: `high` → `normal` → `low`.
 Paylaşımlı havuzda sıra sonucu belirler — NVIDIA kredisi biterse kuyruğun sonundaki
@@ -111,12 +111,9 @@ tier tablosunda yok — listeye alınmadı. NVIDIA NIM model ID'leri
 `https://integrate.api.nvidia.com/v1/models` (auth'suz açık) üzerinden tek tek
 doğrulandı. `--preflight` bunu koşu anında tekrar eder.
 
-**Kontrol grubu şart:** `gemini-3.5-flash` (`JUDGE_SLOT` defaultu) ve
+**Kontrol grubu şart:** `gemini-3.6-flash` (`JUDGE_SLOT` defaultu) ve
 `thinkingmachines/inkling` (AA-Omniscience/IFBench referansı) matriste. Diğer her model
 bunlara göre okunur; yoksa "daha iyi" demenin ölçüsü olmaz.
-
-**Kasıtlı kopya:** `gemma-4-31b-it` hem Google AI Studio'da hem NVIDIA NIM'de var. Aynı
-ağırlıklar, iki sağlayıcı — skor farkı çıkarsa fark modelden değil sağlayıcıdan gelir.
 
 ### Ücretsiz modeller PRIVATE slotu dolduramaz
 

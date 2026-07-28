@@ -27,7 +27,7 @@ Koşu resume edilebilir: her sonuç anında `results.jsonl`'e eklenir, kotaya
 Kullanım:
     python scripts/run_model_benchmark.py --dry-run
     PARETO_LLM_CACHE=0 python scripts/run_model_benchmark.py --preflight
-    PARETO_LLM_CACHE=0 python scripts/run_model_benchmark.py --models gemini-3.5-flash
+    PARETO_LLM_CACHE=0 python scripts/run_model_benchmark.py --models gemini-3.6-flash
 
 Bu script test süitine girmez (canlı sağlayıcı çağırır). Puanlayıcıları
 `tests/test_model_benchmark.py` API yakmadan doğrular.
@@ -258,8 +258,7 @@ def by_priority(models: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     Paylaşımlı havuzda sıra sonucu belirler: NVIDIA'nın 1.000 kredisi biterse
     kuyruğun sonundaki modeller hiç koşmaz. O yüzden kredinin `deepseek-v4-pro`
-    ve `inkling` gibi asıl adaylara gitmesi, `step-3.7-flash` gibi düşük
-    beklentili uçlara değil.
+    ve `inkling` gibi asıl adaylara gitmesi gerekir.
     """
     return sorted(models, key=lambda m: _PRIORITY_RANK.get(str(m.get("priority", "normal")), 1))
 

@@ -43,17 +43,9 @@
       "provider": "google",
       "rpm": 5,
       "rpd": 20,
-      "priority": "normal",
-      "evidence": "Google'ın en yeni Flash'ı (2026-07-21). Günde 20 istek — matriste en dar kota."
-    },
-    {
-      "id": "gemini-3.5-flash",
-      "provider": "google",
-      "rpm": 5,
-      "rpd": 20,
       "priority": "high",
       "control": true,
-      "evidence": "KONTROL GRUBU: JUDGE_SLOT'un bugünkü pinli defaultu. Diğer her model buna göre okunur."
+      "evidence": "KONTROL GRUBU: JUDGE_SLOT'un bugünkü pinli defaultu. Günde 20 istek — matriste en dar kota."
     },
     {
       "id": "gemini-3.5-flash-lite",
@@ -124,15 +116,6 @@
       "evidence": "GPQA-D 91.2 · AIME26 99.2 · SWE-bench Pro 62.1."
     },
     {
-      "id": "deepseek-ai/deepseek-v4-flash",
-      "provider": "nvidia",
-      "pool": "nvidia:hesap",
-      "rpm": 40,
-      "budget": 1000,
-      "priority": "normal",
-      "evidence": "MMLU-Pro 87.5 · GPQA-D 90.1. V4-Pro'nun hızlı kardeşi; kalite/gecikme dengesi."
-    },
-    {
       "id": "thinkingmachines/inkling",
       "provider": "nvidia",
       "pool": "nvidia:hesap",
@@ -152,24 +135,6 @@
       "evidence": "1M bağlam · 428B toplam / 23B aktif · sparse attention (9x prefill hızlanması)."
     },
     {
-      "id": "moonshotai/kimi-k2.6",
-      "provider": "nvidia",
-      "pool": "nvidia:hesap",
-      "rpm": 40,
-      "budget": 1000,
-      "priority": "normal",
-      "evidence": "Kimi K2 Groq'ta deprecate edildi; güncel sürümü NIM'de. Agentic/tool-use profili güçlü."
-    },
-    {
-      "id": "nvidia/nemotron-3-super-120b-a12b",
-      "provider": "nvidia",
-      "pool": "nvidia:hesap",
-      "rpm": 40,
-      "budget": 1000,
-      "priority": "high",
-      "evidence": "MMLU-Pro 83.7 · GPQA 79.2 · IFBench 72.6 · RULER@1M 91.8 · native structured outputs."
-    },
-    {
       "id": "nvidia/nemotron-3-ultra-550b-a55b",
       "provider": "nvidia",
       "pool": "nvidia:hesap",
@@ -186,24 +151,6 @@
       "budget": 1000,
       "priority": "normal",
       "evidence": "BFCL v4 53.8 · IFBench 71.5 · native structured outputs. Küçük boy sınıfının en iyisi."
-    },
-    {
-      "id": "google/gemma-4-31b-it",
-      "provider": "nvidia",
-      "pool": "nvidia:hesap",
-      "rpm": 40,
-      "budget": 1000,
-      "priority": "low",
-      "evidence": "KASITLI KOPYA: Google AI Studio'daki gemma-4-31b-it ile aynı ağırlıklar. Skor farkı çıkarsa fark modelden değil sağlayıcıdan gelir — o farkı ölçmek için burada."
-    },
-    {
-      "id": "stepfun-ai/step-3.7-flash",
-      "provider": "nvidia",
-      "pool": "nvidia:hesap",
-      "rpm": 40,
-      "budget": 1000,
-      "priority": "low",
-      "evidence": "SWE-bench Pro 56.3; kod odaklı. Yargı görevinde beklenti düşük — kota kalırsa koşar."
     },
 
     {

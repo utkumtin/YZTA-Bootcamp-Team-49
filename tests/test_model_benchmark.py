@@ -803,7 +803,7 @@ def test_models_json_has_control_group_per_pinned_default() -> None:
     """Kontrol grubu olmadan skorlar okunamaz: neye göre daha iyi?"""
     controls = {m["id"] for m in load_models() if m.get("control")}
 
-    assert "gemini-3.5-flash" in controls  # JUDGE_SLOT defaultu
+    assert "gemini-3.6-flash" in controls  # JUDGE_SLOT defaultu
     assert "thinkingmachines/inkling" in controls  # AA-Omniscience/IFBench referansı
 
 
@@ -816,7 +816,7 @@ def test_models_json_shared_pools_are_declared() -> None:
 
     assert len(nvidia) == 1, "NVIDIA kredileri hesap seviyesinde ortak"
     assert len(openrouter) == 1, "OpenRouter :free kotası ortak havuz"
-    assert len(google) == 5, "Google limitleri model başına, havuz paylaşılmamalı"
+    assert len(google) == 4, "Google limitleri model başına, havuz paylaşılmamalı"
 
 
 def test_models_json_every_model_declares_a_quota() -> None:

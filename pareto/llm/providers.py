@@ -86,7 +86,7 @@ class ModelSlot:
 # TODO(ekip): aşağıdaki Groq/OpenRouter listeleri yer tutucudur — ekibin kendi
 # testlerinden geçirdiği gerçek model ID'leri + performance_note/*_cost_note ile
 # değiştirilmeli (bkz. ADR 0004, 2026-07-24 notu).
-_JUDGE_GEMINI_OPTIONS: tuple[ModelOption, ...] = (ModelOption(model_id="gemini-3.5-flash"),)
+_JUDGE_GEMINI_OPTIONS: tuple[ModelOption, ...] = (ModelOption(model_id="gemini-3.6-flash"),)
 _JUDGE_GEMINI_PRIVATE_OPTIONS: tuple[ModelOption, ...] = (ModelOption(model_id="gemini-3.1-pro"),)
 _JUDGE_GROQ_OPTIONS: tuple[ModelOption, ...] = (ModelOption(model_id="llama-3.3-70b-versatile"),)
 _JUDGE_OPENROUTER_OPTIONS: tuple[ModelOption, ...] = (
