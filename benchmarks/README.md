@@ -112,8 +112,8 @@ tier tablosunda yok — listeye alınmadı. NVIDIA NIM model ID'leri
 doğrulandı. `--preflight` bunu koşu anında tekrar eder.
 
 **Kontrol grubu şart:** `gemini-3.5-flash` (`JUDGE_SLOT` defaultu) ve
-`llama-3.3-70b-versatile` (`JUDGE_GROQ_SLOT` defaultu) matriste. Diğer her model bunlara
-göre okunur; yoksa "daha iyi" demenin ölçüsü olmaz.
+`thinkingmachines/inkling` (AA-Omniscience/IFBench referansı) matriste. Diğer her model
+bunlara göre okunur; yoksa "daha iyi" demenin ölçüsü olmaz.
 
 **Kasıtlı kopya:** `gemma-4-31b-it` hem Google AI Studio'da hem NVIDIA NIM'de var. Aynı
 ağırlıklar, iki sağlayıcı — skor farkı çıkarsa fark modelden değil sağlayıcıdan gelir.

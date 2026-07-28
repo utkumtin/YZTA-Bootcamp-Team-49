@@ -804,7 +804,7 @@ def test_models_json_has_control_group_per_pinned_default() -> None:
     controls = {m["id"] for m in load_models() if m.get("control")}
 
     assert "gemini-3.5-flash" in controls  # JUDGE_SLOT defaultu
-    assert "llama-3.3-70b-versatile" in controls  # JUDGE_GROQ_SLOT defaultu
+    assert "thinkingmachines/inkling" in controls  # AA-Omniscience/IFBench referansı
 
 
 def test_models_json_shared_pools_are_declared() -> None:

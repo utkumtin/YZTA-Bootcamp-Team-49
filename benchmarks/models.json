@@ -70,8 +70,7 @@
       "rpm": 30,
       "rpd": 1000,
       "priority": "high",
-      "control": true,
-      "evidence": "KONTROL GRUBU: JUDGE_GROQ_SLOT'un bugünkü pinli defaultu."
+      "evidence": "JUDGE_GROQ_SLOT'un bugünkü pinli defaultu."
     },
     {
       "id": "openai/gpt-oss-120b",
@@ -140,7 +139,8 @@
       "rpm": 40,
       "budget": 1000,
       "priority": "high",
-      "evidence": "IFBench 79.8 · MCP Atlas 74.1 · AA-Omniscience 1.0 · Global-MMLU-Lite 88.7. Talimat-uyumu ve halüsinasyon eksenlerinde matrisin en iyisi — 'yalnız vetted registry'den seç' kısıtı tam bunu ister."
+      "control": true,
+      "evidence": "KONTROL GRUBU: IFBench 79.8 · MCP Atlas 74.1 · AA-Omniscience 1.0 · Global-MMLU-Lite 88.7. Talimat-uyumu ve halüsinasyon eksenlerinde matrisin en iyisi — 'yalnız vetted registry'den seç' kısıtı tam bunu ister."
     },
     {
       "id": "minimaxai/minimax-m3",
