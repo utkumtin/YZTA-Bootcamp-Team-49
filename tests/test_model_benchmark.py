@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+from typing import Any
 
 import pytest
 from pydantic_ai.models.test import TestModel
@@ -807,8 +808,8 @@ def test_meter_reports_retries_as_requests_minus_one() -> None:
 # --------------------------------------------------------------------------- #
 # Rapor
 # --------------------------------------------------------------------------- #
-def _row(model: str, **overrides) -> dict:
-    row = {
+def _row(model: str, **overrides: Any) -> dict[str, Any]:
+    row: dict[str, Any] = {
         "model": model,
         "task": "cleaning",
         "case_id": "medicaid",
