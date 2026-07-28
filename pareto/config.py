@@ -148,21 +148,34 @@ def resolve_api_key(provider_env: str) -> tuple[str, str]:
     return "", "none"
 
 
-def get_api_key(provider_env: str) -> str:
-    """API anahtarını döndür.
+_CANNED_DUMMY_KEY = "PARETO_CANNED_MODE_DUMMY_KEY"
 
-    Gerçek anahtar yoksa constructor'ın kurulabilmesi için dummy key döndürülür.
-    Çağrının gerçekten canned mode'da olup olmadığı resolve_api_key() üzerinden
-    takip edilir.
+
+def get_api_key(provider_env: str, *, allow_canned: bool = False) -> str:
+    """API anahtarını döndürür. Varsayılan olarak fail-loud'dur.
+
+    `allow_canned=False` (varsayılan): gerçek anahtar yoksa `OSError` fırlatır.
+    Bu, fonksiyonun asıl sözleşmesidir — çağıran taraf anahtarın gerçek
+    olduğundan emin olabilir.
+
+    `allow_canned=True`: gerçek anahtar yoksa constructor'ın yine de
+    kurulabilmesi için dummy bir key döner (S3-05 canned mode). Bu yalnız
+    çağıranın canned-mode senaryosunu bilinçli olarak ele aldığı ve gerçek bir
+    ağ isteğinin başka bir katmanda (örn. `CachedModel(canned_mode=True)`)
+    engellendiği yerlerde kullanılmalıdır — bkz. `router._model_from_provider`.
+    Anahtarın gerçek mi dummy mi olduğunu ayırt etmek isteyen çağıranlar
+    `resolve_api_key()`'i doğrudan kullanmalı.
     """
     key, _source = resolve_api_key(provider_env)
-
     if key:
         return key
-
-    # S3-05: constructor'ın kurulabilmesi için dummy key.
-    # Gerçek ağ isteği CachedModel tarafından canned_mode'da engellenir.
-    return "PARETO_CANNED_MODE_DUMMY_KEY"
+    if allow_canned:
+        return _CANNED_DUMMY_KEY
+    raise OSError(
+        f"eksik anahtarlar: {provider_env}. Devam etmek için Ayarlar sekmesinden "
+        f"kendi API anahtarınızı (BYOK) girin, `.env` dosyasına ekleyin, ya da "
+        f"`export {provider_env}=...` ile ortam değişkeni olarak tanımlayın."
+    )
 
 
 def resolve_setting(env_name: str, default: str) -> str:

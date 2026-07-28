@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from .config import PrivacyMode, resolve_api_key, resolve_setting
+from .config import ModelRole, PrivacyMode, resolve_api_key, resolve_setting
 from .llm.providers import (
     JUDGE_PRIVATE_SLOT,
     JUDGE_SLOT,
@@ -17,6 +17,7 @@ from .llm.providers import (
     judge_slots_for,
     option_ids,
 )
+from .llm.router import is_canned_mode
 
 _LOGO_PATH = Path(__file__).resolve().parent.parent / "app" / "assets" / "pareto_logo.svg"
 
@@ -296,6 +297,30 @@ def render_main_nav_style() -> None:
     st.html(_MAIN_NAV_HTML)
 
 
+def _render_canned_mode_banner() -> None:
+    """Canned mod bildirimi (O1 + O4).
+
+    Eskiden `app/main.py`de yalnız `GEMINI_API_KEY`'in varlığına bakıyordu; bu, kullanıcı
+    yalnız Groq veya OpenRouter anahtarı girdiğinde uygulama canlı çalıştığı halde ekranda
+    "Canned Mod Aktif" yazması gibi yanlış bir duruma yol açıyordu. `is_canned_mode`
+    (bkz. `llm/router.py`) tek bir sağlayıcıya değil, aktif rolün TÜM zincirine bakar —
+    burada da o tek doğru kaynak kullanılıyor.
+
+    JUDGE rolü kontrol edilir: Ayarlar sekmesindeki "Etkin rota" şeridi de JUDGE zincirini
+    gösteriyor, kullanıcının orada gördüğü rota ile buradaki uyarı aynı kaynağa dayanmalı.
+
+    Sidebar'da (bu fonksiyon `render_compact_sidebar()` içinden çağrılır) yaşadığı için
+    yalnız ana sayfada değil, her sayfada görünür.
+    """
+    if not is_canned_mode(ModelRole.JUDGE):
+        return
+    st.warning(
+        "Canned Mod Aktif: Kendi verinizle analiz yapmak ve modeli canlı kullanmak için "
+        "**Ayarlar** sekmesinden kendi API anahtarınızı (BYOK) girin.",
+        icon=":material/smart_toy:",
+    )
+
+
 def render_compact_sidebar() -> str:
     """Her sayfada: marka (logo, sayfa navigasyonunun üstünde) + gizlilik modu + oturum özeti."""
     st.logo(str(_LOGO_PATH), size="medium")
@@ -311,6 +336,7 @@ def render_compact_sidebar() -> str:
     )
     st.html(_MODE_HIGHLIGHT_HTML, unsafe_allow_javascript=True)
 
+    _render_canned_mode_banner()
     _render_session_pills()
     _render_api_key_status()
 

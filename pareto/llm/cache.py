@@ -8,15 +8,15 @@ anahtardan ayıklanır, yoksa aynı istek her seferinde farklı anahtara düşer
 temp=0 dışındaki isteklerde cache atlanır çünkü yanıt deterministik değildir.
 `PARETO_LLM_CACHE=0` ortam değişkeni cache'i tamamen kapatır.
 
-S3-05 (canned mode): gerçek bir API anahtarı bulunamadığında `router._chain_model`
-zinciri dummy key ile kurar (`config.get_api_key`). Bu, "temiz tarayıcı → canned akış
-panele kadar yürür" (Definition of Success) garantisinin, golden-path cache
-dosyalarının runtime isteğiyle birebir aynı hash'e düşmesine bağlı olduğu anlamına
-gelir. Sistem promptu/model adı/ayar bir karakter bile değişirse hash değişir, cache
-miss olur ve dummy key ile gerçek bir HTTPS isteği atılmaya çalışılırdı — kullanıcı
-network hatası değil çirkin bir 401/auth hatası görürdü. `CachedModel` artık bu
-durumu (`canned_mode=True` + cache miss) açıkça algılayıp anlaşılır bir hata
-fırlatır, ham sağlayıcı hatasına düşmeden önce.
+Canned mode (gerçek bir API anahtarı bulunamadığında `router._chain_model`
+zincirin dummy key ile kurulması) "temiz tarayıcı → canned akış panele kadar
+yürür" garantisinin, golden-path cache dosyalarının runtime isteğiyle birebir
+aynı hash'e düşmesine bağlı olduğu anlamına gelir. Sistem promptu/model
+adı/ayar bir karakter bile değişirse hash değişir, cache miss olur ve dummy key
+ile gerçek bir HTTPS isteği atılmaya çalışılırdı — kullanıcı network hatası
+değil çirkin bir 401/auth hatası görürdü. `CachedModel` bu durumu
+(`canned_mode=True` + cache miss) açıkça algılayıp anlaşılır bir hata fırlatır,
+ham sağlayıcı hatasına düşmeden önce.
 """
 
 from __future__ import annotations
@@ -69,8 +69,19 @@ def wrap_with_cache(model: Model | str, *, canned_mode: bool = False) -> Model |
     `canned_mode=True`, çağıranın (router._chain_model) zincirdeki hiçbir üye için
     gerçek bir anahtar bulamadığını (hepsinin dummy key ile kurulduğunu) bildirir —
     bkz. `CachedModel` docstring'i.
+
+    Cache kapalıyken (`PARETO_LLM_CACHE=0`) canned mode koruması da devre dışı
+    kalır: model sarmalanmadığı için `CannedModeCacheMissError` hiç devreye
+    girmez ve dummy key ile gerçek bir ağ isteği denenebilir. Bu nadir ama tam
+    olarak engellemek istediğimiz senaryo olduğu için en azından bir uyarı
+    logu basılır (O6).
     """
     if not cache_enabled():
+        if canned_mode:
+            logger.warning(
+                "PARETO_LLM_CACHE=0 ve canned_mode=True: cache koruması devre dışı, "
+                "dummy anahtarla gerçek bir ağ isteği denenebilir."
+            )
         return model
     return CachedModel(model, Path(SETTINGS.llm_cache_dir), canned_mode=canned_mode)
 

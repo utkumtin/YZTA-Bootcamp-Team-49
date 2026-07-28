@@ -27,6 +27,7 @@ from pareto.analysis.menu import (
     validate_spec_menu_to_specs,
 )
 from pareto.analysis.runner import launch_multiverse
+from pareto.llm.cache import CannedModeCacheMissError
 from pareto.memory.frozen_menu import build_frozen_menu_record, save_frozen_menu_record
 from pareto.streamlit_ui import render_compact_sidebar
 
@@ -274,6 +275,13 @@ if st.session_state.socratic_submitted and draft_proposal is None and frozen_est
 
                 st.rerun()
 
+        except CannedModeCacheMissError as exc:
+            # O5: bu, `except Exception` dalına da düşerdi (RuntimeError alt sınıfı)
+            # ama jenerik "TAC proposal oluşturulamadı: ..." öneki, cache.py'nin
+            # zaten yönlendirici olan mesajını (BYOK gerektiği, golden-path cache'in
+            # senkron olmadığı) gereksiz yere gömüyordu. Ayrı dal, mesajı olduğu
+            # gibi gösteriyor.
+            st.error(str(exc))
         except Exception as exc:
             st.error(f"TAC proposal oluşturulamadı: {exc}")
 
@@ -314,6 +322,8 @@ if draft_proposal is not None and not frozen_estimand:
 
                 st.rerun()
 
+            except CannedModeCacheMissError as exc:
+                st.error(str(exc))
             except Exception as exc:
                 st.error(f"Tekrar değerlendirme başarısız: {exc}")
     else:
@@ -530,6 +540,9 @@ else:
                     None,
                 )
 
+        except CannedModeCacheMissError as exc:
+            st.error(str(exc))
+            st.stop()
         except Exception as exc:
             st.error(f"Menü oluşturulamadı: {exc}")
 

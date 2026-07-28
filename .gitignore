@@ -6,7 +6,6 @@
 .streamlit/secrets.toml
 
 # Çalışma çıktıları (lokal artifacts)
-runs/
 *.pkl
 
 # Python
@@ -28,7 +27,9 @@ venv/
 data/**/raw/*.tsv
 data/**/raw/*.dta
 
+# `runs/` tek seviyeli joker ile dışlanır (B1: üst dizini tamamen dışlarsak Git
+# negasyonların altına hiç inmez, `!runs/llm_cache/...` işe yaramaz kalırdı).
 runs/*
 # Ancak S3-05 Canned Mode gereği Golden-path LLM cache yanıtları repoda paketlenmelidir!
 !runs/llm_cache/
-!runs/llm_cache/*.json
+!runs/llm_cache/**

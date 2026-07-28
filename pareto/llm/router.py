@@ -1,11 +1,11 @@
 """Model Router — PydanticAI tabanlı, tipli I/O, test edilebilir.
 
-review sorun #3'ün çözümü. Mekanik iş ucuz modele, yargı pinli güçlü modele
-(providers.py zincirleri). Tipli çıktı: `output_type` bir Pydantic modeli olduğunda
-PydanticAI şema-zorlaması + retry yapar → prototipteki regex-JSON ayıklama gitti.
+Mekanik iş ucuz modele, yargı pinli güçlü modele (providers.py zincirleri).
+Tipli çıktı: `output_type` bir Pydantic modeli olduğunda PydanticAI
+şema-zorlaması + retry yapar → prototipteki regex-JSON ayıklama gitti.
 
-Test: `use_test_model(...)` ile PydanticAI `TestModel`/`FunctionModel` enjekte edilir —
-API yakmadan (test stratejisinin tamamı buna dayanıyor). Reprodüksiyon
+Test: `use_test_model(...)` ile PydanticAI `TestModel`/`FunctionModel` enjekte
+edilir — API yakmadan (test stratejisinin tamamı buna dayanıyor). Reprodüksiyon
 dondurmadan gelir (menu.freeze), model stabilitesinden değil.
 """
 
@@ -36,26 +36,30 @@ def use_test_model(model: Any):
 
 
 def _model_from_provider(pm: ProviderModel) -> Any:
-    """Zincir girdisinden PydanticAI model nesnesi kurar (BYOK api_key ile)."""
+    """Zincir girdisinden PydanticAI model nesnesi kurar (BYOK api_key ile).
+
+    `allow_canned=True` ile çağrılır: gerçek anahtar yoksa constructor dummy
+    key ile kurulur. Bu güvenlidir çünkü hangi üyelerin zincire gireceğine
+    (gerçek anahtarı olanlar, ya da hiç yoksa hepsi) `_chain_model` karar
+    verir; burada yalnız kurulum yapılır. Dummy key ile kurulmuş bir modele
+    gerçek bir ağ isteği gitmesi, `canned_mode` bayrağı `CachedModel`'e
+    taşındığı için ayrıca engellenir (bkz. cache.py).
+    """
     if pm.provider == "google":
         from pydantic_ai.models.google import GoogleModel
         from pydantic_ai.providers.google import GoogleProvider
 
         return GoogleModel(
             pm.model_id,
-            provider=GoogleProvider(api_key=get_api_key(pm.api_key_env)),
+            provider=GoogleProvider(api_key=get_api_key(pm.api_key_env, allow_canned=True)),
         )
     if pm.provider == "openrouter":
         from pydantic_ai.models.openrouter import OpenRouterModel
         from pydantic_ai.providers.openrouter import OpenRouterProvider
 
-        # get_api_key() gerçek bir anahtar yoksa dummy key döner (S3-05, canned
-        # mode) — OpenRouterProvider'a her zaman geçerli bir string gider.
-        # get_api_key() artık hiç OSError fırlatmaz (bkz. config.get_api_key),
-        # dolayısıyla burada yakalanacak bir "eksik anahtar" hatası riski yok.
         return OpenRouterModel(
             pm.model_id,
-            provider=OpenRouterProvider(api_key=get_api_key(pm.api_key_env)),
+            provider=OpenRouterProvider(api_key=get_api_key(pm.api_key_env, allow_canned=True)),
         )
     if pm.provider == "groq":
         from pydantic_ai.models.groq import GroqModel
@@ -63,7 +67,7 @@ def _model_from_provider(pm: ProviderModel) -> Any:
 
         return GroqModel(
             pm.model_id,
-            provider=GroqProvider(api_key=get_api_key(pm.api_key_env)),
+            provider=GroqProvider(api_key=get_api_key(pm.api_key_env, allow_canned=True)),
         )
     raise RuntimeError(f"Bilinmeyen sağlayıcı: {pm.provider!r}")
 
@@ -78,30 +82,43 @@ def _get_effective_privacy_mode() -> PrivacyMode:
     return PrivacyMode.PRIVATE if str(raw) == PrivacyMode.PRIVATE.value else PrivacyMode.PUBLIC
 
 
+def is_canned_mode(role: ModelRole = ModelRole.MECHANICAL) -> bool:
+    """Verilen rol için zincirin canned modda olup olmadığını hesaplar.
+
+    `_chain_model` ile aynı mantığı (zincirdeki hiçbir üyenin gerçek anahtarı
+    yoksa canned) paylaşır, ama modelleri gerçekten kurmadan yalnız anahtar
+    çözümü yapar — UI banner'ının tek doğru kaynağı burasıdır (O1: banner artık
+    tek bir sağlayıcıya değil, aktif rolün tüm zincirine bakar).
+    """
+    chain = chain_for(role, _get_effective_privacy_mode())
+    return not any(resolve_api_key(pm.api_key_env)[1] != "none" for pm in chain)
+
+
 def _chain_model(chain: tuple[ProviderModel, ...]) -> tuple[Any, bool]:
     """Zinciri tek modele indirger: tek üye → kendisi, çok üye → FallbackModel.
 
-    S3-05 sonrası `config.get_api_key` artık hiç OSError fırlatmıyor (gerçek anahtar
-    yoksa dummy key ile canned moda düşüyor) — dolayısıyla burada eskiden var olan
-    "anahtarı eksik üye uyarıyla atlanır" davranışı artık hiç tetiklenmiyordu (ölü
-    kod), kaldırıldı. Her üye — gerçek ya da dummy bir anahtarla — zincire girer.
+    Gerçek anahtarı olmayan üyeler zincire hiç girmez (kısmi BYOK'ta, örn.
+    yalnız OPENROUTER_API_KEY girilmişse, anahtarsız Gemini/Groq üyelerine
+    dummy key ile gerçek bir ağ isteği atılmasını engeller — hem gizlilik hem
+    performans). Zincirdeki HİÇBİR üyenin gerçek anahtarı yoksa (tam canned
+    senaryo), tüm üyeler yine de dummy key ile kurulur ki failover mekaniği ve
+    golden-path cache replay'i çalışabilsin.
 
-    İkinci dönüş değeri (`canned_mode`), zincirdeki HİÇBİR üyenin gerçek bir anahtar
-    bulamadığını (byok/env/secrets'ın hiçbirinde eşleşme olmadığını, hepsinin dummy
-    key ile kurulduğunu) işaret eder. Bunu `_resolve_model` cache katmanına taşır:
-    `CachedModel` cache-miss'te bu bayrak açıkken sahte bir ağ isteği atıp çirkin bir
-    401/auth hatasına düşmek yerine açık bir hata fırlatır (bkz. cache.py, S3-05
-    review Sorun B).
+    İkinci dönüş değeri (`canned_mode`) zincirdeki hiçbir üyenin gerçek anahtar
+    bulamadığını işaret eder ve `_resolve_model` tarafından cache katmanına
+    taşınır: `CachedModel` cache-miss'te bu bayrak açıkken sahte bir ağ isteği
+    atıp çirkin bir 401/auth hatasına düşmek yerine açık bir hata fırlatır
+    (bkz. cache.py: `CannedModeCacheMissError`).
     """
-    models: list[Any] = []
-    any_real_key = False
-    for pm in chain:
-        _key, source = resolve_api_key(pm.api_key_env)
-        if source != "none":
-            any_real_key = True
-        models.append(_model_from_provider(pm))
+    models: list[Any] = [
+        _model_from_provider(pm) for pm in chain if resolve_api_key(pm.api_key_env)[1] != "none"
+    ]
 
-    canned_mode = not any_real_key
+    canned_mode = not models
+    if canned_mode:
+        # Hiçbir üyenin gerçek anahtarı yok: zincir yine de dummy key'lerle kurulur.
+        models = [_model_from_provider(pm) for pm in chain]
+
     if len(models) == 1:
         return models[0], canned_mode
 
@@ -137,13 +154,20 @@ def _resolve_model(role: ModelRole) -> tuple[Any, dict[str, Any]]:
         if pm.thinking != "off":
             extra_model_settings["thinking"] = pm.thinking
 
-    if effective_privacy_mode is PrivacyMode.PRIVATE and any(
-        pm.api_key_env == "GEMINI_PAID_API_KEY" for pm in chain
-    ):
-        _paid_key, paid_source = resolve_api_key("GEMINI_PAID_API_KEY")
-        _free_key, free_source = resolve_api_key("GEMINI_API_KEY")
-        if paid_source == "none" and free_source != "none":
-            raise OSError("eksik anahtarlar: GEMINI_PAID_API_KEY")
+    if effective_privacy_mode is PrivacyMode.PRIVATE:
+        # Private modda no-train garantisi zincirdeki HERHANGİ bir slot için
+        # geçerli olmalı (Gemini paid, Groq private, OpenRouter private, ...),
+        # tek bir slota hardcoded değil. Hiçbir üye gerçek anahtar bulamazsa
+        # kullanıcı "private" kilidine bakarken donmuş bir kaydı izliyor
+        # olurdu — bu yüzden burada açıkça ve yönlendirici bir hata fırlatılır.
+        if not any(resolve_api_key(pm.api_key_env)[1] != "none" for pm in chain):
+            env_names = ", ".join(sorted({pm.api_key_env for pm in chain}))
+            raise OSError(
+                f"eksik anahtarlar: {env_names}. Private mod için zincirdeki en az bir "
+                "sağlayıcıya gerçek bir API anahtarı gerekir. Ayarlar sekmesinden BYOK "
+                f"anahtarınızı girin, `.env` dosyasına ekleyin, ya da `export {env_names}=...` "
+                "ile ortam değişkeni olarak tanımlayın."
+            )
 
     model, canned_mode = _chain_model(chain)
     return wrap_with_cache(model, canned_mode=canned_mode), extra_model_settings

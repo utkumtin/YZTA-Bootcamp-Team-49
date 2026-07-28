@@ -35,6 +35,13 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra dev --locked
 
+      # Y4: requirements.txt Community Cloud deploy'unun kurulum kaynağıdır (uv.lock
+      # okumaz) — uv.lock ile senkron kalmazsa deploy'da paket eksikliği/sürüm
+      # uyuşmazlığı sessizce üretime sızar. `make check-requirements` çalışma ağacını
+      # kirletmeden (export /tmp'e yazılıp diff'lenir) drift'i fail-loud yapar.
+      - name: Check requirements.txt drift (make check-requirements)
+        run: make check-requirements
+
       - name: Check formatting (ruff format)
         run: uv run ruff format --check .
 

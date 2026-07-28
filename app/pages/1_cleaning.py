@@ -22,6 +22,7 @@ from pareto.cleaning.codegen import (
 )
 from pareto.cleaning.ledger import LedgerEntry, persist_ledger
 from pareto.cleaning.uploads import uploaded_file_identity
+from pareto.llm.cache import CannedModeCacheMissError
 from pareto.profiling import load_raw_file, profile_dataframe
 from pareto.streamlit_ui import render_clean_panel, render_compact_sidebar
 
@@ -140,6 +141,15 @@ if st.session_state.get("clean_df") is not None:
         raw_profile = profile_dataframe(raw_df)
         try:
             entries = generate_ledger(raw_profile)
+        except CannedModeCacheMissError as exc:
+            # O5: canned mod + cache miss ayrı bir vaka — router/cache.py zaten
+            # kullanıcıya dönük, yönlendirici bir mesaj üretiyor (BYOK gerektiği,
+            # golden-path cache'in senkron olmadığı gibi). Burada `(ValueError,
+            # OSError)` dalına düşürüp "JUDGE karar üretemedi: ..." ile
+            # sarmalamak yerine mesajı olduğu gibi gösteriyoruz; aksi halde bu
+            # istisna hiçbir except'e uymadığı için ham traceback olarak
+            # ekrana düşerdi (RuntimeError alt sınıfı, ValueError/OSError değil).
+            st.error(str(exc))
         except (ValueError, OSError) as exc:
             st.error(
                 f"JUDGE karar üretemedi: {exc} (API anahtarı eksikse ana sayfada BYOK kaydedin.)"

@@ -4,6 +4,12 @@ Mekanik testler API yakmadan cache ve failover davranışını doğrular.
 `live` işaretli testler yalnız ilgili BYOK anahtarı ortamda tanımlıysa koşar;
 CI'da anahtar olmadığından otomatik atlanır. Anahtar varken sağlayıcı kotası
 tükenirse (HTTP 429) test kırmızıya düşmez, atlanır.
+
+Not (O7): gizlilik zorlaması testi (`test_ozel_modda_ucretsiz_gemini_anahtariyla_istek_kurulmaz`)
+kasıtlı olarak burada YOK — `tests/test_privacy_routing.py` dosyasının kendi
+docstring'i router konularının (önbellek, failover, model seçimi) bu dosyada
+kaldığını söylüyor; gizlilik zorlaması testi tekrarlanmadan yalnız kendi
+dosyasında tutulur.
 """
 
 from __future__ import annotations
@@ -30,6 +36,7 @@ from pareto.llm.providers import (
     _PRIVATE_MECHANICAL_SLOTS,
     JUDGE_GROQ_PRIVATE_SLOT,
     JUDGE_GROQ_SLOT,
+    JUDGE_OPENROUTER_PRIVATE_SLOT,
     JUDGE_OPENROUTER_SLOT,
     JUDGE_SLOT,
     _resolve,
@@ -142,7 +149,7 @@ def test_cache_env_bayragiyla_kapanir(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Canned mode + cache miss — S3-05 review Sorun B
+# Canned mode + cache miss
 # ---------------------------------------------------------------------------
 
 
@@ -350,6 +357,25 @@ def test_provider_secimi_kimlik_alanlarini_asamaz():
         assert uc.no_train == slot.no_train
 
 
+def test_judge_private_her_saglayicida_no_train_true(monkeypatch):
+    for provider in ("google", "groq", "openrouter"):
+        monkeypatch.setattr("streamlit.session_state", {"judge_provider_choice": provider})
+
+        chain = chain_for(ModelRole.JUDGE, PrivacyMode.PRIVATE)
+
+        assert chain[0].no_train is True, f"{provider}: private judge no_train=False olamaz"
+
+
+def test_openrouter_private_judge_zdr_deklare_edilir():
+    """ZDR deklarasyonu slotta tanımlı olmalı ve `_resolve` sonrasında da hayatta kalmalı."""
+    zdr = {"openrouter_provider": {"zdr": True}}
+    assert JUDGE_OPENROUTER_PRIVATE_SLOT.extra_model_settings == zdr
+
+    uc = _resolve(JUDGE_OPENROUTER_PRIVATE_SLOT, allow_session=False)
+
+    assert uc.extra_model_settings == zdr
+
+
 def test_model_from_provider_openrouter_dogru_sinifi_kurar(monkeypatch):
     """`_model_from_provider` artık OpenRouter için genel string yerine tipli OpenRouterModel kurar
     (network çağrısı yok, yalnız construction — ZDR'ın taşınabilmesi buna dayanıyor)."""
@@ -361,6 +387,18 @@ def test_model_from_provider_openrouter_dogru_sinifi_kurar(monkeypatch):
     model = _model_from_provider(pm)
 
     assert isinstance(model, OpenRouterModel)
+
+
+def test_resolve_model_extra_settings_openrouter_private_icin_dolu(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-anahtar")
+    monkeypatch.setattr(
+        "streamlit.session_state",
+        {"privacy_mode": "private", "judge_provider_choice": "openrouter"},
+    )
+
+    _model, extra = _resolve_model(ModelRole.JUDGE)
+
+    assert extra == {"openrouter_provider": {"zdr": True}}
 
 
 def test_resolve_model_extra_settings_diger_slotlarda_bos(monkeypatch):
@@ -442,6 +480,16 @@ def test_mekanik_slotlarda_thinking_secimi_kapali():
         assert slot.thinking_options == (), f"{slot.key} MECHANICAL ama thinking UI'da açık"
 
 
+def test_env_override_private_no_train_garantisini_bozmaz(monkeypatch):
+    for slot in _PRIVATE_JUDGE_SLOTS + _PRIVATE_MECHANICAL_SLOTS:
+        monkeypatch.setenv(slot.model_env, "baska-bir-model")
+
+    for role in (ModelRole.JUDGE, ModelRole.MECHANICAL):
+        chain = chain_for(role, PrivacyMode.PRIVATE)
+        assert chain, "private zincir boş olamaz"
+        assert all(uc.no_train for uc in chain)
+
+
 def test_mekanik_zincir_fallback_modele_indirgenir(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "test-anahtar")
     monkeypatch.setenv("GROQ_API_KEY", "test-anahtar")
@@ -453,11 +501,11 @@ def test_mekanik_zincir_fallback_modele_indirgenir(monkeypatch):
     assert canned_mode is False, "en az bir üye gerçek anahtar buldu, canned mode olmamalı"
 
 
-def test_zincirde_anahtari_eksik_uyeler_canned_key_ile_kurulur(monkeypatch):
-    """S3-05: Eksik anahtarlar OSError fırlatmak yerine dummy key alarak cache'e hit
-    edecekleri beklentisiyle başlatılır. Bu üye grubunda GEMINI_API_KEY gerçek olduğu
-    için `canned_mode` False kalmalı — yalnız o üyenin görmediği bir gerçek anahtar
-    yokluğu, zincirin tamamını canned moda düşürmez."""
+def test_kismi_byokta_anahtarsiz_uyeler_zincire_girmez(monkeypatch):
+    """Y1 fix: kısmi BYOK'ta gerçek anahtarı olmayan üyeler zincire hiç girmez —
+    dummy key ile gerçek bir ağa istek atılmasını (gizlilik + performans sorunu)
+    önler. Yalnız GEMINI_API_KEY gerçek olduğu için zincir tek üyeye iner ve
+    FallbackModel'e sarılmaya gerek kalmaz."""
     monkeypatch.setenv("GEMINI_API_KEY", "test-anahtar")
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
@@ -465,13 +513,14 @@ def test_zincirde_anahtari_eksik_uyeler_canned_key_ile_kurulur(monkeypatch):
 
     model, canned_mode = _chain_model(chain_for(ModelRole.MECHANICAL, PrivacyMode.PUBLIC))
 
-    # Tüm modeller dummy key ile de olsa başlatıldığı için zincir korunur (FallbackModel)
-    from pydantic_ai.models.fallback import FallbackModel
+    from pydantic_ai.models.google import GoogleModel
 
-    assert isinstance(model, FallbackModel), (
-        "eksik üyeler atlanmaz, dummy key ile zincire dahil edilir"
+    assert isinstance(model, GoogleModel), (
+        "yalnız gerçek anahtarlı üye zincire girmeli; tek üye kaldığı için "
+        "FallbackModel'e sarılmamalı"
     )
-    assert canned_mode is False, "GEMINI_API_KEY gerçek: zincir tamamen canned değil"
+    assert not isinstance(model, FallbackModel)
+    assert canned_mode is False, "GEMINI_API_KEY gerçek: canned mode olmamalı"
 
 
 def test_zincirde_hic_anahtar_yoksa_canned_moda_duser(monkeypatch):
@@ -486,8 +535,11 @@ def test_zincirde_hic_anahtar_yoksa_canned_moda_duser(monkeypatch):
     assert canned_mode is True, "Hiçbir üye gerçek anahtar bulamadı, canned mode açık olmalı"
 
 
-def test_ozel_modda_ucretsiz_gemini_anahtariyla_istek_kurulmaz(monkeypatch):
-    """Private modda yalnız free-tier anahtar varken sessiz fallback olmamalı."""
+def test_ozel_modda_hicbir_slot_gercek_anahtar_bulamazsa_hata_verir(monkeypatch):
+    """Y2 fix: private mod koruması artık tek bir slota (GEMINI_PAID_API_KEY) hardcoded
+    değil — zincirdeki HERHANGİ bir slotun gerçek anahtarı olup olmadığına bakar. JUDGE
+    private zinciri burada GEMINI_PAID_API_KEY'e dayandığı için yalnız GEMINI_API_KEY
+    (free-tier) set edilmesi hâlâ hataya yol açmalı."""
     monkeypatch.setenv("GEMINI_API_KEY", "ucretsiz-anahtar")
     monkeypatch.delenv("GEMINI_PAID_API_KEY", raising=False)
     monkeypatch.setattr("streamlit.session_state", {"privacy_mode": "private"})

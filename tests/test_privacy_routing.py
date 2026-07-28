@@ -98,10 +98,15 @@ def test_ozel_modda_yalniz_no_train_anahtarlari_okunur(anahtarsiz_ortam):
     """
     istenen: list[str] = []
 
-    def _sahte_anahtar(env: str) -> str:
+    def _sahte_anahtar(env: str, *, allow_canned: bool = False) -> str:
         istenen.append(env)
         return "test-anahtar"
 
+    # Private modda `_resolve_model` artık önce `resolve_api_key` ile en az bir
+    # gerçek anahtar var mı kontrol ediyor. Bu testin konusu ağa çıkmak değil,
+    # hangi slot anahtarının isteneceğini ölçmek olduğundan guard'ı burada
+    # sahte bir "anahtar var" yanıtıyla geçiyoruz.
+    anahtarsiz_ortam.setattr(router_module, "resolve_api_key", lambda _env: ("ok", "env"))
     anahtarsiz_ortam.setattr(router_module, "get_api_key", _sahte_anahtar)
     izinli = {s.api_key_env for s in _PRIVATE_JUDGE_SLOTS + _PRIVATE_MECHANICAL_SLOTS}
 
