@@ -25,12 +25,14 @@ BYOK_WIDGET_KEYS: dict[str, str] = {
     "GEMINI_API_KEY": "byok_gemini_input",
     "GROQ_API_KEY": "byok_groq_input",
     "OPENROUTER_API_KEY": "byok_openrouter_input",
+    "NVIDIA_API_KEY": "byok_nvidia_input",
 }
 
 _PROVIDER_LABELS: dict[str, str] = {
     "GEMINI_API_KEY": "Gemini",
     "GROQ_API_KEY": "Groq",
     "OPENROUTER_API_KEY": "OpenRouter",
+    "NVIDIA_API_KEY": "NVIDIA",
 }
 
 # pydantic-ai provider prefix -> kullanıcının tanıdığı ad. Ayarlar sekmesi eskiden ham
@@ -41,6 +43,7 @@ _PROVIDER_DISPLAY: dict[str, str] = {
     "google": "Gemini",
     "groq": "Groq",
     "openrouter": "OpenRouter",
+    "nvidia": "NVIDIA",
 }
 
 _THINKING_LABELS: dict[str, str] = {

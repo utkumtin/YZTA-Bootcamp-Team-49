@@ -9,10 +9,11 @@ yeni model çıktığında kod değişmez. Çözüm sırası: UI seçimi → env
 Slotun `provider` / `api_key_env` / `no_train` alanları KODDA pinli kalır — bunlar
 gizlilik ve kimlik-doğrulama garantileri, serbest ayar değil.
 
-JUDGE için sağlayıcı (Gemini/Groq/OpenRouter) VE model seçimi artık hem PUBLIC hem
-PRIVATE modda UI'dan yapılabilir — kullanıcı yalnız küratörlü slot kümesi içinden
+JUDGE için sağlayıcı (Gemini/Groq/OpenRouter/NVIDIA) VE model seçimi artık hem PUBLIC
+hem PRIVATE modda UI'dan yapılabilir — kullanıcı yalnız küratörlü slot kümesi içinden
 seçer, kimlik alanları asla serbest değildir. MECHANICAL bu seçimin dışında, davranışı
-değişmedi (failover zinciri, UI'da hiç gösterilmez).
+değişmedi (failover zinciri, UI'da hiç gösterilmez). NVIDIA yalnız PUBLIC katmanda var:
+ücretsiz NIM ucu no-train garantisi taşımıyor.
 
 Privacy modu: PRIVATE modda yalnız `no_train=True` uçlar seçilir —
 free-train uçlar (Gemini free) YASAK. Anahtarlar env/BYOK; burada asla saklanmaz.
@@ -151,6 +152,21 @@ JUDGE_OPENROUTER_SLOT = ModelSlot(
     options=_JUDGE_OPENROUTER_OPTIONS,
     thinking_options=_JUDGE_THINKING_OPTIONS,
 )
+JUDGE_NVIDIA_SLOT = ModelSlot(
+    key="judge_nvidia",
+    provider="nvidia",
+    api_key_env="NVIDIA_API_KEY",
+    # NIM'in ücretsiz ucu ZDR/no-train garantisi vermiyor → bu slot PUBLIC'e özgüdür,
+    # _PRIVATE_JUDGE_SLOTS'a ASLA eklenmemeli (tests/test_privacy_routing.py bekçisi).
+    no_train=False,
+    model_env="NVIDIA_JUDGE_MODEL",
+    default_model="nvidia/nemotron-3-super-120b-a12b",
+    # options bilerek boş: küratörlü liste JUDGE benchmark'ı sonuçlanınca doldurulacak
+    # (bkz. benchmarks/README.md). Boşken slot yalnız `.env`'den ayarlanır — ModelSlot
+    # docstring'indeki sözleşme. UI'da sağlayıcı görünür, model kutusu `.env` pinini gösterir.
+    options=(),
+    thinking_options=_JUDGE_THINKING_OPTIONS,
+)
 JUDGE_OPENROUTER_PRIVATE_SLOT = ModelSlot(
     key="judge_openrouter_private",
     provider="openrouter",
@@ -195,7 +211,12 @@ MECH_OPENROUTER_SLOT = ModelSlot(
 # Mekanik: failover zinciri (ucuz → hızlı → geniş), UI'da hiç gösterilmez.
 # PRIVATE mod: no-train/ZDR uçlar (paid Gemini no-train+DPA · Groq no-retention ·
 # OpenRouter istek-bazlı ZDR zorlaması).
-_JUDGE_SLOTS: tuple[ModelSlot, ...] = (JUDGE_SLOT, JUDGE_GROQ_SLOT, JUDGE_OPENROUTER_SLOT)
+_JUDGE_SLOTS: tuple[ModelSlot, ...] = (
+    JUDGE_SLOT,
+    JUDGE_GROQ_SLOT,
+    JUDGE_OPENROUTER_SLOT,
+    JUDGE_NVIDIA_SLOT,
+)
 _MECHANICAL_SLOTS: tuple[ModelSlot, ...] = (
     MECH_GEMINI_SLOT,
     MECH_GROQ_SLOT,
@@ -277,21 +298,37 @@ def _session_thinking_choice(slot: ModelSlot) -> ThinkingChoice | None:
 
 
 def _session_provider_choice(*, privacy: PrivacyMode) -> str:
-    """UI'dan seçilen JUDGE sağlayıcısı; yoksa/listede yoksa boş string.
+    """Seçilen JUDGE sağlayıcısı: UI → `PARETO_JUDGE_PROVIDER` → boş string.
 
     `_session_choice` ile aynı desen: private<->public geçişinde eski oturum
     değeri o katmanda geçerli değilse sessizce yok sayılır (uygulama çökmez).
+
+    Env halkası model ID'siyle simetri için var. `.env.example` çözüm sırasını
+    zaten "uygulama içi seçim → bu dosya → st.secrets → koddaki default" diye
+    belgeliyor ve `_resolve` model ID'sini böyle çözüyordu; sağlayıcı bu sıranın
+    dışında kalmıştı. Streamlit olmayan bağlamlarda (scriptler, ör.
+    `scripts/run_model_benchmark.py`) sağlayıcı başka türlü hedeflenemiyordu —
+    zincir her zaman koddaki default'a düşüyordu.
+
+    Doğrulama env yolunda da aynı: `judge_slots_for(privacy)` üyeliği aranır,
+    yani PRIVATE modda yalnız o katmanın slotları seçilebilir ve
+    `provider`/`api_key_env`/`no_train` her hâlükârda kodda pinli kalır.
     """
+    choice = ""
     try:
         import streamlit as st
 
         choice = str(st.session_state.get("judge_provider_choice", "")).strip()
     except Exception:
-        return ""
+        choice = ""
+    source = "Oturumdaki"
+    if not choice:
+        choice = resolve_setting("PARETO_JUDGE_PROVIDER", "").strip()
+        source = "PARETO_JUDGE_PROVIDER'daki"
     if not choice:
         return ""
     if choice not in judge_slots_for(privacy):
-        logger.warning("Oturumdaki judge sağlayıcı seçimi listede yok, yok sayıldı: %s", choice)
+        logger.warning("%s judge sağlayıcı seçimi listede yok, yok sayıldı: %s", source, choice)
         return ""
     return choice
 

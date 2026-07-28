@@ -1,0 +1,228 @@
+{
+  "_doc": [
+    "JUDGE benchmark aday matrisi. Bu dosya VERİ'dir: model eklemek/çıkarmak kod",
+    "değişikliği gerektirmez. Koşucu (scripts/run_model_benchmark.py) burayı okur.",
+    "",
+    "Alanlar:",
+    "  id            : sağlayıcının beklediği model ID'si (aynen gönderilir)",
+    "  provider      : pareto/llm/providers.py'deki slot sağlayıcı adı",
+    "  rpm / rpd     : free tier kotası; koşucu throttle için kullanır. null = bilinmiyor.",
+    "  budget        : rpd yerine tek seferlik toplam kredi (NVIDIA NIM böyle çalışır)",
+    "  pool          : kotayı PAYLAŞAN uçların ortak anahtarı. Yoksa model tek başına",
+    "                  havuzdur. OpenRouter'da tüm :free modeller aynı 50/gün havuzunu,",
+    "                  NVIDIA NIM'de tüm modeller aynı 1.000 krediyi paylaşır — bunları",
+    "                  model başına saymak kotayı kat kat büyük gösterir ve koşu 429'a çarpar.",
+    "  priority      : high | normal | low — koşu kuyruğu sırası",
+    "  control       : true ise bu model şu an üretimde pinli olan default (kontrol grubu)",
+    "  evidence      : listeye alınma gerekçesi; yayınlanmış skorlar",
+    "",
+    "Kotalar 2026-07-27'de doğrulandı ve DEĞİŞİR. Yanlış kota = gereksiz 429.",
+    "Gerçeği canlı uç söyler: `--preflight` her ID'yi tek tek dener.",
+    "Kaynaklar: benchmarks/README.md"
+  ],
+
+  "models": [
+    {
+      "id": "gemma-4-31b-it",
+      "provider": "google",
+      "rpm": 30,
+      "rpd": 14400,
+      "priority": "high",
+      "evidence": "MMLU-Pro 85.2 · GPQA-D 84.3 · Tau2 76.9 · MMMLU 88.4. Free sette en yüksek yargı skorları ve Gemini Flash'ın 720 katı günlük kota — aynı GEMINI_API_KEY."
+    },
+    {
+      "id": "gemma-4-26b-a4b-it",
+      "provider": "google",
+      "rpm": 30,
+      "rpd": 14400,
+      "priority": "high",
+      "evidence": "MMLU-Pro 82.6 · GPQA-D 82.3 · Tau2 68.2 · MMMLU 86.3. 4B aktif parametre → 31B'ye yakın skor, çok daha hızlı."
+    },
+    {
+      "id": "gemini-3.6-flash",
+      "provider": "google",
+      "rpm": 5,
+      "rpd": 20,
+      "priority": "normal",
+      "evidence": "Google'ın en yeni Flash'ı (2026-07-21). Günde 20 istek — matriste en dar kota."
+    },
+    {
+      "id": "gemini-3.5-flash",
+      "provider": "google",
+      "rpm": 5,
+      "rpd": 20,
+      "priority": "high",
+      "control": true,
+      "evidence": "KONTROL GRUBU: JUDGE_SLOT'un bugünkü pinli defaultu. Diğer her model buna göre okunur."
+    },
+    {
+      "id": "gemini-3.5-flash-lite",
+      "provider": "google",
+      "rpm": 15,
+      "rpd": 500,
+      "priority": "normal",
+      "evidence": "Ucuz uç adayı; Flash ile aynı aileden, 25 kat daha geniş kota."
+    },
+
+    {
+      "id": "llama-3.3-70b-versatile",
+      "provider": "groq",
+      "rpm": 30,
+      "rpd": 1000,
+      "priority": "high",
+      "control": true,
+      "evidence": "KONTROL GRUBU: JUDGE_GROQ_SLOT'un bugünkü pinli defaultu."
+    },
+    {
+      "id": "openai/gpt-oss-120b",
+      "provider": "groq",
+      "rpm": 30,
+      "rpd": 1000,
+      "priority": "high",
+      "evidence": "Arena-Hard-V2 90.3 · native structured outputs. Groq LPU'da çok hızlı. Uzun bağlamda zayıf (RULER@1M 22.3) — bizim payload'lar kısa, sorun değil."
+    },
+    {
+      "id": "openai/gpt-oss-20b",
+      "provider": "groq",
+      "rpm": 30,
+      "rpd": 1000,
+      "priority": "normal",
+      "evidence": "native structured outputs · 120b'nin küçük kardeşi; ucuz uç için gecikme/kalite dengesi."
+    },
+    {
+      "id": "qwen/qwen3.6-27b",
+      "provider": "groq",
+      "rpm": 30,
+      "rpd": 1000,
+      "priority": "normal",
+      "evidence": "Güncel Qwen kuşağı; Groq free tier tablosunda listeli."
+    },
+    {
+      "id": "llama-3.1-8b-instant",
+      "provider": "groq",
+      "rpm": 30,
+      "rpd": 14400,
+      "priority": "low",
+      "evidence": "TABAN: bu boyutun yargı görevinde nerede kaldığını gösterir. Gecikme referansı."
+    },
+
+    {
+      "id": "deepseek-ai/deepseek-v4-pro",
+      "provider": "nvidia",
+      "pool": "nvidia:hesap",
+      "rpm": 40,
+      "budget": 1000,
+      "priority": "high",
+      "evidence": "MMLU-Pro 91.0 · GPQA-D 94.3 · HLE 44.4. Matristeki en güçlü açık model."
+    },
+    {
+      "id": "z-ai/glm-5.2",
+      "provider": "nvidia",
+      "pool": "nvidia:hesap",
+      "rpm": 40,
+      "budget": 1000,
+      "priority": "high",
+      "evidence": "GPQA-D 91.2 · AIME26 99.2 · SWE-bench Pro 62.1."
+    },
+    {
+      "id": "deepseek-ai/deepseek-v4-flash",
+      "provider": "nvidia",
+      "pool": "nvidia:hesap",
+      "rpm": 40,
+      "budget": 1000,
+      "priority": "normal",
+      "evidence": "MMLU-Pro 87.5 · GPQA-D 90.1. V4-Pro'nun hızlı kardeşi; kalite/gecikme dengesi."
+    },
+    {
+      "id": "thinkingmachines/inkling",
+      "provider": "nvidia",
+      "pool": "nvidia:hesap",
+      "rpm": 40,
+      "budget": 1000,
+      "priority": "high",
+      "evidence": "IFBench 79.8 · MCP Atlas 74.1 · AA-Omniscience 1.0 · Global-MMLU-Lite 88.7. Talimat-uyumu ve halüsinasyon eksenlerinde matrisin en iyisi — 'yalnız vetted registry'den seç' kısıtı tam bunu ister."
+    },
+    {
+      "id": "minimaxai/minimax-m3",
+      "provider": "nvidia",
+      "pool": "nvidia:hesap",
+      "rpm": 40,
+      "budget": 1000,
+      "priority": "normal",
+      "evidence": "1M bağlam · 428B toplam / 23B aktif · sparse attention (9x prefill hızlanması)."
+    },
+    {
+      "id": "moonshotai/kimi-k2.6",
+      "provider": "nvidia",
+      "pool": "nvidia:hesap",
+      "rpm": 40,
+      "budget": 1000,
+      "priority": "normal",
+      "evidence": "Kimi K2 Groq'ta deprecate edildi; güncel sürümü NIM'de. Agentic/tool-use profili güçlü."
+    },
+    {
+      "id": "nvidia/nemotron-3-super-120b-a12b",
+      "provider": "nvidia",
+      "pool": "nvidia:hesap",
+      "rpm": 40,
+      "budget": 1000,
+      "priority": "high",
+      "evidence": "MMLU-Pro 83.7 · GPQA 79.2 · IFBench 72.6 · RULER@1M 91.8 · native structured outputs."
+    },
+    {
+      "id": "nvidia/nemotron-3-ultra-550b-a55b",
+      "provider": "nvidia",
+      "pool": "nvidia:hesap",
+      "rpm": 40,
+      "budget": 1000,
+      "priority": "normal",
+      "evidence": "Nemotron 3 ailesinin en büyüğü; 1M bağlam."
+    },
+    {
+      "id": "nvidia/nemotron-3-nano-30b-a3b",
+      "provider": "nvidia",
+      "pool": "nvidia:hesap",
+      "rpm": 40,
+      "budget": 1000,
+      "priority": "normal",
+      "evidence": "BFCL v4 53.8 · IFBench 71.5 · native structured outputs. Küçük boy sınıfının en iyisi."
+    },
+    {
+      "id": "google/gemma-4-31b-it",
+      "provider": "nvidia",
+      "pool": "nvidia:hesap",
+      "rpm": 40,
+      "budget": 1000,
+      "priority": "low",
+      "evidence": "KASITLI KOPYA: Google AI Studio'daki gemma-4-31b-it ile aynı ağırlıklar. Skor farkı çıkarsa fark modelden değil sağlayıcıdan gelir — o farkı ölçmek için burada."
+    },
+    {
+      "id": "stepfun-ai/step-3.7-flash",
+      "provider": "nvidia",
+      "pool": "nvidia:hesap",
+      "rpm": 40,
+      "budget": 1000,
+      "priority": "low",
+      "evidence": "SWE-bench Pro 56.3; kod odaklı. Yargı görevinde beklenti düşük — kota kalırsa koşar."
+    },
+
+    {
+      "id": "inclusionai/ling-3.0-flash:free",
+      "provider": "openrouter",
+      "pool": "openrouter:free",
+      "rpm": 20,
+      "rpd": 50,
+      "priority": "low",
+      "evidence": "262K bağlam · tool desteği. Başka free uçta bulunmuyor. OpenRouter kotası tüm :free modellerde ORTAK havuz."
+    },
+    {
+      "id": "cohere/north-mini-code:free",
+      "provider": "openrouter",
+      "pool": "openrouter:free",
+      "rpm": 20,
+      "rpd": 50,
+      "priority": "low",
+      "evidence": "Kod modeli; ekonometrik yargıda beklenti düşük. Tam kapsama için listede — kuyruğun sonunda."
+    }
+  ]
+}

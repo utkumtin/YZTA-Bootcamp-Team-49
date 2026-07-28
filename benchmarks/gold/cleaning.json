@@ -1,0 +1,219 @@
+{
+  "_doc": [
+    "Temizleme karar defteri altın seti — pareto/cleaning/agent.py:generate_ledger.",
+    "",
+    "Girdi: profile_dataframe(build_panel(dataset_dir).df) — üretimde JUDGE'a giden",
+    "profilin aynısı (bkz. scripts/run_e2e_check.py:_seam_profile).",
+    "",
+    "Etiketler ÖLÇÜLDÜ, uydurulmadı: aşağıdaki her dtype/eksiklik değeri 2026-07-27'de",
+    "gerçek panellerin profilinden okundu. Yeniden üretmek için:",
+    "  python -c \"import sys;sys.path.insert(0,'.');",
+    "  from pareto.cleaning.merge import build_panel;from pareto.profiling import profile_dataframe;",
+    "  print(profile_dataframe(build_panel('data/castle').df)['columns'])\"",
+    "",
+    "Eşleşme kuralı: bir öneri, transform_name eşitse VE",
+    "TransformCall.referenced_columns() altın kaydın kolonunu içeriyorsa eşleşir.",
+    "",
+    "  must_fix    : panelde gerçekten var olan kusur. Bulunmazsa recall düşer.",
+    "  forbidden   : veriyi/paneli bozan öneri. Her isabet AĞIR hata olarak raporlanır.",
+    "  acceptable  : savunulabilir ama zorunlu değil — precision'ı cezalandırmaz.",
+    "  structurally_missing: eksikliği KUSUR DEĞİL, sinyal olan kolonlar (never-treated).",
+    "                Bunlara high confidence ile dokunmak overconfidence sayılır;",
+    "                pct_missing >= 0.5 olanlarda _uncertainty_flag zaten insana yönlendirir",
+    "                (pareto/config.py: missing_value_hard_threshold).",
+    "",
+    "Vetted transform sözlüğü 6 üyeli (pareto/cleaning/transforms.py: REGISTRY):",
+    "rename_column · coerce_numeric · preserve_leading_zeros · parse_date ·",
+    "standardize_na · drop_duplicates. İmputasyon veya satır silme YOK — bu yüzden",
+    "forbidden kayıtları ağırlıklı olarak 'yanlış kolona doğru transform' biçimindedir."
+  ],
+
+  "cases": [
+    {
+      "case_id": "medicaid",
+      "dataset_dir": "data/medicaid",
+      "note": "Hero seti ve tek gerçek temizleme vitrini: CDC WONDER + KFF + SAHIE + SAIPE + LAUS birleşimi. 34.154 satır x 18 kolon.",
+      "must_fix": [
+        {
+          "transform": "coerce_numeric",
+          "column": "deaths",
+          "why": "dtype=str, değerler '117'/'106'. Mortalite payı; string kaldığı sürece hiçbir estimator kullanamaz."
+        },
+        {
+          "transform": "parse_date",
+          "column": "implementation_date",
+          "why": "dtype=str, ISO tarih '2014-01-01'. Tedavi kohortu bu kolondan türetiliyor (config.yaml: treatment.cohort_from)."
+        }
+      ],
+      "forbidden": [
+        {
+          "transform": "coerce_numeric",
+          "column": "county_fips",
+          "why": "dtype=str, '01001' — baştaki sıfır anlamlı. Sayıya çevirmek 1001 yapar, 5 haneli FIPS join anahtarını yok eder."
+        },
+        {
+          "transform": "coerce_numeric",
+          "column": "state_fips",
+          "why": "dtype=str, '01' gibi 2 haneli zero-pad. Aynı gerekçe: eyalet eşlemesi (KFF merge) kırılır."
+        },
+        {
+          "transform": "drop_duplicates",
+          "column": "county_fips",
+          "why": "Panel county x year; ilçe başına 11 yıl var. county_fips'e göre tekilleştirmek paneli tek kesite çökertir."
+        },
+        {
+          "transform": "preserve_leading_zeros",
+          "column": "crude_rate",
+          "why": "Sürekli bir ölçüm (100k başına ölüm). Zero-pad edilmiş stringe çevirmek sonucu ölçülemez hale getirir."
+        }
+      ],
+      "acceptable": [
+        {
+          "transform": "coerce_numeric",
+          "column": "pct_uninsured_moe",
+          "why": "dtype=str, değerler '2.0'/'1.9'. Gerçek bir kusur ama yalnız hata payı kolonu — kaçırmak analizi bozmaz."
+        },
+        {
+          "transform": "standardize_na",
+          "column": "crude_rate",
+          "why": "%1.48 eksik = CDC WONDER suppressed hücreleri. Zaten NA; ek işaretleme zararsız."
+        },
+        {
+          "transform": "rename_column",
+          "column": "county_name_state",
+          "why": "county_name ile büyük ölçüde çakışıyor; yeniden adlandırma savunulabilir bir tercih."
+        }
+      ],
+      "structurally_missing": ["implementation_date", "treatment_cohort"]
+    },
+
+    {
+      "case_id": "card_krueger",
+      "dataset_dir": "data/card_krueger",
+      "note": "Card & Krueger (1994) NJ-PA asgari ücret, 2x2 DiD. 820 satır (410 mağaza x 2 dalga) x 10 kolon.",
+      "must_fix": [
+        {
+          "transform": "coerce_numeric",
+          "column": "wage_start",
+          "why": "dtype=str, değerler '5.05'/'4.25'. Ücret değişkeni; kontrol olarak kullanılamaz."
+        },
+        {
+          "transform": "coerce_numeric",
+          "column": "treated_post",
+          "why": "dtype=str, '0'/'1'. DiD'in tedavi kukla değişkeni; string kaldığında katsayı üretilemez."
+        },
+        {
+          "transform": "coerce_numeric",
+          "column": "treated_state",
+          "why": "dtype=str, '0'/'1'. Grup göstergesi; aynı gerekçe."
+        }
+      ],
+      "forbidden": [
+        {
+          "transform": "coerce_numeric",
+          "column": "store_id",
+          "why": "dtype=str, '000'/'001' — baştaki sıfır kimliğin parçası. Sayıya çevirmek mağaza kimliklerini çakıştırır."
+        },
+        {
+          "transform": "drop_duplicates",
+          "column": "store_id",
+          "why": "Her mağaza iki kez var (wave 1 ve 2) — DiD'in ta kendisi. store_id'ye göre tekilleştirmek ikinci dalgayı siler."
+        }
+      ],
+      "acceptable": [
+        {
+          "transform": "coerce_numeric",
+          "column": "sheet",
+          "why": "dtype=str anket sayfa numarası; yalnız izlenebilirlik için. Çevirmek de bırakmak da zarar vermez."
+        },
+        {
+          "transform": "standardize_na",
+          "column": "fte_employment",
+          "why": "%3.17 eksik = kalıcı kapanan mağazalar. Zaten NA."
+        }
+      ],
+      "structurally_missing": []
+    },
+
+    {
+      "case_id": "castle",
+      "dataset_dir": "data/castle",
+      "note": "Cheng & Hoekstra (2013) castle doctrine; kademeli yasalaşma. Eyalet-yıl 2000-2010, 550 satır x 14 kolon.",
+      "must_fix": [
+        {
+          "transform": "coerce_numeric",
+          "column": "effective_year",
+          "why": "dtype=str, değerler '2006.0' — Stata float'ının string hali. Kohort ataması bu kolondan geliyor."
+        },
+        {
+          "transform": "coerce_numeric",
+          "column": "treated",
+          "why": "dtype=str, 19 tekil değer ('0.0','1.0' ve yıl-içi kesirli aralar). Tedavi yoğunluğu; sayısal olmak zorunda."
+        }
+      ],
+      "forbidden": [
+        {
+          "transform": "coerce_numeric",
+          "column": "state",
+          "why": "Eyalet ADI ('Alabama'). Sayıya zorlamak tüm sütunu NaN yapar ve birim kimliğini yok eder."
+        },
+        {
+          "transform": "drop_duplicates",
+          "column": "state",
+          "why": "Eyalet başına 11 yıl var. state'e göre tekilleştirmek paneli tek kesite çökertir."
+        }
+      ],
+      "acceptable": [
+        {
+          "transform": "coerce_numeric",
+          "column": "state_id",
+          "why": "dtype=str, '1'/'2' — zero-pad yok, sayıya çevirmek güvenli ama gereksiz."
+        }
+      ],
+      "structurally_missing": ["effective_year", "treatment_cohort"]
+    },
+
+    {
+      "case_id": "divorce",
+      "dataset_dir": "data/divorce",
+      "note": "Stevenson & Wolfers (2006) tek-taraflı boşanma; Goodman-Bacon (2021) örnek verisi. Eyalet-yıl 1964-1996, 1617 satır x 12 kolon.",
+      "must_fix": [
+        {
+          "transform": "coerce_numeric",
+          "column": "nfd_year",
+          "why": "dtype=str, '1973.0'. Kohort yılı; kademeli DiD bu kolona dayanıyor."
+        },
+        {
+          "transform": "coerce_numeric",
+          "column": "post",
+          "why": "dtype=str, '1.0'/'0.0'. Tedavi kuklası."
+        },
+        {
+          "transform": "coerce_numeric",
+          "column": "pop_f",
+          "why": "dtype=str, '322972.0'. Nüfus; ağırlık veya kontrol olarak kullanılabilmeli."
+        }
+      ],
+      "forbidden": [
+        {
+          "transform": "drop_duplicates",
+          "column": "state_fips",
+          "why": "Eyalet başına 33 yıl var. state_fips'e göre tekilleştirmek paneli tek kesite çökertir."
+        },
+        {
+          "transform": "preserve_leading_zeros",
+          "column": "suicide_rate_f",
+          "why": "Sonuç değişkeni (yaş-düzeltilmiş kadın intihar oranı). Stringe çevirmek analizi imkansız kılar."
+        }
+      ],
+      "acceptable": [
+        {
+          "transform": "coerce_numeric",
+          "column": "state_fips",
+          "why": "dtype=str, '1'/'4' — bu veri setinde zero-pad YOK, o yüzden çevirmek zararsız. (medicaid'de aynı işlem yasak; fark verinin kendisinde.)"
+        }
+      ],
+      "structurally_missing": ["nfd_year", "treatment_cohort"]
+    }
+  ]
+}
