@@ -1,0 +1,183 @@
+{
+  "_doc": [
+    "Varyans anlatısı altın seti — pareto/llm/narrative.py:generate_narrative.",
+    "",
+    "Girdi DONDURULMUŞ: summarize() ve diagnose_axes() çıktısının şekline birebir uyan",
+    "sabit sözlükler. Multiverse koşmadan test edilebilsin diye böyle; sayılar da",
+    "böylece bilinir, yani 'model sayı uydurdu mu' deterministik olarak ölçülebilir.",
+    "",
+    "Ölçülenler:",
+    "  expected_driving_axes : ozet bu ekseni/eksenleri anmalı. Boş liste = sinyal yok,",
+    "                          doğru davranış hiçbir eksene yorum yazmamak",
+    "                          (prompt: 'skip axes with no signal').",
+    "  forbidden_axes        : teşhiste OLMAYAN gerçek eksen adları. Anılması",
+    "                          halüsinasyondur; _validate_axes zaten fail-loud atar.",
+    "  allowed_derived       : payload'da birebir geçmeyen ama meşru biçimde",
+    "                          TÜRETİLEBİLİR sayılar (oran x sayım, yüzde karşılığı).",
+    "                          Sayı-uydurma kontrolü 'payload sayıları + bunlar'",
+    "                          kümesine bakar; dışına çıkan her sayı uydurmadır.",
+    "",
+    "Sayı-uydurma kontrolü neden gerekli: sistem promptu 'you never compute, estimate,",
+    "or invent numbers' diyor ama bunu zorlayan bir doğrulayıcı ÜRETİMDE YOK",
+    "(_validate_axes yalnız eksen adlarına bakar). Burada ölçüyoruz; üretime",
+    "doğrulayıcı eklemek bu işin kapsamı dışı."
+  ],
+
+  "cases": [
+    {
+      "case_id": "estimator_driven",
+      "note": "Klasik flip vakası: işaret dönüşünü tek başına estimator sürüklüyor (partial R2 0.78, eşleşmiş çiftlerde dönüş oranı 0.5); diğer eksenler düz.",
+      "summary": {
+        "n_total": 12,
+        "n_ok": 12,
+        "n_failed": 0,
+        "sign_agreement": 0.75,
+        "significance_rate": 0.5,
+        "point_min": -0.014,
+        "point_max": 0.041,
+        "modal_sign": 1,
+        "band": "fragile"
+      },
+      "diagnosis": {
+        "n_results": 12,
+        "n_specs": 12,
+        "n_used": 12,
+        "n_excluded": {"failed": 0, "missing_coefficient": 0, "missing_spec": 0},
+        "axes": ["estimator", "clustering", "control_set"],
+        "matched_pairs": {
+          "estimator": {"n_pairs": 6, "sign_flip_rate": 0.5},
+          "clustering": {"n_pairs": 6, "sign_flip_rate": 0.0},
+          "control_set": {"n_pairs": 6, "sign_flip_rate": 0.0}
+        },
+        "anova_partial_r2": {"estimator": 0.78, "clustering": 0.02, "control_set": 0.05},
+        "warnings": []
+      },
+      "expected_driving_axes": ["estimator"],
+      "forbidden_axes": ["sample", "pre_period", "never_treated", "weighting"],
+      "allowed_derived": {
+        "9": "12 x 0.75 = modal işaretteki koşu sayısı",
+        "3": "12 - 9 = ters işaretli koşu sayısı",
+        "6": "12 x 0.5 = anlamlı koşu sayısı",
+        "75": "sign_agreement yüzde olarak",
+        "25": "ters işaret yüzdesi",
+        "50": "significance_rate ve sign_flip_rate yüzde olarak"
+      }
+    },
+
+    {
+      "case_id": "control_set_driven",
+      "note": "Sürükleyici eksen estimator DEĞİL control_set. Modelin 'her zaman estimator' refleksine düşüp düşmediğini ayırt eder.",
+      "summary": {
+        "n_total": 16,
+        "n_ok": 15,
+        "n_failed": 1,
+        "sign_agreement": 0.6,
+        "significance_rate": 0.4,
+        "point_min": -0.062,
+        "point_max": 0.019,
+        "modal_sign": -1,
+        "band": "fragile"
+      },
+      "diagnosis": {
+        "n_results": 16,
+        "n_specs": 16,
+        "n_used": 15,
+        "n_excluded": {"failed": 1, "missing_coefficient": 0, "missing_spec": 0},
+        "axes": ["control_set", "sample", "estimator"],
+        "matched_pairs": {
+          "control_set": {"n_pairs": 7, "sign_flip_rate": 0.55},
+          "sample": {"n_pairs": 4, "sign_flip_rate": 0.05},
+          "estimator": {"n_pairs": 4, "sign_flip_rate": 0.0}
+        },
+        "anova_partial_r2": {"control_set": 0.71, "sample": 0.03, "estimator": 0.01},
+        "warnings": ["1 başarısız sonuç axis teşhisinden dışlandı."]
+      },
+      "expected_driving_axes": ["control_set"],
+      "forbidden_axes": ["clustering", "pre_period", "never_treated", "weighting"],
+      "allowed_derived": {
+        "9": "15 x 0.6 = modal işaretteki koşu sayısı",
+        "6": "15 - 9 = ters işaretli koşu sayısı (ve 15 x 0.4 = anlamlı koşu sayısı)",
+        "60": "sign_agreement yüzde olarak",
+        "40": "significance_rate yüzde olarak",
+        "55": "control_set sign_flip_rate yüzde olarak",
+        "5": "sample sign_flip_rate yüzde olarak"
+      }
+    },
+
+    {
+      "case_id": "no_signal_robust",
+      "note": "Sinyal yok: tüm koşular aynı işarette, hiçbir eksende dönüş. Doğru davranış hiçbir eksene yorum yazmamak. Model yine de bir eksene 'sürükleyici' demeye kalkarsa uydurma yapmış olur.",
+      "summary": {
+        "n_total": 8,
+        "n_ok": 8,
+        "n_failed": 0,
+        "sign_agreement": 1.0,
+        "significance_rate": 1.0,
+        "point_min": 0.018,
+        "point_max": 0.026,
+        "modal_sign": 1,
+        "band": "robust"
+      },
+      "diagnosis": {
+        "n_results": 8,
+        "n_specs": 8,
+        "n_used": 8,
+        "n_excluded": {"failed": 0, "missing_coefficient": 0, "missing_spec": 0},
+        "axes": ["estimator", "clustering"],
+        "matched_pairs": {
+          "estimator": {"n_pairs": 4, "sign_flip_rate": 0.0},
+          "clustering": {"n_pairs": 4, "sign_flip_rate": 0.0}
+        },
+        "anova_partial_r2": {"estimator": 0.01, "clustering": 0.0},
+        "warnings": []
+      },
+      "expected_driving_axes": [],
+      "forbidden_axes": ["sample", "control_set", "pre_period", "never_treated", "weighting"],
+      "allowed_derived": {
+        "100": "sign_agreement ve significance_rate yüzde olarak"
+      }
+    },
+
+    {
+      "case_id": "halusinasyon_yemi",
+      "note": "Teşhiste yalnız iki eksen var ve uyarılar dışlanan sonuçlardan söz ediyor — modeli örneklem/kontrol ekseninden bahsetmeye davet eden bir kurulum. Sürükleyici eksen weighting; ALL_AXES'te olup teşhiste olmayan her ad halüsinasyondur ve _validate_axes fail-loud atar.",
+      "summary": {
+        "n_total": 12,
+        "n_ok": 9,
+        "n_failed": 3,
+        "sign_agreement": 0.6667,
+        "significance_rate": 0.3333,
+        "point_min": -0.008,
+        "point_max": 0.052,
+        "modal_sign": 1,
+        "band": "fragile"
+      },
+      "diagnosis": {
+        "n_results": 12,
+        "n_specs": 12,
+        "n_used": 9,
+        "n_excluded": {"failed": 3, "missing_coefficient": 0, "missing_spec": 0},
+        "axes": ["estimator", "weighting"],
+        "matched_pairs": {
+          "estimator": {"n_pairs": 4, "sign_flip_rate": 0.1},
+          "weighting": {"n_pairs": 5, "sign_flip_rate": 0.6}
+        },
+        "anova_partial_r2": {"estimator": 0.04, "weighting": 0.66},
+        "warnings": [
+          "3 başarısız sonuç axis teşhisinden dışlandı.",
+          "Matched-pair teşhisi bazı eksenlerde sınırlı sayıda çift buldu."
+        ]
+      },
+      "expected_driving_axes": ["weighting"],
+      "forbidden_axes": ["sample", "control_set", "clustering", "pre_period", "never_treated"],
+      "allowed_derived": {
+        "6": "9 x 0.6667 = modal işaretteki koşu sayısı (ve 9 - 3)",
+        "67": "sign_agreement yuvarlanmış yüzde",
+        "33": "significance_rate yuvarlanmış yüzde",
+        "60": "weighting sign_flip_rate yüzde olarak",
+        "10": "estimator sign_flip_rate yüzde olarak",
+        "66": "weighting partial R2 yüzde olarak"
+      }
+    }
+  ]
+}

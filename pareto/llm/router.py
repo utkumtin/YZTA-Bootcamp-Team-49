@@ -22,6 +22,12 @@ logger = logging.getLogger(__name__)
 
 _TEST_MODEL: Any | None = None  # test enjeksiyonu (TestModel/FunctionModel)
 
+# NVIDIA NIM'in OpenAI-uyumlu ucu. pydantic-ai'de ayrı bir `nvidia` provider modülü
+# yok (bkz. pydantic_ai.providers listesi), o yüzden OpenAI istemcisi base_url ile
+# yönlendiriliyor. Sabit burada çünkü providers.py deklaratif config tutar; hangi
+# pydantic-ai sınıfının hangi adrese bağlandığı bu dosyanın işi.
+NVIDIA_NIM_BASE_URL = "https://integrate.api.nvidia.com/v1"
+
 
 @contextmanager
 def use_test_model(model: Any):
@@ -64,6 +70,20 @@ def _model_from_provider(pm: ProviderModel) -> Any:
         return GroqModel(
             pm.model_id,
             provider=GroqProvider(api_key=get_api_key(pm.api_key_env)),
+        )
+    if pm.provider == "nvidia":
+        from pydantic_ai.models.openai import OpenAIChatModel
+        from pydantic_ai.providers.openai import OpenAIProvider
+
+        # get_api_key() ÖNCE çağrılır: openrouter dalındaki gerekçenin aynısı —
+        # eksik anahtar _chain_model'in yakaladığı OSError olarak yükselsin,
+        # sağlayıcının kendi UserError'ına düşmesin.
+        return OpenAIChatModel(
+            pm.model_id,
+            provider=OpenAIProvider(
+                api_key=get_api_key(pm.api_key_env),
+                base_url=NVIDIA_NIM_BASE_URL,
+            ),
         )
     raise RuntimeError(f"Bilinmeyen sağlayıcı: {pm.provider!r}")
 
