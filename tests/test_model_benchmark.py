@@ -616,6 +616,47 @@ def test_throttle_sleeps_to_respect_rpm() -> None:
     assert slept == [pytest.approx(1.0)]
 
 
+def test_throttle_reports_rpm_wait_before_sleeping() -> None:
+    """RPM beklemesi terminale basılmalı — sessiz kalırsa çok günlük bir koşuda
+
+    (ör. gemini-3.6-flash rpm=5 -> istekler arası 12sn) kullanıcı script'in
+    donduğunu sanır. `on_wait` `sleep`'ten ÖNCE çağrılmalı: kullanıcı ne kadar
+    bekleyeceğini beklemeden önce görmeli.
+    """
+    waits: list[tuple[str, float]] = []
+    order: list[str] = []
+    ticks = iter([0.0, 1.0, 1.0])
+
+    def _on_wait(pool: str, seconds: float) -> None:
+        waits.append((pool, seconds))
+        order.append("wait")
+
+    def _sleep(_seconds: float) -> None:
+        order.append("sleep")
+
+    clock = Throttle(now=lambda: next(ticks), sleep=_sleep, on_wait=_on_wait)
+
+    clock.acquire("havuz", rpm=30, cap=None)
+    clock.acquire("havuz", rpm=30, cap=None)
+
+    assert waits == [("havuz", pytest.approx(1.0))]
+    assert order == ["wait", "sleep"]
+
+
+def test_throttle_does_not_report_wait_on_pools_first_call() -> None:
+    """İlk çağrıda önceki damga yok, dolayısıyla beklenecek bir şey de yok."""
+    waits: list[tuple[str, float]] = []
+    clock = Throttle(
+        now=lambda: 0.0,
+        sleep=lambda _s: None,
+        on_wait=lambda pool, seconds: waits.append((pool, seconds)),
+    )
+
+    clock.acquire("havuz", rpm=30, cap=None)
+
+    assert waits == []
+
+
 def test_throttle_seed_counts_resumed_calls_against_cap() -> None:
     """Resume kotayı sıfırlamamalı: dünkü çağrılar da aynı günün kotasından gitti."""
     clock = Throttle(now=lambda: 0.0, sleep=lambda _s: None)
@@ -903,6 +944,23 @@ def test_models_json_shared_pools_are_declared() -> None:
     assert len(nvidia) == 1, "NVIDIA kredileri hesap seviyesinde ortak"
     assert len(openrouter) == 1, "OpenRouter :free kotası ortak havuz"
     assert len(google) == 4, "Google limitleri model başına, havuz paylaşılmamalı"
+
+
+def test_models_json_shared_pool_members_declare_the_same_rpm() -> None:
+    """Throttle RPM aralığını HAVUZ başına tutar (bkz. Throttle.acquire), model başına değil.
+
+    Aynı havuzdaki iki uç farklı rpm bildirirse bekleme süresi, o an hangi
+    modelin çağrıldığına göre rastgele geniş/dar hesaplanır — pool-level throttle
+    yalnız havuzdaki TÜM üyeler aynı rpm'i paylaşırsa doğru çalışır. Bugün NVIDIA
+    (40) ve OpenRouter (20) havuzlarında zaten böyle; bu test bunu sessizce
+    bozulmaya (ör. farklı rpm'li yeni bir model eklenmesine) karşı kilitler.
+    """
+    by_pool: dict[str, set[int | None]] = {}
+    for model in load_models():
+        by_pool.setdefault(quota_pool(model), set()).add(model.get("rpm"))
+
+    for pool, rpms in by_pool.items():
+        assert len(rpms) == 1, f"{pool}: havuz üyeleri farklı rpm bildiriyor: {rpms}"
 
 
 def test_models_json_every_model_declares_a_quota() -> None:

@@ -183,6 +183,15 @@ class QuotaExhausted(RuntimeError):
     """Modelin günlük isteği veya toplam kredisi bitti; koşu sonra devam eder."""
 
 
+def _print_rpm_wait(pool: str, seconds: float) -> None:
+    """RPM aralığını doldurmak için beklerken terminale basar.
+
+    Sessiz kalırsa (ör. gemini-3.6-flash rpm=5 -> istekler arası 12sn) koşu
+    donmuş gibi görünür; kullanıcı neyin beklendiğini görmeli.
+    """
+    print(f"  [rpm] {pool}: {seconds:.1f}sn bekleniyor (rpm sınırı)")
+
+
 @dataclass
 class Throttle:
     """RPM aralığı + istek/kredi tavanı, KOTA HAVUZU başına.
@@ -203,6 +212,9 @@ class Throttle:
 
     now: Callable[[], float] = time.monotonic
     sleep: Callable[[float], None] = time.sleep
+    # Enjekte edilebilir: testler beklemeyi sessizce yakalar, üretim varsayılanı
+    # terminale basar. `now`/`sleep` ile aynı gerekçe — gerçek I/O'yu testten ayır.
+    on_wait: Callable[[str, float], None] = _print_rpm_wait
     _last_call: dict[str, float] = field(default_factory=dict)
     _count: dict[str, int] = field(default_factory=dict)
 
@@ -223,6 +235,7 @@ class Throttle:
             if last is not None:
                 wait = interval - (self.now() - last)
                 if wait > 0:
+                    self.on_wait(pool, wait)
                     self.sleep(wait)
         self._last_call[pool] = self.now()
         self._count[pool] = used + 1
