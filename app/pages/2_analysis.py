@@ -723,8 +723,7 @@ else:
 
 if menu is None:
     st.info(
-        "Spesifikasyon menüsü oluşmadı. Yukarıdaki menü kaynağını seçip menüyü "
-        "üretin ve dondurun."
+        "Spesifikasyon menüsü oluşmadı. Yukarıdaki menü kaynağını seçip menüyü üretin ve dondurun."
     )
     st.stop()
 
