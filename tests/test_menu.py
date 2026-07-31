@@ -1,4 +1,6 @@
 import pytest
+from pydantic_ai.messages import ModelResponse, ToolCallPart
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
 
 from pareto.analysis.hypothesis import FrozenEstimand, TACProposal, freeze_estimand
@@ -11,6 +13,7 @@ from pareto.analysis.menu import (
     generate_spec_menu,
     validate_spec_menu_to_specs,
 )
+from pareto.config import SETTINGS
 from pareto.llm.router import use_test_model
 from pareto.spec import Specification
 
@@ -407,3 +410,36 @@ def test_freeze_spec_menu_rejects_clarification_needed():
             available_columns=["state"],
             approved=True,
         )
+
+
+def test_spec_menu_prompt_states_the_real_hard_cap():
+    """JUDGE'a giden prompt spesifikasyon bütçesini AYARDAN okuyarak söylemeli.
+
+    Prompt bu kısıttan hiç söz etmiyordu: model 7 eksende bol aday seviye
+    öneriyor, `expand_to_specs` kartezyen çarpımı alıp tavanı aşınca fail-loud
+    atıyor ve kullanıcı eğri yerine hata görüyordu. Benchmark'ta ölçüldü
+    (2026-07-31): 960-2160 spesifikasyonla reddedilen menüler, güçlü modellerin
+    hepsinde. Söylenmemiş bir kısıt modelin kusuru değil.
+
+    Test literal `24` yazmıyor, `SETTINGS.max_specifications`'ı okuyor: sabit
+    prompt'a kopyalanırsa ayar değiştiğinde prompt sessizce YALAN söyler, ki bu
+    kısıttan hiç söz etmemekten kötüdür.
+    """
+    seen: list = []
+
+    def capture(messages, info: AgentInfo) -> ModelResponse:
+        seen.append(messages)
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, _menu_proposal_args())])
+
+    with use_test_model(FunctionModel(capture)):
+        generate_spec_menu(frozen=_fake_frozen_estimand(), available_columns=_MENU_COLUMNS)
+
+    prompt = "\n".join(
+        part.content
+        for message in seen[0]
+        for part in message.parts
+        if isinstance(getattr(part, "content", None), str)
+    )
+    assert "SPECIFICATION BUDGET" in prompt
+    assert str(SETTINGS.max_specifications) in prompt
+    assert "CARTESIAN PRODUCT" in prompt

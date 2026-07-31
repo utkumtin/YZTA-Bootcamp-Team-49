@@ -44,7 +44,7 @@ import sys
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -62,6 +62,7 @@ from pydantic_ai.models.wrapper import WrapperModel  # noqa: E402
 from pydantic_ai.settings import ModelSettings  # noqa: E402
 
 import pareto.llm.cache as llm_cache  # noqa: E402
+import pareto.llm.providers as llm_providers  # noqa: E402
 from pareto.analysis.hypothesis import (  # noqa: E402
     FrozenEstimand,
     SocraticDeclaration,
@@ -89,6 +90,30 @@ MODELS_PATH = BENCH_DIR / "models.json"
 DEFAULT_OUT_ROOT = REPO_ROOT / "runs" / "benchmark"
 
 TASKS = ("cleaning", "estimand", "spec_menu", "narrative")
+
+# Vaka başına tekrar. 3 -> 2: teslim matrisi (16 vaka) gemini havuzunun birleşik
+# 40/gün kotasına TEK GÜNDE sığmak zorunda; 16x3=48 sığmıyor, 16x2=32 sığıyor ve
+# 8 çağrılık retry payı bırakıyor. Vaka kırpmak yerine tekrar düşürüldü çünkü
+# dört veri setinin her biri diğerinin ölçemediği bir kusuru taşıyor
+# (bkz. benchmarks/README.md: "Altın etiketler nereden geliyor").
+# KAYIT: `_answer_consistency` n>=2 ile çalışmaya devam eder, ama n=2'de "tüm
+# tekrarlar aynı" olmak n=3'ten kolaydır — yeni tutarlılık yüzdeleri eski
+# 3-tekrarlı koşularla kıyaslanamaz.
+DEFAULT_REPEATS = 2
+
+# Kaç ARDIŞIK pahalı hatadan sonra bir (model, GÖREV) çifti elenir.
+# Kapsam görev bazlı, model bazlı değil: gemma-4-31b-it `cleaning/medicaid`'i 3/3
+# ~15sn'de geçip `cleaning/card_krueger`'da 504 aldı (2026-07-30) — modeli tümden
+# elemek onun diğer 3 görevdeki performansını da silerdi, oysa "bu model şu görevde
+# boğuluyor" tam olarak öğrenmek istediğimiz şey.
+CIRCUIT_BREAK_ERRORS = 2
+
+# Bir başarısız çağrı bu süreden uzun sürdüyse, hata sınıfı ne olursa olsun devre
+# kesiciye sayılır. Devre kesicinin varlık sebebi süre ve (yenilenmeyen NVIDIA)
+# kredi korumak; doğru ölçüt hata etiketi değil MALİYET. Canlı kanıt: 504
+# DEADLINE_EXCEEDED @ 181sn "altyapı" sınıfında ama tek modelde 48 çağrı × 180sn
+# = 2,4 saat eder. Hızlı 429/503 (~0,5sn) bu eşiğin altında kalır ve saymaz.
+SLOW_FAILURE_S = 60.0
 
 _TRANSFORM_ADAPTER: TypeAdapter[Any] = TypeAdapter(TransformCall)
 
@@ -156,7 +181,7 @@ def metered(meter: Meter) -> Iterator[Meter]:
     """
     original = llm_cache.wrap_with_cache
 
-    def _wrap(model: Model | str) -> Model | str:
+    def _wrap(model: Model | str, *, canned_mode: bool = False) -> Model | str:
         return MeteredModel(model, meter)
 
     llm_cache.wrap_with_cache = _wrap  # type: ignore[assignment]
@@ -184,12 +209,39 @@ class QuotaExhausted(RuntimeError):
 
 
 def _print_rpm_wait(pool: str, seconds: float) -> None:
-    """RPM aralığını doldurmak için beklerken terminale basar.
+    """RPM/TPM aralığını doldurmak için beklerken terminale basar.
 
     Sessiz kalırsa (ör. gemini-3.6-flash rpm=5 -> istekler arası 12sn) koşu
     donmuş gibi görünür; kullanıcı neyin beklendiğini görmeli.
     """
-    print(f"  [rpm] {pool}: {seconds:.1f}sn bekleniyor (rpm sınırı)")
+    print(f"  [hız] {pool}: {seconds:.1f}sn bekleniyor (rpm/tpm sınırı)")
+
+
+# Görev başına muhafazakâr token tahmini (girdi + çıktı), TPM throttle'ı için.
+# ÖLÇÜLDÜ, uydurulmadı: runs/benchmark/*/results.jsonl'deki input_tokens +
+# output_tokens medyanlarının üstüne yuvarlandı (2026-07-31, 429 satırları hariç).
+#   cleaning  6.288 (gemini-3.6-flash) · spec_menu 1.380-4.817 · estimand 2.408
+#   narrative 867-1.861
+# Neden girdi+çıktı: Google TPM'i yalnız GİRDİ sayıyor (rate-limits dok.), ama
+# ikisini birden saymak yanlış yönde hata yapar — fazladan beklemek 429'dan ucuz.
+# Koşu sırasında gerçek ölçüm bu tahmini aşarsa Throttle onu kullanır (bkz. observe).
+TASK_TOKEN_ESTIMATE: dict[str, int] = {
+    "cleaning": 7000,
+    "spec_menu": 5000,
+    "estimand": 3000,
+    "narrative": 2500,
+}
+DEFAULT_TOKEN_ESTIMATE = 7000
+
+# Bir vakayı onaylarken tavanda bırakılacak fazladan çağrı payı (bkz. case_server).
+# Şema retry'ı `acquire`'dan SONRA, `_call_and_score` içinde gidiyor: vakanın son
+# hücresine gelindiğinde önceki hücrelerin retry'ları tavanı doldurmuş olmamalı.
+# Koşul: (needed - 1) * (1 + r) < needed + margin, burada r = bir hücrenin
+# ürettiği EKSTRA istek sayısı. runs/benchmark/tur-1'de görülen en büyük değer
+# requests=4 (gpt-oss-20b/120b), yani r=3; needed=2 için margin > 2 çıkıyor.
+# Teslim setinde retry hiç görülmedi (70 satırın hepsi requests=1), pay yine de
+# ölçülen en kötü hale göre seçildi — bütçe şansa değil doğruya dayanmalı.
+RETRY_MARGIN = 3
 
 
 @dataclass
@@ -205,9 +257,10 @@ class Throttle:
     `now`/`sleep` enjekte edilebilir: testler sahte saatle kotayı tüketirken
     gerçekten beklemez.
 
-    Tavan bir TAKVİM GÜNÜ değil, bir KOŞU için geçerlidir. Koşu kotaya çarpınca
-    durur; ertesi gün aynı komut `results.jsonl`'den devam eder. Takvim gününü
-    burada takip etmek, script gün ortasında başlatıldığında yanlış sonuç verirdi.
+    Tavan bu SINIFTA bir koşu içindir; takvim günü bilgisi burada yok. Hangi eski
+    çağrının bugünün kotasından sayılacağına `seed_from_prior()` karar verir —
+    ayrım orada, çünkü havuzun günlük mü (`rpd`) ömür-boyu mu (`budget`) olduğunu
+    bilmek `models.json` bilgisi gerektirir, saat değil.
     """
 
     now: Callable[[], float] = time.monotonic
@@ -217,20 +270,63 @@ class Throttle:
     on_wait: Callable[[str, float], None] = _print_rpm_wait
     _last_call: dict[str, float] = field(default_factory=dict)
     _count: dict[str, int] = field(default_factory=dict)
+    _observed: dict[str, int] = field(default_factory=dict)
 
     def seed(self, pool: str, already_done: int) -> None:
-        """Resume: önceki koşudan gelen çağrılar havuz kotasından düşülür."""
+        """Resume: önceki koşudan gelen çağrılar havuz kotasından düşülür.
+
+        Şema retry'ı da buradan işlenir: pydantic-ai'nin retry'ı modele YENİ BİR
+        İSTEK gider ve sağlayıcının kotasından düşer, ama `acquire` hücre başına
+        bir kez çağrılıyor. Fark işlenmezse tavan sessizce aşılır (bkz.
+        run_matrix: meter.requests - 1).
+        """
         self._count[pool] = self._count.get(pool, 0) + already_done
+
+    def observe(self, task: str, tokens: int) -> None:
+        """Bir görevde gerçekten harcanan token; sonraki çağrının tahminini besler.
+
+        TASK_TOKEN_ESTIMATE ölçülmüş ama ESKİ bir koşudan geliyor; prompt veya
+        model değişince gerçek maliyet büyüyebilir. Gördüğümüz en büyük değeri
+        saklamak, throttle'ın tahmine değil ölçüme yaklaşmasını sağlar.
+        """
+        if tokens > self._observed.get(task, 0):
+            self._observed[task] = tokens
+
+    def estimate(self, task: str) -> int:
+        """Bu görevin bir sonraki çağrısı için token tahmini (tahmin vs ölçüm: büyüğü)."""
+        return max(
+            TASK_TOKEN_ESTIMATE.get(task, DEFAULT_TOKEN_ESTIMATE),
+            self._observed.get(task, 0),
+        )
 
     def used(self, pool: str) -> int:
         return self._count.get(pool, 0)
 
-    def acquire(self, pool: str, *, rpm: int | None, cap: int | None) -> None:
+    def remaining(self, pool: str, cap: int | None) -> int | None:
+        """Havuzda kalan çağrı hakkı; tavan yoksa None (= sınırsız).
+
+        Vaka bazlı sunucu seçimi bunu ister: bir vakanın TÜM tekrarları aynı uçtan
+        gitmek zorunda (bkz. case_server), dolayısıyla çağrı çağrı `acquire`
+        denemek yetmez — vakaya başlamadan önce yeterli hak olduğunu bilmek gerekir.
+        """
+        if cap is None:
+            return None
+        return max(cap - self._count.get(pool, 0), 0)
+
+    def acquire(
+        self,
+        pool: str,
+        *,
+        rpm: int | None,
+        cap: int | None,
+        tpm: int | None = None,
+        est_tokens: int = 0,
+    ) -> None:
         used = self._count.get(pool, 0)
         if cap is not None and used >= cap:
             raise QuotaExhausted(f"{pool}: kota doldu ({used}/{cap})")
-        if rpm:
-            interval = 60.0 / float(rpm)
+        interval = self.interval(rpm=rpm, tpm=tpm, est_tokens=est_tokens)
+        if interval > 0:
             last = self._last_call.get(pool)
             if last is not None:
                 wait = interval - (self.now() - last)
@@ -239,6 +335,19 @@ class Throttle:
                     self.sleep(wait)
         self._last_call[pool] = self.now()
         self._count[pool] = used + 1
+
+    @staticmethod
+    def interval(*, rpm: int | None, tpm: int | None = None, est_tokens: int = 0) -> float:
+        """İki hız kısıtından bağlayıcı olanın gerektirdiği istekler-arası saniye.
+
+        Bazı uçlarda bağlayıcı kısıt istek DEĞİL token: gemma-4-31b-it'in rpd'si
+        14.400 ama tpm'i 16.000, yani ~6.3K'lık bir cleaning çağrısında dakikada
+        ancak ~2 istek kaldırıyor. rpm=30'a bakan bir throttle 2sn aralıkla
+        gider ve ilk dakikada 429 yer (canlı kanıt: 2026-07-30, 7 çağrı).
+        """
+        by_rpm = 60.0 / float(rpm) if rpm else 0.0
+        by_tpm = 60.0 * float(est_tokens) / float(tpm) if (tpm and est_tokens) else 0.0
+        return max(by_rpm, by_tpm)
 
 
 # --------------------------------------------------------------------------- #
@@ -276,12 +385,129 @@ def by_priority(models: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(models, key=lambda m: _PRIORITY_RANK.get(str(m.get("priority", "normal")), 1))
 
 
+def ship_matrix(models: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """`ship: true` adaylar + onların kota uzantıları (dosya sırası korunur).
+
+    Uzantı ELLE eklenmemeli: `fallback_only` bir model kendi satırlarını üretmez
+    ama tavanı birincilin havuzuna eklenir (bkz. plan_lines). Listeden düşerse
+    `--dry-run` gemini havuzunu 40 değil 20 sanar ve teslim matrisi olduğundan
+    dar görünür — planı yanlış kuran tam olarak bu.
+    """
+    shipped = [m for m in models if m.get("ship")]
+    extenders = {str(m.get("fallback_id")) for m in shipped if m.get("fallback_id")}
+    keep = {m["id"] for m in shipped} | extenders
+    return [m for m in models if m["id"] in keep]
+
+
 def quota_cap(model: dict[str, Any]) -> int | None:
     """Havuzun tavanı: günlük istek sayısı veya tek seferlik kredi bütçesi."""
     if model.get("budget") is not None:
         return int(model["budget"])
     if model.get("rpd") is not None:
         return int(model["rpd"])
+    return None
+
+
+def local_date() -> str:
+    """Kota gününün etiketi (yerel takvim tarihi).
+
+    Tek yerde toplandı ki testler/simülasyonlar günü değiştirebilsin — gün geçişi
+    bu koşucunun en kritik davranışı ve gerçek gece yarısını bekleyerek test edilemez.
+    Sağlayıcıların sıfırlama saati garanti değil; gün granülasyonu yeterli yaklaşım.
+    """
+    return time.strftime("%Y-%m-%d")
+
+
+def is_daily_pool(model: dict[str, Any]) -> bool:
+    """Havuz her gün yenilenen bir hak mı (`rpd`), yoksa ömür-boyu kredi mi (`budget`)?
+
+    `quota_cap()` ikisini de tek sayıya indiriyor, ama resume'da davranışları
+    ZITTIR: dünkü NVIDIA kredisi gerçekten harcandı (bir daha gelmiyor), dünkü
+    Gemini isteği ise bugünün 20'sinden düşmez. Bu ayrımı yapmamak koşuyu ilk
+    günden sonra kalıcı olarak durduruyordu.
+    """
+    return model.get("budget") is None and model.get("rpd") is not None
+
+
+def seed_from_prior(
+    throttle: Throttle,
+    prior_rows: list[dict[str, Any]],
+    lookup: dict[str, dict[str, Any]],
+    today: str,
+) -> None:
+    """Önceki koşuların çağrılarını havuz sayaçlarına işler.
+
+    Satır bazlı, model listesi bazlı DEĞİL: `fallback_id` ile gelen satırlar
+    birincil modelin kimliğiyle yazılıyor, ama kotayı `served_by`'daki uç harcadı.
+    Havuzu satırın kendi `served_by`'ından çözmek bunu doğru sayan tek yol.
+
+    Günlük havuzlarda yalnız BUGÜNÜN satırları sayılır (`date` alanı); ömür-boyu
+    kredi havuzlarında hepsi. `date`'i olmayan eski satırlar günlük havuzlarda
+    yok sayılır — bu yönde hata yapmak, koşuyu kalıcı olarak durdurmaktansa en
+    kötü halde sağlayıcıdan bir 429 yemeye yol açar (o da satır olarak raporlanır).
+
+    Reddedilmiş çağrılar (429/503/404) kota TÜKETMEDİ ve tekrar denenecekler
+    (bkz. is_retryable_error) — bunları saymak koşuyu gereksiz kısıtlar.
+    """
+    for row in prior_rows:
+        if is_retryable_error(row.get("error")):
+            continue
+        served = lookup.get(str(row.get("served_by") or row.get("model_id") or ""))
+        if served is None:
+            continue
+        if is_daily_pool(served) and row.get("date") != today:
+            continue
+        throttle.seed(quota_pool(served), 1)
+
+
+def case_server(
+    throttle: Throttle,
+    model: dict[str, Any],
+    *,
+    needed: int,
+    pinned_id: str | None,
+    lookup: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Bir vakanın TÜM kalan çağrılarını koşacak tek ucu seçer; yoksa None.
+
+    Neden vaka bazlı: kota sınırı vaka ortasına düşerse aynı vakanın tekrarları
+    farklı modellere dağılır ve `answer_consistency` model-içi tutarlılık değil
+    iki-model-uyuşması ölçmeye başlar (aynı şey görev bazlı okuma için de geçerli).
+    O yüzden vakaya, tüm tekrarlarını karşılayacak hak yoksa hiç başlanmaz.
+
+    `pinned_id`: bu vakanın bir kısmı ÖNCEKİ koşuda zaten koşmuşsa, kalanı da aynı
+    uçtan gitmek zorunda — vaka saflığı günler arasında da korunur. Pinli uçta yer
+    yoksa vaka bu koşuda hiç koşmaz, ertesi güne kalır (fallback'e KAYDIRILMAZ).
+
+    Seçim İKİ TURLU: önce `RETRY_MARGIN` payı olan bir uç aranır, hiçbiri yoksa
+    pay şartı düşürülüp yalnız `needed` aranır. Tek turlu (paysız) seçim, tavanı
+    `needed`'ın tam katı olan dar havuzlarda vakayı SIFIR payla onaylıyordu: tek
+    bir şema retry'ı vaka ortasında tavanı doldurup `acquire`'ı QuotaExhausted'a
+    düşürüyordu (ölçüldü: gemini-3.6-flash tavan 20, 10. vaka, hücre 19). Tek
+    turlu yapıp payı zorunlu kılmak ise havuzun son artığını hiç kullanmazdı —
+    ikinci tur o artığı kullanır, mid-case dolma riskini `run_matrix`'teki
+    QuotaExhausted yakalaması karşılar.
+
+    None dönmesi "bu havuz bitti" demektir; çağıran modelin kalanını atlar.
+    """
+    candidates = [model]
+    fallback_id = model.get("fallback_id")
+    fallback = lookup.get(str(fallback_id)) if fallback_id else None
+    if fallback is not None:
+        candidates.append(fallback)  # tek seviye: fallback'in fallback'i izlenmez
+    if pinned_id:
+        candidates = [c for c in candidates if c["id"] == pinned_id]
+
+    for margin in (RETRY_MARGIN, 0):
+        for candidate in candidates:
+            left = throttle.remaining(quota_pool(candidate), quota_cap(candidate))
+            if left is None or left >= needed + margin:
+                if candidate is not model:
+                    print(
+                        f"  [kota] {model_key(model)} bu vakaya yetmiyor, "
+                        f"{needed} çağrı {candidate['id']}'e veriliyor"
+                    )
+                return candidate
     return None
 
 
@@ -767,6 +993,53 @@ def pinned_model(model: dict[str, Any]) -> Iterator[None]:
                 os.environ[name] = value
 
 
+@contextmanager
+def judge_call_settings(
+    model: dict[str, Any], *, thinking_on: bool, timeout: float
+) -> Iterator[None]:
+    """Bu modelin sağlayıcı slotuna geçici bir `timeout` uygular (+ varsa NVIDIA reasoning).
+
+    Kod tabanında (`pareto/llm/*.py`) HİÇBİR LLM çağrısında timeout yok — hem NVIDIA
+    hem Google free-tier uçları preflight'ı süresiz asabiliyor (ikisi de ESTAB
+    bağlantıda `ep_poll`'da beklerken gözlendi, 2026-07-30). Bu fonksiyon,
+    sağlayıcı ne olursa olsun, en azından bir üst sınır
+    koyarak "sessizce sonsuza kadar asılı kal"ı "temiz, bilgilendirici hata"ya çevirir.
+
+    NVIDIA'nın "thinking" modelleri (deepseek-v4-pro, nemotron-ultra, inkling — bkz.
+    build.nvidia.com model sayfaları, 2026-07-30) ayrıca `chat_template_kwargs`/
+    `reasoning_effort` alanı gönderilmezse kendi varsayılan reasoning derinliğiyle
+    çalışır. `models.json:reasoning_control` yalnız bu 3 modelde dolu; diğer
+    sağlayıcılarda/modellerde (glm-5.2, minimax-m3, Google, Groq, OpenRouter) no-op
+    — yalnız `timeout` uygulanır.
+
+    Neden `providers.JUDGE_NVIDIA_SLOT` gibi modül-seviyesi adı değil
+    `_JUDGE_SLOTS_BY_PROVIDER`'ı değiştiriyoruz: o sözlük import anında donuyor
+    (bkz. providers.py:243), yani slotu yeniden atamak `judge_slots_for()`'un
+    okuduğu girdiyi değiştirmez.
+
+    pydantic-ai'nin genel `ModelSettings.thinking` alanı NVIDIA için İŞE YARAMAZ:
+    yalnız `openai_supports_reasoning` profili bilinen modellerde `reasoning_effort`e
+    çevriliyor, NVIDIA NIM'deki topluluk model ID'leri bu profile girmiyor (bkz.
+    pydantic_ai.models.openai._translate_thinking) — bu yüzden `extra_body`
+    doğrudan gönderiliyor.
+    """
+    key = "on" if thinking_on else "off"
+    extra_body = (model.get("reasoning_control") or {}).get(key)
+    extra_model_settings: dict[str, Any] = {"timeout": timeout}
+    if extra_body:
+        extra_model_settings["extra_body"] = extra_body
+
+    provider = model["provider"]
+    original = llm_providers._JUDGE_SLOTS_BY_PROVIDER[provider]
+    llm_providers._JUDGE_SLOTS_BY_PROVIDER[provider] = replace(
+        original, extra_model_settings=extra_model_settings
+    )
+    try:
+        yield
+    finally:
+        llm_providers._JUDGE_SLOTS_BY_PROVIDER[provider] = original
+
+
 def classify_error(exc: BaseException) -> str:
     """Hatayı rapora yazılacak tek kelimeye indirger.
 
@@ -788,6 +1061,38 @@ def classify_error(exc: BaseException) -> str:
         return "model_yok"
     if "401" in text or "403" in text or "unauthorized" in text:
         return "yetki"
+    # 5xx: sağlayıcı tarafı. `kota`'dan SONRA gelmeli — gövdesinde "quota" geçen bir
+    # 503 kota olarak sınıflanmalı (kota mesajı daha bağlayıcı bilgi). Canlı örnek:
+    # gemini-3.5-flash "This model is currently experiencing high demand" (2026-07-30).
+    if any(s in text for s in ("500", "502", "503", "504", "overloaded", "high demand")):
+        return "sunucu"
+    # 413: istek modelin kapasitesini aşıyor. `sunucu`/`kota`dan AYRI bir sınıf çünkü
+    # KALICI ve deterministik: payload küçülmediği sürece her denemede aynı sonucu
+    # verir (canlı örnek: llama-3.1-8b-instant · cleaning, 2026-07-31). Bu yüzden
+    # tekrar denenmez (`_INFRA_ERRORS`'ta değil) ama koşulsuz elemeye sayılır —
+    # gecikme kapısına takılırsa 12 çağrının hepsi aynı 413'ü yer.
+    if any(s in text for s in ("413", "request too large", "too large for model")):
+        return "kapasite"
+    # Ayrıştırılamayan structured output = ŞEMA kusuru, taşıyıcısı ne olursa olsun.
+    # Groq bunu HTTP 400 + "Parsing failed. The model generated output that could not
+    # be parsed" ile döndürüyor (canlı örnek: gpt-oss-20b, 2026-07-31), pydantic-ai
+    # ise retry tükenmesiyle → `sema_tutmadi`. Aynı kusur, iki farklı yol. Ayırmazsak
+    # `hata:*` sınıfına düşüyor ve İKİ yanlış sonuç doğuruyor: schema_ok=True
+    # (başarısızlık BAŞARI sayılır) ve elemeye koşulsuz sayılma (şema hatası transport
+    # gibi davranır). Altyapı kontrollerinden SONRA duruyor ki gerçek 429/503
+    # sinyalleri öncelik korusun.
+    # `output_parse_failed` Groq'un makine-okunur `code` alanı — İngilizce mesaj
+    # metninden daha sağlam imza, o yüzden listede ilk sırada.
+    if any(
+        s in text
+        for s in (
+            "output_parse_failed",
+            "parsing failed",
+            "could not be parsed",
+            "failed_generation",
+        )
+    ):
+        return "sema_tutmadi"
     if isinstance(exc, ValueError):
         return "dogrulayici_reddetti"
     return f"hata:{name}"
@@ -795,16 +1100,90 @@ def classify_error(exc: BaseException) -> str:
 
 # Modele hiç ulaşamadığımız hatalar: şema hakkında BİLGİ vermezler.
 # Bunlarda schema_ok=True demek "şemayı tutturdu" diye okunur ve yanlıştır.
-_INFRA_ERRORS = frozenset({"anahtar_yok", "kota", "model_yok", "yetki"})
+# Aynı sebeple bunlar modelin kusuru DEĞİL: ne devre kesiciyi tetiklerler ne de
+# matris hücresini "ölçüldü" sayarlar (bkz. is_retryable_error).
+_INFRA_ERRORS = frozenset({"anahtar_yok", "kota", "model_yok", "yetki", "sunucu"})
+
+# Modelin KENDİ kusuru olan hatalar: bunlar tam olarak ölçmek istediğimiz şey.
+_MEASURED_ERRORS = frozenset({"sema_tutmadi", "dogrulayici_reddetti"})
+
+
+def is_retryable_error(kind: str | None) -> bool:
+    """Bu hata matris hücresini "ölçüldü" saymamalı mı (sonraki koşuda tekrar denensin)?
+
+    Geçici bir 429/503 hücreyi kalıcı olarak zehirlerse o model o vakayı BİR DAHA
+    hiç koşmaz ve rapor eksik n'i sessizce final okuma gibi gösterir. Modelin kendi
+    kusurları (şema/doğrulayıcı) ise tekrar DENENMEMELİ — ikinci çekilişte geçmesi
+    ölçümü yumuşatır.
+    """
+    return kind is not None and kind in _INFRA_ERRORS
+
+
+def counts_toward_elimination(kind: str | None) -> bool:
+    """Bu hata sınıfı KOŞULSUZ elemeye sayılır mı? (transport/`hata:*`)
+
+    Yalnız "uca hiç ulaşamıyoruz" sınıfı. Burada gecikme kapısı YOK ve olmamalı:
+    `nvidia:hesap`'ta hızlı başarısızlık da çağrı başına bir kredi yakıyor ve kredi
+    yenilenmiyor — 2 çağrıda durmak 48'de durmaktan çok farklı.
+    Gecikme kapısı yalnız altyapı sınıfına ait, çünkü orada 429 gerçekten bedava.
+
+    - Altyapı hataları: sağlayıcı kaynaklı, model masum, hızlıysa maliyeti ~0,5sn.
+      Canlı kanıt: gemma-4-31b-it 3 başarılı çağrıdan sonra 429 yedi, dakikalar
+      sonra aynı uç HTTP 200 döndü (2026-07-30) — elenmesi yanlıştı.
+    - Şema/doğrulayıcı hataları: benchmark'ın ÖLÇTÜĞÜ şey. Eleyerek susturursak
+      benchmark kendi sorusunu cevaplayamaz.
+    """
+    return kind is not None and kind not in _INFRA_ERRORS and kind not in _MEASURED_ERRORS
+
+
+def elimination_signal(kind: str | None, latency_s: float) -> bool:
+    """Bu çağrı devre kesici sayacını artırmalı mı?
+
+    İki yol: koşulsuz transport sınıfı, VEYA yavaş bir altyapı hatası (504 @ 181sn
+    gibi — etiketi "altyapı" ama tek modelde 48 × 180sn = 2,4 saat eder).
+
+    Ölçüm hataları hiçbir gecikmede saymaz. Canlı kanıt (2026-07-31):
+    gpt-oss-120b `cleaning`'de 9/9 `sema_tutmadi` verdi, bazıları 72-90sn sürdü —
+    ama yavaşlığın SEBEBİ ölçülen kusurun kendisi (pydantic-ai şema retry'ı,
+    `requests=2..4`), uç asılması değil. Bunu elemeye saymak "şema hataları
+    ölçümdür" kuralını arka kapıdan iptal ediyordu.
+    """
+    if counts_toward_elimination(kind):
+        return True
+    return kind in _INFRA_ERRORS and latency_s >= SLOW_FAILURE_S
+
+
+def resets_streak(kind: str | None) -> bool:
+    """Bu çağrı ardışıklık sayacını sıfırlamalı mı?
+
+    Ölçüt: uç GERÇEKTEN bir model cevabı üretti mi. Başarı ve ölçüm hatası
+    (şema/doğrulayıcı reddi) ikisi de üretti — uç canlı, sayaç sıfırlanır.
+    Hızlı altyapı hatası ne sayar ne sıfırlar: iki timeout arasına düşen bir 429
+    seriyi bozmamalı.
+
+    Sıfırlamayı atlamak "ardışık" kelimesini yalan yapıyordu: 72sn'lik bir hata,
+    araya 3 ölçüm hatası girdikten sonra gelen 90sn'lik hatayla "2 ardışık"
+    sayılıp gpt-oss-120b'nin cleaning görevini haksız yere kesti (2026-07-31).
+    """
+    return kind is None or kind in _MEASURED_ERRORS
 
 
 def schema_verdict(error_kind: str | None) -> bool | None:
-    """Şema kararı: geçti / tutmadı / hakkında bilgi yok (None)."""
+    """Şema kararı: geçti / tutmadı / hakkında bilgi yok (None).
+
+    Varsayılan `None` — yani "kanıt yok". Beyaz liste yerine kara liste kullanmak
+    (bilinmeyen her sınıfı True saymak) birincil metriği sessizce şişiriyordu:
+    413 ve `hata:ConnectError` gibi MODELE HİÇ ULAŞMAMIŞ çağrılar "şema geçti"
+    diye sayılıyordu. Yeni sınıf eklendiğinde de güvenli tarafta kalır.
+    """
     if error_kind is None:
         return True
     if error_kind == "sema_tutmadi":
         return False
-    return None if error_kind in _INFRA_ERRORS else True
+    if error_kind == "dogrulayici_reddetti":
+        # Şema TUTTU; reddedilen şey içerik (ör. kombinatoryal bütçe, uydurma kolon).
+        return True
+    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -820,7 +1199,8 @@ def preflight_one(model: dict[str, Any]) -> dict[str, Any]:
     meter = Meter()
     started = time.monotonic()
     try:
-        with pinned_model(model), metered(meter):
+        settings = judge_call_settings(model, thinking_on=False, timeout=60)
+        with pinned_model(model), settings, metered(meter):
             generate_narrative(case["summary"], case["diagnosis"])
         return {
             "model": model_key(model),
@@ -844,6 +1224,31 @@ def preflight_one(model: dict[str, Any]) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 def result_id(model: dict[str, Any], task: str, case_id: str, repeat: int | str) -> str:
     return f"{model_key(model)}|{task}|{case_id}|{repeat}"
+
+
+def read_many(paths: list[Path]) -> list[dict[str, Any]]:
+    """Birden çok koşuyu tek rapor için okur; hücreler koşular arasında KARIŞMAZ.
+
+    `result_id` koşu tarihini içermiyor (`model|task|case_id|repeat`), yani
+    `latest_per_cell` iki farklı koşunun aynı hücresini tek satıra indirirdi:
+    3-tekrarlı eski koşu ile 2-tekrarlı yeni koşu sessizce birleşir ve rapor
+    EKSİK değil YANLIŞ sayı üretir. Kaynak dosya yolunu `result_id`'ye önek
+    yapmak dedupe'u koşunun içinde tutar; `source` alanı da hangi satırın
+    nereden geldiğini raporda göstermeye yarar.
+
+    YALNIZ RAPOR YOLU. Çıktısı `run_matrix`'e VERİLMEZ: önekli `result_id`,
+    resume'un "bu hücre yapıldı" kontrolüyle (bkz. run_matrix: done) eşleşmez,
+    yani tüm matris yapılmamış görünür ve kota baştan harcanır.
+    """
+    rows: list[dict[str, Any]] = []
+    for path in paths:
+        src = str(path)
+        for row in read_rows(path):
+            row["source"] = src
+            if row.get("result_id") is not None:
+                row["result_id"] = f"{src}::{row['result_id']}"
+            rows.append(row)
+    return rows
 
 
 def read_rows(path: Path) -> list[dict[str, Any]]:
@@ -872,6 +1277,25 @@ def read_done(path: Path) -> dict[str, int]:
     return {row["result_id"]: 1 for row in read_rows(path) if row.get("result_id")}
 
 
+def latest_per_cell(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Aynı matris hücresinin birden fazla satırı varsa SON'unu tutar (sıra korunur).
+
+    Geçici altyapı hatası alan hücre sonraki koşuda tekrar denenir ve aynı
+    `result_id` ile ikinci bir satır yazılır (bkz. is_retryable_error). İkisini de
+    saymak `n`'i şişirir ve başarı oranını olduğundan düşük gösterir: 429 yemiş bir
+    çağrı, modelin bir başarısızlığı gibi okunur. Ham satırlar `results.jsonl`'de
+    kalır — burada yalnız rapor okuması düzeltilir.
+    """
+    keep: dict[str, int] = {}
+    for index, row in enumerate(rows):
+        rid = row.get("result_id")
+        if rid is None:
+            continue
+        keep[str(rid)] = index
+    kept = set(keep.values())
+    return [row for i, row in enumerate(rows) if i in kept or row.get("result_id") is None]
+
+
 def _call_and_score(
     model: dict[str, Any],
     task: str,
@@ -880,13 +1304,20 @@ def _call_and_score(
     rid: str,
     runner: Callable[[dict[str, Any]], dict[str, Any]],
     extra: dict[str, Any],
+    served: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Tek çağrının ortak iskeleti: pin -> ölç -> puanla -> hatayı sınıflandır.
 
     Normal tekrar döngüsü ve --order-check aynı iskeleti paylaşır; ayrılırlarsa
     order-check satırları farklı bir ölçüm yoluna gider ve ana satırlarla
     karşılaştırılamaz hale gelir.
+
+    `model` satırın KİMLİĞİ, `served` çağrıyı fiilen karşılayan uç (varsayılan:
+    ikisi aynı). İkisi `fallback_id` eşlemesinde ayrışır — pin/reasoning/kota
+    `served`'a, rapor başlığı `model`'e gider. `served_by` alanı bu ayrışmayı
+    results.jsonl'de görünür tutar; olmazsa rapor sessizce iki ucu karıştırırdı.
     """
+    served = served or model
     meter = Meter()
     started = time.monotonic()
     row: dict[str, Any] = {
@@ -894,12 +1325,16 @@ def _call_and_score(
         "model": model_key(model),
         "provider": model["provider"],
         "model_id": model["id"],
+        "served_by": served["id"],
+        # Günlük kotanın hangi güne yazıldığı (bkz. seed_from_prior).
+        "date": local_date(),
         "task": task,
         "case_id": case["case_id"],
         **extra,
     }
     try:
-        with pinned_model(model), metered(meter):
+        settings = judge_call_settings(served, thinking_on=True, timeout=180)
+        with pinned_model(served), settings, metered(meter):
             scores = runner(case)
         row.update(schema_ok=True, validator_passed=True, error=None, scores=scores)
     except Exception as exc:  # noqa: BLE001 — sessiz atlama yok
@@ -908,7 +1343,10 @@ def _call_and_score(
             schema_ok=schema_verdict(kind),
             validator_passed=False,
             error=kind,
-            error_detail=str(exc)[:400],
+            # 1200: 400'de Google'ın 429 gövdesi tam kota metriğinin adından ÖNCE
+            # kesiliyordu ("Quota exceeded for metric: ...generat"), yani hangi limitin
+            # aşıldığını (istek/dakika mı token/dakika mı) söyleyen tek bilgi kayboluyordu.
+            error_detail=str(exc)[:1200],
             scores=None,
         )
     row.update(
@@ -936,79 +1374,159 @@ def run_matrix(
     SONRA, kolon sırası ters çevrilmiş bir ekstra çağrı eklenir (bkz.
     ORDER_CHECK_RUNNERS). Varsayılan kapalı: kota zaten en dar havuzda (Gemini
     Flash 20/gün) tam matrisi zar zor karşılıyor, bunu ikiye katlamak opt-in olmalı.
+
+    Kota birimi VAKA'dır, çağrı değil: bir vakanın tüm kalan çağrıları (tekrarlar
+    + varsa order-check varyantı) tek uçtan gider ya da vakaya hiç başlanmaz
+    (bkz. case_server). Bu yüzden havuzda tekrar sayısından küçük bir artık
+    kalabilir — o artık bilinçli olarak kullanılmaz.
+
+    `CIRCUIT_BREAK_ERRORS` ardışık hata gören model elenir ve kalan çağrıları
+    atlanır. Gerekçe: NVIDIA'nın ~1.000 kredisi tek seferlik, ölü bir uç 48 çağrı
+    boyunca kredi ve saat yakabilir.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     results_path = out_dir / "results.jsonl"
-    done = read_done(results_path)
+    prior = read_rows(results_path)
+    # Geçici altyapı hatası alan hücre "yapıldı" SAYILMAZ: yoksa bir 429 o vakayı
+    # kalıcı olarak siler ve rapor eksik n'i final okuma gibi gösterir.
+    done = {
+        row["result_id"]: 1
+        for row in prior
+        if row.get("result_id") and not is_retryable_error(row.get("error"))
+    }
+    # `fallback_id` hedefi --models/--providers filtresiyle `models`'ten düşmüş
+    # olabilir; katalog tam dosyadan gelir, çağıranın dictleri (testler dahil) üstün.
+    lookup: dict[str, dict[str, Any]] = {m["id"]: m for m in load_models()}
+    lookup.update({m["id"]: m for m in models})
+    # Yarım kalmış vakanın kalanı da AYNI uçtan gitmeli (vaka saflığı günler arası).
+    served_of: dict[tuple[str, str, str], str] = {}
+    for row in prior:
+        ident = (str(row.get("model")), str(row.get("task")), str(row.get("case_id")))
+        served = str(row.get("served_by") or row.get("model_id") or "")
+        if served and all(ident):
+            served_of.setdefault(ident, served)
 
-    for model in models:
-        already = sum(1 for rid in done if rid.startswith(f"{model_key(model)}|"))
-        if already:
-            throttle.seed(quota_pool(model), already)
+    seed_from_prior(throttle, prior, lookup, local_date())
 
     rows: list[dict[str, Any]] = []
     for model in models:
+        if model.get("fallback_only"):
+            print(f"  [atla] {model_key(model)}: yalnız kota uzantısı, kendi başına ölçülmez")
+            continue
         key = model_key(model)
-        pool = quota_pool(model)
-        cap = quota_cap(model)
-        rpm = model.get("rpm")
-        exhausted = False
+        stop = False  # havuz/kota bitti -> bu modelin TÜM görevleri
         for task in tasks:
-            if exhausted:
+            if stop:
                 break
+            # Devre kesici sayacı her görevde sıfırdan başlar (bkz. CIRCUIT_BREAK_ERRORS).
+            consecutive_errors = 0
+            task_broken = False
             for case in load_gold(task):
-                if exhausted:
+                if stop or task_broken:
                     break
-                for repeat in range(repeats):
-                    rid = result_id(model, task, case["case_id"], repeat)
-                    if rid in done:
-                        continue
-                    try:
-                        throttle.acquire(pool, rpm=rpm, cap=cap)
-                    except QuotaExhausted as exc:
-                        print(f"  [kota] {exc} — bu havuzdaki kalan işler atlanıyor")
-                        exhausted = True
-                        break
-
-                    row = _call_and_score(
-                        model,
-                        task,
-                        case,
-                        rid=rid,
-                        runner=TASK_RUNNERS[task],
-                        extra={"repeat": repeat},
+                case_id = case["case_id"]
+                plan: list[tuple[int | str, Callable[..., Any], dict[str, Any]]] = [
+                    (r, TASK_RUNNERS[task], {"repeat": r}) for r in range(repeats)
+                ]
+                if order_check and task in ORDER_CHECK_RUNNERS:
+                    plan.append(
+                        (
+                            ORDER_CHECK_VARIANT,
+                            ORDER_CHECK_RUNNERS[task],
+                            {"repeat": ORDER_CHECK_VARIANT, "order_variant": "reversed"},
+                        )
                     )
+                todo = [p for p in plan if result_id(model, task, case_id, p[0]) not in done]
+                if not todo:
+                    continue
+
+                server = case_server(
+                    throttle,
+                    model,
+                    needed=len(todo),
+                    pinned_id=served_of.get((key, task, case_id)),
+                    lookup=lookup,
+                )
+                if server is None:
+                    print(
+                        f"  [kota] {key}: {task}/{case_id} için {len(todo)} çağrılık hak "
+                        "kalmadı — bu modelin kalanı sonraki koşuya bırakılıyor"
+                    )
+                    stop = True
+                    break
+
+                for variant, runner, extra in todo:
+                    rid = result_id(model, task, case_id, variant)
+                    # `case_server` `needed` kadar hak doğruladı, ama şema retry'ı
+                    # `acquire`'dan SONRA gidiyor: önceki hücrelerin retry'ları
+                    # tavanı vaka ortasında doldurabilir. Yani burası invariant
+                    # ihlali DEĞİL, ulaşılabilir bir durum — RETRY_MARGIN payı
+                    # nadirleştirir, tüketmez (dar havuzda payın kendisi de biter).
+                    # Yutmamak tüm koşuyu öldürürdü: teslim koşusunda gemini'nin
+                    # 19. hücresindeki tek bir retry gemma'yı ve inkling'i hiç
+                    # koşturmadan traceback'e düşürüyordu. Sağlayıcının 429'uyla
+                    # (aşağıdaki `kind == "kota"`) aynı davranış: modeli durdur,
+                    # diğer modeller sürsün, kalanı sonraki koşuya kalsın.
+                    try:
+                        throttle.acquire(
+                            quota_pool(server),
+                            rpm=server.get("rpm"),
+                            cap=quota_cap(server),
+                            tpm=server.get("tpm"),
+                            est_tokens=throttle.estimate(task),
+                        )
+                    except QuotaExhausted as exc:
+                        print(
+                            f"  [kota] {key}: {exc} — vaka ortasında doldu (retry payı "
+                            "yetmedi); bu modelin kalanı sonraki koşuya bırakılıyor"
+                        )
+                        stop = True
+                        break
+                    row = _call_and_score(
+                        model, task, case, rid=rid, runner=runner, extra=extra, served=server
+                    )
+                    # Şema retry'ı sağlayıcıya ayrı bir istek olarak gitti ve kotadan
+                    # düştü; `acquire` yalnız birini saydı. Farkı işlemezsek tavan
+                    # sessizce aşılır (bkz. Throttle.seed).
+                    throttle.seed(quota_pool(server), max(int(row.get("requests") or 1) - 1, 0))
+                    throttle.observe(
+                        task, int(row.get("input_tokens") or 0) + int(row.get("output_tokens") or 0)
+                    )
+                    kind = row.get("error")
+                    if elimination_signal(kind, float(row.get("latency_s") or 0.0)):
+                        consecutive_errors += 1
+                        if consecutive_errors >= CIRCUIT_BREAK_ERRORS:
+                            row["circuit_broken"] = True
+                    elif resets_streak(kind):
+                        consecutive_errors = 0
                     with results_path.open("a", encoding="utf-8") as handle:
                         handle.write(json.dumps(row, ensure_ascii=False) + "\n")
                     rows.append(row)
-                    flag = "ok" if row.get("error") is None else row["error"]
-                    print(f"  {key} · {task}/{case['case_id']}#{repeat} → {flag}")
+                    if not is_retryable_error(kind):
+                        done[rid] = 1
+                    served_of.setdefault((key, task, case_id), server["id"])
 
-                if exhausted or not order_check or task not in ORDER_CHECK_RUNNERS:
-                    continue
-                rid = result_id(model, task, case["case_id"], ORDER_CHECK_VARIANT)
-                if rid in done:
-                    continue
-                try:
-                    throttle.acquire(pool, rpm=rpm, cap=cap)
-                except QuotaExhausted as exc:
-                    print(f"  [kota] {exc} — bu havuzdaki kalan işler atlanıyor")
-                    exhausted = True
-                    continue
-
-                row = _call_and_score(
-                    model,
-                    task,
-                    case,
-                    rid=rid,
-                    runner=ORDER_CHECK_RUNNERS[task],
-                    extra={"repeat": ORDER_CHECK_VARIANT, "order_variant": "reversed"},
-                )
-                with results_path.open("a", encoding="utf-8") as handle:
-                    handle.write(json.dumps(row, ensure_ascii=False) + "\n")
-                rows.append(row)
-                flag = "ok" if row.get("error") is None else row["error"]
-                print(f"  {key} · {task}/{case['case_id']}#order-reversed → {flag}")
+                    flag = "ok" if kind is None else kind
+                    via = "" if server is model else f" (via {server['id']})"
+                    label = "order-reversed" if variant == ORDER_CHECK_VARIANT else f"#{variant}"
+                    print(f"  {key}{via} · {task}/{case_id}{label} → {flag}")
+                    if row.get("circuit_broken"):
+                        print(
+                            f"  [devre kesici] {key} · {task}: {CIRCUIT_BREAK_ERRORS} ardışık "
+                            "pahalı hata — bu GÖREVİN kalanı atlanıyor, diğer görevler sürüyor"
+                        )
+                        task_broken = True
+                        break
+                    if kind == "kota":
+                        # Sağlayıcı "havuz bitti" diyor; Throttle ne sanıyorsa sansın,
+                        # iterasyona devam etmek yalnızca hızlı 429 dizisi üretir.
+                        # ELEME DEĞİL: hücre retry edilebilir kalır, model masum.
+                        print(
+                            f"  [kota] {key}: sağlayıcı 429 döndü — bu modelin kalanı "
+                            "sonraki koşuya bırakılıyor"
+                        )
+                        stop = True
+                        break
     return rows
 
 
@@ -1117,6 +1635,139 @@ def _estimand_confusion(rows: list[dict[str, Any]]) -> dict[str, int]:
     return counts
 
 
+def _served_by_lines(rows: list[dict[str, Any]]) -> list[str]:
+    """Bir modelin satırları birden fazla uçtan geldiyse bunu AÇIKÇA yazar.
+
+    `fallback_id` eşlemesi (bkz. models.json) satırları birincil modelin başlığı
+    altında topluyor. Bunu raporda söylemezsek tablo, tek bir ucun 48 çağrısı gibi
+    okunur — oysa skorlar iki uca dağılmış olabilir. Eşleme yoksa bölüm basılmaz.
+    """
+    split: dict[str, dict[str, int]] = {}
+    for row in rows:
+        served = str(row.get("served_by") or row.get("model_id") or "")
+        counts = split.setdefault(str(row.get("model")), {})
+        counts[served] = counts.get(served, 0) + 1
+    mixed = {name: c for name, c in split.items() if len(c) > 1}
+    if not mixed:
+        return []
+    lines = [
+        "",
+        "## Çağrıyı karşılayan uçlar (kota uzantısı)",
+        "",
+        "Aşağıdaki başlıklar TEK model değil, kotayı paylaşan eşlenmiş uçlardır",
+        "(models.json: fallback_id). Skorlar bu uçların BİRLEŞİMİDİR.",
+        "",
+        "| Rapor başlığı | Uç | Çağrı |",
+        "|---|---|---|",
+    ]
+    for name in sorted(mixed):
+        for served, count in sorted(mixed[name].items()):
+            lines.append(f"| `{name}` | `{served}` | {count} |")
+    return lines
+
+
+# Görev kırılımının basıldığı en fazla model sayısı. Üstünde tablo okunmaz hale
+# gelir ve zaten oradaki soru "hangisi elenir", "hangisi hangi dikişte iyi" değil.
+TASK_BREAKDOWN_MAX_MODELS = 4
+
+
+def _per_task_lines(rows: list[dict[str, Any]], tasks: tuple[str, ...]) -> list[str]:
+    """Görev başına geçme oranı — yalnız aday sayısı azaldığında.
+
+    Havuzlu ana tablo bir ELEME aracı ve öyle kalıyor (bkz. build_report): tek bir
+    ağır ihlal zaten diskalifiye eder, görev kırılımı orada gürültü olurdu. Ama
+    teslim setinde soru değişiyor: "hangi model hangi dikişte iyi" — cleaning'de
+    üstün olup narrative'de düşen bir modeli havuzlu oran gizler. O yüzden kırılım
+    ana tablonun YERİNE değil YANINA geliyor ve yalnız <= TASK_BREAKDOWN_MAX_MODELS
+    öznede basılıyor.
+    """
+    by_model = sorted({str(r["model"]) for r in rows})
+    if len(by_model) > TASK_BREAKDOWN_MAX_MODELS:
+        return []
+    lines = [
+        "",
+        "## Görev kırılımı (geçti/çağrı · r=şema retry)",
+        "",
+        "Retry burada AYRI yazılıyor çünkü kotayı o yiyor: her şema retry'ı",
+        "sağlayıcıya ekstra bir istek gider. Koşu erken durduysa hangi görevin",
+        "payı tükettiğini havuzlu tablo değil bu sütun söyler.",
+        "",
+        "| Model | " + " | ".join(tasks) + " |",
+        "|---|" + "---|" * len(tasks),
+    ]
+    for name in by_model:
+        cells = []
+        for task in tasks:
+            task_rows = [r for r in rows if r["model"] == name and r["task"] == task]
+            task_rows = [r for r in task_rows if not r.get("order_variant")]
+            if not task_rows:
+                cells.append("-")
+                continue
+            ok = sum(1 for r in task_rows if r.get("error") is None)
+            retries = sum(int(r.get("retries") or 0) for r in task_rows)
+            cell = f"{ok}/{len(task_rows)}"
+            cells.append(f"{cell} · r={retries}" if retries else cell)
+        lines.append(f"| `{name}` | " + " | ".join(cells) + " |")
+    return lines
+
+
+def _source_lines(rows: list[dict[str, Any]]) -> list[str]:
+    """Rapor birden çok koşudan derlendiyse hangi koşudan kaç satır geldiğini yazar.
+
+    Koşular arasında tekrar sayısı ve prompt sürümü değişmiş olabilir (bkz.
+    read_many); bunu söylemeyen birleşik rapor, farklı koşulların ortalamasını
+    tek bir ölçüm gibi gösterir.
+    """
+    counts: dict[str, int] = {}
+    for row in rows:
+        src = row.get("source")
+        if src:
+            counts[str(src)] = counts.get(str(src), 0) + 1
+    if len(counts) < 2:
+        return []
+    lines = [
+        "",
+        "## Kaynak koşular",
+        "",
+        "Bu rapor birden çok koşudan derlendi. Koşular arasında tekrar sayısı,",
+        "prompt sürümü ve tarih FARKLI olabilir — satırlar tek bir koşuymuş gibi",
+        "okunmamalı.",
+        "",
+        "| Koşu | Satır |",
+        "|---|---|",
+    ]
+    for src in sorted(counts):
+        lines.append(f"| `{src}` | {counts[src]} |")
+    return lines
+
+
+def _circuit_break_lines(rows: list[dict[str, Any]]) -> list[str]:
+    """Devre kesiciyle elenen modelleri listeler.
+
+    Elenen modelin tablodaki `n`'i küçük kalır; bunu ayrıca söylemezsek okuyucu
+    'kota bitti' ile 'model ölü' arasını ayırt edemez — ikisi bambaşka kararlar.
+    """
+    broken = [r for r in rows if r.get("circuit_broken")]
+    if not broken:
+        return []
+    lines = [
+        "",
+        f"## Devre kesici: {CIRCUIT_BREAK_ERRORS} ardışık pahalı hata sonrası elenenler",
+        "",
+        "Eleme (model, GÖREV) bazlı: yalnız o görevin kalan çağrıları yapılmadı, aynı",
+        f"modelin diğer görevleri koştu. Pahalı = hata + ≥{SLOW_FAILURE_S:.0f}sn (süre ve",
+        "yenilenmeyen kredi korumak için). Tablodaki düşük çağrı sayısı kota bitmesinden",
+        "değil elemeden geliyor.",
+        "",
+    ]
+    for row in broken:
+        lines.append(
+            f"- `{row['model']}` (uç: `{row.get('served_by', '?')}`) · "
+            f"son hata: {row.get('error')} · {row['task']}/{row['case_id']}"
+        )
+    return lines
+
+
 def _order_check_lines(rows: list[dict[str, Any]]) -> list[str]:
     """--order-check ile üretilmiş varyant satırlarını temel çağrıyla karşılaştırır.
 
@@ -1171,6 +1822,7 @@ def build_report(rows: list[dict[str, Any]], tasks: tuple[str, ...]) -> str:
     zaten yeterli diskalifiye nedeni (bkz. 'Nasıl okunmalı'). Görev başına kırılım
     isteniyorsa `results.jsonl`'i `task` alanına göre filtrelemek yeterli.
     """
+    rows = latest_per_cell(rows)
     by_model: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         by_model.setdefault(row["model"], []).append(row)
@@ -1204,6 +1856,10 @@ def build_report(rows: list[dict[str, Any]], tasks: tuple[str, ...]) -> str:
         "seçildi (README), `models.json`'da fiyat alanı yok. Çıktı token medyanı bir",
         "verimlilik proxy'si — gerçek $ maliyeti değil, uydurmamak için eklenmedi.",
     ]
+    lines += _per_task_lines(rows, tasks)
+    lines += _source_lines(rows)
+    lines += _served_by_lines(rows)
+    lines += _circuit_break_lines(rows)
 
     lines += ["", "## Ağır ihlaller", ""]
     severe: list[str] = []
@@ -1262,6 +1918,16 @@ def build_report(rows: list[dict[str, Any]], tasks: tuple[str, ...]) -> str:
         "",
         "## Nasıl okunmalı",
         "",
+        "**Cevap tutarlılığı tekrar sayısına duyarlıdır.** Ölçüt 'bir vakanın TÜM",
+        "tekrarları aynı cevaba vardı mı'; n=2'de bunu tutturmak n=3'ten kolaydır.",
+        "Farklı `--repeats` ile koşulmuş raporların tutarlılık yüzdeleri",
+        "birbiriyle kıyaslanamaz.",
+        "",
+        "**spec_menu, 2026-07-31 prompt düzeltmesinden öncesi/sonrası kıyaslanamaz.**",
+        "`generate_spec_menu` promptu o tarihe kadar HARD_CAP'ten (spesifikasyon",
+        "bütçesi) hiç söz etmiyordu; menüler kartezyen çarpımda tavanı aşıp",
+        "reddediliyordu. Düzeltme öncesi ölçülen spec_menu sayıları bayattır.",
+        "",
         "Bu tablo sıralama değil eleme aracıdır. Ağır ihlal listesinde görünen bir model,",
         "gecikmesi ve şema uyumu ne olursa olsun JUDGE slotuna aday değildir: uydurulmuş",
         "bir kolon adı ya da değiştirilmiş bir `expected_sign`, kullanıcının savunulabilir",
@@ -1292,16 +1958,22 @@ def plan_lines(
     `order_check`'i saymazsak tavan tahmini gerçek koşudan düşük çıkar ve koşu
     ortasında beklenmedik bir 429 yer — order-check her vakaya tekrar sayısından
     BAĞIMSIZ +1 çağrı ekliyor, yalnız estimand + spec_menu'de.
+
+    `fallback_only` modeller ÖZNE sayılmaz (kendi çağrıları yok) ama tavanları
+    eşlendikleri birincil modelin havuzuna eklenir — yoksa dry-run gün tahmini
+    kotayı olduğundan dar gösterir ve planı yanlış kurarsınız.
     """
     n_cases = sum(len(load_gold(t)) for t in tasks)
     order_extra = 0
     if order_check:
         order_extra = sum(len(load_gold(t)) for t in tasks if t in ORDER_CHECK_RUNNERS)
     per_model = n_cases * repeats + order_extra
+    by_id = {m["id"]: m for m in models}
+    subjects = [m for m in models if not m.get("fallback_only")]
     lines = [
         f"Görev: {', '.join(tasks)} · vaka: {n_cases} · tekrar: {repeats}"
         + (f" · order-check: +{order_extra}/model" if order_check else ""),
-        f"Model başına çağrı: {per_model} · toplam: {per_model * len(models)}",
+        f"Model başına çağrı: {per_model} · toplam: {per_model * len(subjects)}",
         "",
         f"{'Model':<48} {'sağlayıcı':<11} {'havuz':<18}",
     ]
@@ -1309,27 +1981,63 @@ def plan_lines(
     for model in models:
         pool = quota_pool(model)
         shown = "(kendi)" if pool == model_key(model) else pool
+        if model.get("fallback_only"):
+            shown = "→ kota uzantısı"
         lines.append(f"{model['id']:<48} {model['provider']:<11} {shown:<18}")
-        bucket = pools.setdefault(pool, {"calls": 0, "cap": quota_cap(model), "n": 0})
+        if model.get("fallback_only"):
+            continue  # kendi çağrısı yok; tavanı aşağıda birincilin havuzuna eklenir
+        cap = quota_cap(model)
+        extender = by_id.get(str(model.get("fallback_id") or ""))
+        if extender is not None and extender.get("fallback_only"):
+            extra_cap = quota_cap(extender)
+            if cap is not None and extra_cap is not None:
+                cap += extra_cap
+            pool = f"{pool} + {extender['id']}"
+        bucket = pools.setdefault(pool, {"calls": 0, "cap": cap, "n": 0, "seconds": 0.0})
         bucket["calls"] += per_model
         bucket["n"] += 1
+        # Süre tahmini görev başına ayrı hesaplanır: TPM bağlayıcıysa aralık
+        # görevin token maliyetiyle değişir (cleaning ~7K, narrative ~2.5K).
+        # Havuz tavanına bakan gün sayısı bunu göremez — gemma'nın rpd'si 14.400,
+        # yani "1 gün" der ve TPM throttle'ının olup olmadığını ayırt edemez.
+        for task in tasks:
+            per_task_calls = len(load_gold(task)) * repeats
+            if order_check and task in ORDER_CHECK_RUNNERS:
+                per_task_calls += len(load_gold(task))
+            bucket["seconds"] += per_task_calls * Throttle.interval(
+                rpm=model.get("rpm"),
+                tpm=model.get("tpm"),
+                est_tokens=TASK_TOKEN_ESTIMATE.get(task, DEFAULT_TOKEN_ESTIMATE),
+            )
         # Aynı havuzdaki uçlar farklı tavan bildirirse en dar olanı bağlayıcıdır;
         # ilk modelinkini almak süreyi olduğundan kısa gösterirdi.
-        caps = [c for c in (bucket["cap"], quota_cap(model)) if c is not None]
+        caps = [c for c in (bucket["cap"], cap) if c is not None]
         bucket["cap"] = min(caps) if caps else None
 
-    lines += ["", f"{'Kota havuzu':<28} {'model':>6} {'çağrı':>7} {'tavan':>7} {'gün':>5}"]
+    lines += [
+        "",
+        f"{'Kota havuzu':<44} {'model':>6} {'çağrı':>7} {'tavan':>7} {'gün':>5} {'dk':>6}",
+    ]
+    total_minutes = 0.0
     for pool, info in sorted(pools.items()):
         cap = info["cap"]
         days = "-" if not cap else str(-(-info["calls"] // cap))  # yukarı yuvarlama
-        lines.append(f"{pool:<28} {info['n']:>6} {info['calls']:>7} {str(cap or '-'):>7} {days:>5}")
+        minutes = info["seconds"] / 60.0
+        total_minutes += minutes
+        lines.append(
+            f"{pool:<44} {info['n']:>6} {info['calls']:>7} {str(cap or '-'):>7} "
+            f"{days:>5} {minutes:>6.0f}"
+        )
     slowest = max(
         (-(-i["calls"] // i["cap"]) for i in pools.values() if i["cap"]),
         default=0,
     )
     lines += [
         "",
-        f"En yavaş havuz {slowest} koşu-günü sürer; toplam süreyi o belirler.",
+        f"En yavaş havuz {slowest} koşu-günü sürer; kaç GÜNE yayılacağını o belirler.",
+        f"Tek günlük süre ~{total_minutes:.0f} dk: koşucu sıralı, havuzlar toplanır.",
+        "Dakika sütunu istek ARALIĞINDAN gelir (rpm ve varsa tpm'den bağlayıcı olanı,",
+        "bkz. Throttle.interval); model cevap süresi buna EKLENİR, dahil değildir.",
         "Tavanlar benchmarks/models.json'dan okunur ve DEĞİŞİR — gerçeği",
         "`--preflight` ve sağlayıcının kendi konsolu söyler.",
     ]
@@ -1342,9 +2050,32 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--preflight", action="store_true", help="yalnız uç/şema yoklaması")
     parser.add_argument("--models", nargs="*", help="yalnız bu model ID'leri")
     parser.add_argument("--providers", nargs="*", help="yalnız bu sağlayıcılar")
+    parser.add_argument(
+        "--ship",
+        action="store_true",
+        help=(
+            "yalnız uygulamada sunulacak adaylar (models.json: ship) + kota "
+            "uzantıları — teslim koşusunun tek komutu"
+        ),
+    )
     parser.add_argument("--tasks", nargs="*", choices=TASKS, help="yalnız bu görevler")
-    parser.add_argument("--repeats", type=int, default=3, help="vaka başına tekrar (varsayılan 3)")
+    parser.add_argument(
+        "--repeats",
+        type=int,
+        default=DEFAULT_REPEATS,
+        help=f"vaka başına tekrar (varsayılan {DEFAULT_REPEATS})",
+    )
     parser.add_argument("--out", type=Path, help="çıktı dizini (varsayılan runs/benchmark/<ts>)")
+    parser.add_argument(
+        "--report-from",
+        nargs="+",
+        type=Path,
+        metavar="RESULTS.JSONL",
+        help=(
+            "çağrı YAPMADAN, verilen koşuların sonuçlarından birleşik rapor üret "
+            "(teslim funnel'ı). --out ile birlikte kullanılır"
+        ),
+    )
     parser.add_argument(
         "--order-check",
         action="store_true",
@@ -1357,6 +2088,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     models = load_models()
+    if args.ship:
+        models = ship_matrix(models)
     if args.providers:
         models = [m for m in models if m["provider"] in set(args.providers)]
     if args.models:
@@ -1370,6 +2103,20 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.dry_run:
         print("\n".join(plan_lines(models, tasks, args.repeats, order_check=args.order_check)))
+        return 0
+
+    if args.report_from:
+        # Çağrı yok: yalnız diskteki satırlardan rapor. `require_cache_disabled`
+        # burada aranmaz — cache ayarı sonuç ÜRETİRKEN önemli, okurken değil.
+        rows = read_many(list(args.report_from))
+        if not rows:
+            print("Verilen dosyalarda satır yok.", file=sys.stderr)
+            return 1
+        out_dir = args.out or (DEFAULT_OUT_ROOT / "birlesik")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        report_path = out_dir / "report.md"
+        report_path.write_text(build_report(rows, tasks), encoding="utf-8")
+        print(f"{len(rows)} satır · {len(args.report_from)} koşu\nRapor: {report_path}")
         return 0
 
     require_cache_disabled()

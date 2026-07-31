@@ -9,8 +9,10 @@
 Bu dizin o listeyi kanıta bağlamak için var. Genel leaderboard'lar Pareto'nun işini
 ölçmüyor; ölçen tek şey Pareto'nun kendi dört JUDGE görevi.
 
-**Durum: benchmark kurulu, henüz koşulmadı.** Aday listesi ve puanlayıcılar hazır,
-testler geçiyor. Tam matrisi koşmak ve sonucu `providers.py`'ye taşımak ayrı bir iş.
+**Durum: keşif turu koşuldu (11 model, `runs/benchmark/tur-1`), teslim turu bekliyor.**
+Uygulamada sunulacak üç aday `possible-models.md`'de sabit: `gemini-3.6-flash`,
+`gemma-4-31b-it`, `thinkingmachines/inkling`. Onları ölçen tek komut `--ship`
+(aşağıda). Sonucu `providers.py`'ye taşımak ayrı bir iş.
 
 ---
 
@@ -44,21 +46,30 @@ metrik, `--order-check`, ekstra çağrı gerektirdiği için opsiyonel (aşağı
 
 ```bash
 # 1. Matrisi ve kota takvimini gör (çağrı yapmaz, anahtar istemez)
-python scripts/run_model_benchmark.py --dry-run
+python scripts/run_model_benchmark.py --dry-run --ship
 
 # 2. Hangi uçlar gerçekten yaşıyor ve şema zorluyor (model başına 1 çağrı)
-PARETO_LLM_CACHE=0 python scripts/run_model_benchmark.py --preflight
+PARETO_LLM_CACHE=0 python scripts/run_model_benchmark.py --preflight --ship
 
 # 3. Tek model dumanı
 PARETO_LLM_CACHE=0 python scripts/run_model_benchmark.py \
     --models gemini-3.6-flash --tasks narrative --repeats 1
 
-# 4. Tam matris (resume edilebilir; aynı komut kaldığı yerden devam eder)
-PARETO_LLM_CACHE=0 python scripts/run_model_benchmark.py --out runs/benchmark/tur-1
+# 4. TESLİM KOŞUSU: uygulamada sunulacak adaylar, tek çalıştırma (~16 dk + gecikme)
+PARETO_LLM_CACHE=0 python scripts/run_model_benchmark.py --ship --out runs/benchmark/teslim
+
+# 4b. Tam keşif matrisi (12 özne, 576 çağrı, çok günlü; resume edilebilir)
+PARETO_LLM_CACHE=0 python scripts/run_model_benchmark.py --repeats 3 --out runs/benchmark/tur-1
+
+# 6. Birden çok koşuyu tek rapora derle (çağrı yapmaz) — teslim funnel'ı
+python scripts/run_model_benchmark.py \
+    --report-from runs/benchmark/teslim/results.jsonl runs/benchmark/tur-1/results.jsonl \
+    --out runs/benchmark/birlesik
 
 # 5. + sıra duyarlılığı: estimand/spec_menu vakalarına kolon sırası TERS
 #    çevrilmiş 1 ekstra çağrı ekler (bu iki görevde çağrı sayısı 2 katına çıkar,
-#    o yüzden ayrı bayrak; --dry-run bunu havuz tavanına dahil eder)
+#    o yüzden ayrı bayrak; --dry-run bunu havuz tavanına dahil eder).
+#    --ship ile birlikte gemini payını sıfırlar: ayrı bir güne koy.
 PARETO_LLM_CACHE=0 python scripts/run_model_benchmark.py --order-check
 ```
 
@@ -84,16 +95,55 @@ ayarlar, elle set etmeye gerek yok.
 Koşucu kotayı **havuz** başına takip eder. Aynı hesap limitini paylaşan uçlar tek
 havuzdur; model başına saymak kotayı kat kat büyük gösterir ve koşu 429 yer.
 
-| Havuz | Tavan | Not |
-|---|---|---|
-| Google, model başına | `gemma-4-*` 14.400/gün · `gemini-3.*-flash` **20/gün** · flash-lite 500/gün | Flash'ın 20/gün'ü matristeki en dar kota |
-| Groq, model başına | 1.000/gün (llama-3.1-8b: 14.400) | |
-| `nvidia:hesap` | **1.000 kredi, tek seferlik** | Günlük yenilenmiyor. Telefon doğrulaması gerekiyor. |
-| `openrouter:free` | 50/gün (hesapta $10 kredi varsa 1.000) | Tüm `:free` modeller **ortak havuz** |
+**Bağlayıcı kısıt her zaman istek sayısı değil.** Üç ayrı eksen var ve hangisinin
+bağladığı uca göre değişir:
 
-17 model × 4 görev × 4 vaka × 3 tekrar = 816 çağrı. `--dry-run` havuz başına dağılımı
-ve gün tahminini basar. Şu anki matriste en yavaş havuz Gemini Flash (3 koşu-günü);
-NVIDIA tek seferlik bütçenin ~%29'unu kullanır.
+| Model (teslim seti) | Uç | RPM | TPM | RPD | Bağlayıcı |
+|---|---|---|---|---|---|
+| `gemini-3.6-flash` | Google AI Studio | 5 | 250K | **20** | RPD |
+| `gemini-3.5-flash` | Google AI Studio | 5 | 250K | **20** | RPD |
+| `gemma-4-31b-it` | Google AI Studio | 30 | **16K** | 14.400 | **TPM** |
+| `thinkingmachines/inkling` | NVIDIA NIM | ~40 | - | ~1.000 kredi (ömür boyu) | kredi |
+
+AI Studio panelinden doğrulandı, 2026-07-31. Diğer havuzlar: Groq model başına
+1.000 istek/gün **ama 200.000 token/gün** (canlı 429 gövdesi; gpt-oss-20b kotasını
+43 çağrıda bitirdi), `openrouter:free` 50/gün ortak havuz.
+
+`gemma-4-31b-it`'in geniş RPD'si yanıltıcı: 16K TPM'de ~7K'lık bir cleaning çağrısı
+dakikada ancak ~2 istek bırakır. 2026-07-30'da rpm'e bakan throttle 7 çağrıda 429
+yedi. `Throttle.interval` artık ikisinden bağlayıcı olanı uyguluyor ve `--dry-run`
+havuz başına **dakika** tahmini basıyor — gün sütunu bunu göremez (gemma'da her
+hâlükârda 1 çıkar), yani throttle'ın çalıştığını gösteren tek sütun dakikadır.
+
+Google limitleri **proje başına, anahtar başına değil**. `gemini-3.5-flash`'ın kota
+uzantısı olarak eşlenmesi bu yüzden işe yarıyor: ayrı *model*, ayrı 20'lik RPD.
+İkinci bir API anahtarı aynı işi yapmaz. RPD Pasifik saatiyle gece yarısı sıfırlanır.
+
+**Retry payı — 40'lık havuz yalnız planlamada var.** `--dry-run` iki ucun tavanını
+toplayıp 40 gösterir, ama koşuda iki ayrı havuz vardır ve her birinin tavanı 20'dir;
+32 çağrı ancak devir gerçekten olursa sığar. Şema retry'ı sağlayıcıya ayrı bir istek
+gider ve `acquire`'dan SONRA olur, yani bir vaka tam `remaining == needed` ile
+onaylanırsa tek retry tavanı vaka ORTASINDA doldurur. İki dikiş birlikte kapatıyor:
+
+- `case_server` bir vakayı onaylarken `RETRY_MARGIN` (3) çağrılık pay arar; hiçbir
+  uçta pay kalmamışsa payı düşürüp havuzun artığını yine de kullanır.
+- `run_matrix` `acquire`'ın `QuotaExhausted`'ını yakalar: o modeli durdurur, diğer
+  modeller koşmaya devam eder. Yakalanmadığı sürümde gemini'de tek bir retry gemma
+  ve inkling'i hiç koşturmadan tüm koşuyu traceback'e düşürüyordu.
+
+Pratik sonuç: teslim koşusu gemini'yi **16/20 + 16/20** kullanır, her uçta 4 çağrı
+retry ve 429 tekrarı için artar.
+
+**Teslim matrisi:** 3 özne × 4 görev × 4 vaka × 2 tekrar = **96 çağrı**, tek gün,
+tek çalıştırma (`--ship`). Gemini'nin 32 çağrısı iki uca **16 + 16** dağılır ve her
+uçta 4 çağrılık retry payı kalır (aşağıda: retry payı). Tam keşif matrisi
+(`--repeats 3`) **12 özne × 48 = 576 çağrı** ve çok günlüdür; `--dry-run` her
+ikisinin dağılımını da basar.
+
+`--order-check` teslim koşusunu 96 → **120 çağrıya** çıkarır; gemini'nin iki ucunun
+birleşik tavanı da tam 40'tır, yani pay diye bir şey kalmaz. Ölçüldü (sahte saatle
+simülasyon): retry olmasa bile koşu **118/120** ile biter, eksik 2 satır ertesi güne
+kalır. Sıra duyarlılığını ölçeceksen ayrı bir güne koy.
 
 Koşu sırası `models.json`'daki `priority` alanına göre: `high` → `normal` → `low`.
 Paylaşımlı havuzda sıra sonucu belirler — NVIDIA kredisi biterse kuyruğun sonundaki
@@ -195,6 +245,34 @@ düzeltmez.
 
 ---
 
+## Koşudan çıkan üretim bulgusu: spesifikasyon bütçesi
+
+Keşif turunda güçlü modellerin yarısı spec_menu'de aynı duvara çarptı — inkling
+6/12, llama-3.3-70b 6/12, nemotron-nano 6/12, gpt-oss-120b 8/12 — ve hata hep aynıydı:
+*"1920 spesifikasyon üretildi, sert tavan 24"*.
+
+Sebep model değil prompt: `generate_spec_menu` `HARD_CAP`'ten (24, `config.py:
+max_specifications`) hiç söz etmiyordu. `_axis_levels` her eksende
+`[baseline_level, *candidate_levels]` döndürüyor, `expand_to_specs` bunların
+**kartezyen çarpımını** alıyor. 7 eksenin hepsine ikişer aday seviye = 128
+spesifikasyon. Üretimde de aynı yol: kullanıcı JUDGE'ın menüsünü olduğu gibi
+onaylarsa eğri yerine hata görür.
+
+2026-07-31'de prompt'a bir **spesifikasyon bütçesi** bloğu eklendi (menu.py:
+`_SPEC_BUDGET_RULE`): çarpımın nasıl hesaplandığı, örnek aritmetik, bütçeyi
+harcama politikası (kullanmadığın ekseni `candidate_levels: []` ile pinle) ve
+cevaptan önce çarpımı hesaplama adımı. Sayı ayardan f-string ile geliyor.
+
+**Şema validator'ı bilerek eklenmedi.** Çarpımı kontrol eden bir pydantic
+validator pydantic-ai retry'ını tetikler ve model geri bildirimle kendini
+düzeltir; o zaman bu dikiş "açıkça bildirilmiş sert bir kısıta İLK denemede uydu
+mu" ölçmeyi bırakır, "geri bildirimle düzelebiliyor mu" ölçmeye başlar. Birincisi
+JUDGE seçiminde aradığımız talimat-uyumu ekseninin ta kendisi (aday listesindeki
+IFBench/IFEval gerekçesi). Kısıt prompt'ta söylenir, `expand_to_specs` fail-loud kalır.
+
+**Sonuç:** düzeltme öncesi spec_menu sayıları BAYAT. `tur-1`'deki 11 modelin
+spec_menu oranları yeni koşuyla kıyaslanamaz; rapor bunu kendi içinde de yazıyor.
+
 ## Bilinerek yapılmayanlar
 
 - **Sayı uydurma doğrulayıcısı üretimde yok.** Anlatı sistem promptu "you never compute,
@@ -202,6 +280,19 @@ düzeltmez.
   (`_validate_axes` yalnız eksen adlarına bakar). Benchmark ölçüyor; üretime eklemek
   ayrı bir karar.
 - **MECHANICAL slot ölçülmüyor** — bu tur yalnız JUDGE.
+- **Tekrar sayısı 3'ten 2'ye indi** (`DEFAULT_REPEATS`). 16 vaka × 3 = 48 çağrı
+  gemini havuzunun birleşik 40/gün kotasına sığmıyordu, 16 × 2 = 32 sığıyor.
+  Vaka kırpmak yerine tekrar düşürüldü: dört veri setinin her biri diğerinin
+  ölçemediği bir kusuru taşıyor. **Cevap tutarlılığı bundan etkilenir** — ölçüt
+  "bir vakanın TÜM tekrarları aynı cevaba vardı mı" ve n=2'de bunu tutturmak
+  n=3'ten kolaydır. Farklı `--repeats` ile koşulmuş raporların tutarlılık
+  yüzdeleri kıyaslanamaz; rapor bunu yazıyor.
+- **`gemini-3.6-flash` skorları saf değil.** `gemini-3.5-flash` kota uzantısı
+  olarak eşli (models.json: `fallback_id`), yani satırların bir kısmı 3.5'ten
+  gelmiş olabilir; rapor "Çağrıyı karşılayan uçlar" tablosunda dağılımı basıyor.
+  Bu bilinçli bir takas: 20/gün ile 40/gün arasındaki fark, teslim matrisinin tek
+  güne sığıp sığmaması demek. Teslim metni "3.6/3.5-flash ailesi" demeli, saf
+  3.6 iddiası kurmamalı. İkisinin gerçekten denk olduğu ÖLÇÜLMEDİ, ekip kararı.
 - **Türkçe teşhisi sezgisel:** dile özgü harf veya en az iki işlev sözcüğü. Amaç "model
   İngilizce yazdı mı"yı yakalamak, dil bilimsel sınıflandırma yapmak değil.
 - **Cerebras · Cohere · Mistral · Cloudflare** sağlayıcı dalları eklenmedi. pydantic-ai

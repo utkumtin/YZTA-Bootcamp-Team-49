@@ -54,6 +54,7 @@ from scripts.run_model_benchmark import (
     quota_cap,
     quota_pool,
     read_done,
+    read_many,
     read_rows,
     require_cache_disabled,
     result_id,
@@ -658,12 +659,136 @@ def test_throttle_does_not_report_wait_on_pools_first_call() -> None:
 
 
 def test_throttle_seed_counts_resumed_calls_against_cap() -> None:
-    """Resume kotayı sıfırlamamalı: dünkü çağrılar da aynı günün kotasından gitti."""
+    """`seed` ham bir sayaçtır: kendisine verilen her çağrı tavandan düşer.
+
+    Hangi eski çağrının seed edileceği burada DEĞİL `seed_from_prior()`'da kararlaşır
+    (günlük havuzda yalnız bugünkü, ömür-boyu kredi havuzunda hepsi) — bkz.
+    test_seed_counts_prior_days_only_for_lifetime_credit_pools. İki sorumluluk
+    ayrıldı: bu test sayacın sızdırmadığını, o test gün ayrımını doğruluyor.
+    """
     clock = Throttle(now=lambda: 0.0, sleep=lambda _s: None)
     clock.seed("havuz", 5)
 
     with pytest.raises(QuotaExhausted):
         clock.acquire("havuz", rpm=None, cap=5)
+
+
+def _report_row(
+    model: str, task: str, case_id: str, repeat: int, *, error: str | None = None
+) -> dict[str, Any]:
+    return {
+        "result_id": f"{model}|{task}|{case_id}|{repeat}",
+        "model": model,
+        "provider": "google",
+        "model_id": model.split("/")[-1],
+        "served_by": model.split("/")[-1],
+        "task": task,
+        "case_id": case_id,
+        "error": error,
+        "scores": None if error else {},
+        "latency_s": 1.0,
+        "requests": 1,
+    }
+
+
+def test_read_many_does_not_merge_the_same_cell_across_two_runs(tmp_path) -> None:
+    """İki koşunun aynı hücresi TEK satıra inmemeli.
+
+    `result_id` koşu tarihini içermiyor (`model|task|case_id|repeat`), yani
+    `latest_per_cell` iki koşunun aynı hücresini dedupe eder ve 3-tekrarlı eski
+    koşu ile 2-tekrarlı yeni koşu sessizce birleşir. Sonuç EKSİK değil YANLIŞ
+    olurdu: n küçülür, oranlar kayar, kimse fark etmez.
+    """
+    eski, yeni = tmp_path / "eski.jsonl", tmp_path / "yeni.jsonl"
+    row = _report_row("google/gemini-3.6-flash", "narrative", "estimator_driven", 0)
+    eski.write_text(json.dumps({**row, "error": "sema_tutmadi"}) + "\n", encoding="utf-8")
+    yeni.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    rows = bench.latest_per_cell(read_many([eski, yeni]))
+
+    assert len(rows) == 2, "iki koşunun aynı hücresi birleştirilmiş"
+    assert {r["source"] for r in rows} == {str(eski), str(yeni)}
+
+
+def test_report_names_its_source_runs_when_it_merges_several(tmp_path) -> None:
+    """Birleşik rapor hangi koşudan kaç satır aldığını YAZMALI.
+
+    Yazmazsa farklı tekrar sayısı/prompt sürümüyle üretilmiş satırlar tek bir
+    ölçüm gibi okunur — teslimde savunulamaz bir tablo.
+    """
+    a, b = tmp_path / "a.jsonl", tmp_path / "b.jsonl"
+    a.write_text(json.dumps(_report_row("google/x", "narrative", "c1", 0)) + "\n", encoding="utf-8")
+    b.write_text(json.dumps(_report_row("google/y", "narrative", "c1", 0)) + "\n", encoding="utf-8")
+
+    report = build_report(read_many([a, b]), ("narrative",))
+
+    assert "## Kaynak koşular" in report
+    assert str(a) in report and str(b) in report
+
+
+def test_report_breaks_down_by_task_only_for_a_small_candidate_set() -> None:
+    """Görev kırılımı teslim setinde VAR, tam keşif matrisinde YOK.
+
+    Havuzlu tablo bir eleme aracı ve öyle kalıyor; 17 modelde görev kırılımı
+    gürültü. Ama teslimde soru "hangi model hangi dikişte iyi" — cleaning'de
+    üstün olup narrative'de düşen bir modeli havuzlu oran gizler.
+    """
+    tasks = ("cleaning", "narrative")
+    few = [
+        _report_row("google/a", "cleaning", "medicaid", 0),
+        _report_row("google/a", "narrative", "c1", 0, error="sema_tutmadi"),
+        _report_row("google/b", "cleaning", "medicaid", 0),
+    ]
+    assert "## Görev kırılımı" in build_report(few, tasks)
+    assert "| `google/a` | 1/1 | 0/1 |" in build_report(few, tasks)
+
+    many = [_report_row(f"google/m{i}", "cleaning", "medicaid", 0) for i in range(8)]
+    assert "## Görev kırılımı" not in build_report(many, tasks)
+
+
+def test_throttle_token_limit_binds_when_it_is_tighter_than_rpm() -> None:
+    """Bağlayıcı kısıt istek değil TOKEN olabilir; throttle büyük olanı uygulamalı.
+
+    Canlı kanıt (2026-07-30): gemma-4-31b-it'in rpd'si 14.400 ve rpm'i 30, ama
+    tpm'i 16.000. rpm'e bakan throttle 2sn aralıkla gider; ~7K'lık bir cleaning
+    çağrısında bu dakikada ~30 çağrı = 210K token demek ve koşu 7. çağrıda 429
+    yedi. Doğru aralık 60*7000/16000 = 26,25sn.
+    """
+    assert Throttle.interval(rpm=30, tpm=16_000, est_tokens=7_000) == pytest.approx(26.25)
+    # TPM gevşekse rpm bağlar (gemini-3.6-flash: 250K tpm, 5 rpm -> 12sn)
+    assert Throttle.interval(rpm=5, tpm=250_000, est_tokens=7_000) == pytest.approx(12.0)
+    # tpm bildirilmemişse davranış eskisi gibi: yalnız rpm
+    assert Throttle.interval(rpm=30, tpm=None, est_tokens=7_000) == pytest.approx(2.0)
+
+
+def test_throttle_waits_the_token_interval_not_the_request_interval() -> None:
+    """`acquire` gerçekten TPM aralığı kadar bekler (yalnız hesaplamakla kalmaz)."""
+    waited: list[float] = []
+    now = {"t": 0.0}
+    clock = Throttle(
+        now=lambda: now["t"], sleep=lambda s: waited.append(s), on_wait=lambda _p, _s: None
+    )
+    clock.acquire("gemma", rpm=30, cap=None, tpm=16_000, est_tokens=7_000)
+    now["t"] = 2.0  # rpm aralığı (2sn) doldu, tpm aralığı (26,25sn) dolmadı
+    clock.acquire("gemma", rpm=30, cap=None, tpm=16_000, est_tokens=7_000)
+
+    assert waited == [pytest.approx(24.25)]
+
+
+def test_throttle_estimate_prefers_the_larger_of_table_and_observation() -> None:
+    """Tahmin tablosu ESKİ bir koşudan; gerçek maliyet büyürse throttle onu almalı.
+
+    Tablo (TASK_TOKEN_ESTIMATE) prompt değişmeden önce ölçüldü. Prompt büyüyünce
+    tabloya sadık kalan bir throttle gerçekte harcanandan az bekler ve 429 yer.
+    """
+    clock = Throttle(now=lambda: 0.0, sleep=lambda _s: None)
+    assert clock.estimate("cleaning") == bench.TASK_TOKEN_ESTIMATE["cleaning"]
+
+    clock.observe("cleaning", bench.TASK_TOKEN_ESTIMATE["cleaning"] + 5_000)
+    assert clock.estimate("cleaning") == bench.TASK_TOKEN_ESTIMATE["cleaning"] + 5_000
+
+    clock.observe("cleaning", 10)  # küçük gözlem tahmini DÜŞÜRMEZ
+    assert clock.estimate("cleaning") == bench.TASK_TOKEN_ESTIMATE["cleaning"] + 5_000
 
 
 def test_read_done_skips_completed_results(tmp_path) -> None:
@@ -1471,3 +1596,754 @@ def test_require_cache_disabled_refuses_to_run_with_cache_on(monkeypatch) -> Non
 
     monkeypatch.setenv("PARETO_LLM_CACHE", "0")
     require_cache_disabled()  # patlamamalı
+
+
+# --------------------------------------------------------------------------- #
+# Kota günü, kota uzantısı (fallback_id) ve devre kesici
+# --------------------------------------------------------------------------- #
+def _flash_pair() -> list[dict[str, Any]]:
+    """Sevk edilen kontrol grubu çifti: 3.6-flash + kota uzantısı 3.5-flash."""
+    return by_priority(
+        [m for m in load_models() if m["id"] in {"gemini-3.6-flash", "gemini-3.5-flash"}]
+    )
+
+
+def _run_days(
+    monkeypatch,
+    out_dir: Path,
+    days: list[str],
+    *,
+    models: list[dict[str, Any]] | None = None,
+    dead_ids: frozenset[str] = frozenset(),
+    repeats: int = 3,
+) -> tuple[list[int], list[dict[str, Any]]]:
+    """Aynı `--out` ile verilen takvim günlerinde run_matrix koşar (ağ yok).
+
+    `_call_and_score` taklit edilir: ölçülen şey puanlayıcı değil, KOTA/RESUME
+    kararları — gerçek çağrı yapmak bu kararları gizlerdi.
+
+    `repeats` bilerek `bench.DEFAULT_REPEATS` DEĞİL: buradaki testlerin konusu gün
+    geçişi ve kota uzantısı, yani matrisin bir günlük kotayı AŞMASI gerekiyor.
+    Sevk varsayılanı (2) 16 vakayla 32 çağrı eder ve flash çiftinin birleşik
+    40/gün kotasına tek günde sığar — o zaman gün geçişi hiç tetiklenmez ve bu
+    testler sessizce hiçbir şey ölçmez hale gelir.
+    """
+    models = models if models is not None else _flash_pair()
+    clock = {"day": days[0]}
+    monkeypatch.setattr(bench, "local_date", lambda: clock["day"])
+
+    def fake_call(model, task, case, *, rid, runner, extra, served=None):
+        served = served or model
+        failed = model["id"] in dead_ids
+        return {
+            "result_id": rid,
+            "model": bench.model_key(model),
+            "provider": model["provider"],
+            "model_id": model["id"],
+            "served_by": served["id"],
+            "date": bench.local_date(),
+            "task": task,
+            "case_id": case["case_id"],
+            "schema_ok": not failed,
+            "validator_passed": not failed,
+            "error": "timeout" if failed else None,
+            "scores": None if failed else {},
+            "latency_s": 0.1,
+            "requests": 1,
+            **extra,
+        }
+
+    monkeypatch.setattr(bench, "_call_and_score", fake_call)
+    fresh: list[int] = []
+    for day in days:
+        clock["day"] = day
+        throttle = Throttle(now=lambda: 0.0, sleep=lambda _s: None, on_wait=lambda _p, _s: None)
+        fresh.append(len(run_matrix(models, bench.TASKS, repeats, out_dir, throttle)))
+    return fresh, read_rows(out_dir / "results.jsonl")
+
+
+def test_daily_quota_resumes_the_next_day_instead_of_stalling(monkeypatch, tmp_path) -> None:
+    """Günlük kota ertesi gün YENİLENİR; koşu kaldığı yerden devam etmeli.
+
+    Bu davranış kırıldığında koşu ilk günden sonra sessizce 0 çağrı yapıyor ve
+    `report.md` yarım bir matrisi final okuma gibi gösteriyordu — kota sayacı
+    dünkü çağrıları bugünün tavanından düştüğü için (bkz. seed_from_prior).
+    Testin asıl iddiası: Gün 1'de yeni çağrı sayısı SIFIR OLMAMALI.
+    """
+    fresh, rows = _run_days(monkeypatch, tmp_path, ["2026-07-30", "2026-07-31"])
+
+    assert fresh[1] > 0, "ertesi gün hiç çağrı yapılmadı: günlük kota yenilenmemiş sayılıyor"
+    expected = sum(len(load_gold(t)) for t in bench.TASKS) * 3
+    assert len(rows) == expected
+    assert len({r["result_id"] for r in rows}) == expected, "aynı çağrı iki kez kaydedilmiş"
+
+
+def test_same_day_rerun_does_not_spend_the_quota_twice(monkeypatch, tmp_path) -> None:
+    """Aynı gün ikinci koşu yeni çağrı YAPMAMALI.
+
+    Çökme sonrası yeniden başlatma sık: bugünün çağrıları bugünün kotasından
+    gitti, tekrar sayılmazsa sağlayıcıdan gerçek 429 gelir ve o hatalar
+    results.jsonl'e model kusuru gibi yazılır.
+    """
+    fresh, _rows = _run_days(monkeypatch, tmp_path, ["2026-07-30", "2026-07-30"])
+
+    assert fresh[0] > 0
+    assert fresh[1] == 0
+
+
+def test_case_repeats_never_split_across_two_endpoints(monkeypatch, tmp_path) -> None:
+    """Bir vakanın TÜM tekrarları aynı uçtan gitmeli.
+
+    `repeats` en iç döngü olduğu için kota sınırı vaka ortasına düşebilir. Düşerse
+    aynı vakanın tekrarları iki farklı modele dağılır ve `answer_consistency`
+    model-İÇİ tutarlılık değil iki-model-uyuşması ölçmeye başlar — metrik sessizce
+    başka bir şeyi ölçer.
+    """
+    _fresh, rows = _run_days(monkeypatch, tmp_path, ["2026-07-30", "2026-07-31"])
+
+    endpoints: dict[tuple[str, str, str], set[str]] = {}
+    for row in rows:
+        key = (row["model"], row["task"], row["case_id"])
+        endpoints.setdefault(key, set()).add(row["served_by"])
+    split = {k: v for k, v in endpoints.items() if len(v) > 1}
+
+    assert not split, f"vaka ortasında uç değişmiş: {split}"
+
+
+def test_quota_extension_rows_keep_the_primary_identity(monkeypatch, tmp_path) -> None:
+    """Kota uzantısından gelen satırlar BİRİNCİL modelin başlığı altında toplanır.
+
+    Amaç kotayı genişletmek, iki model ölçmek değil (models.json: fallback_id).
+    Kimlik uzantıya kayarsa kontrol grubunun n'i ikiye bölünür ve rapor iki yarım
+    tablo gösterir. `served_by` ise kaybolmamalı: rapor hangi satırın nereden
+    geldiğini söyleyebilmek zorunda (bkz. _served_by_lines).
+    """
+    _fresh, rows = _run_days(monkeypatch, tmp_path, ["2026-07-30", "2026-07-31"])
+
+    assert {r["model"] for r in rows} == {"google/gemini-3.6-flash"}
+    assert {r["served_by"] for r in rows} == {"gemini-3.6-flash", "gemini-3.5-flash"}
+    assert "gemini-3.5-flash" in "\n".join(bench._served_by_lines(rows))
+
+
+def test_fallback_only_model_is_never_its_own_subject(monkeypatch, tmp_path) -> None:
+    """`fallback_only` model kendi başına ÖLÇÜLMEZ.
+
+    Ölçülürse kendi 48 çağrısını ister; kazanılan kota kadar iş eklendiği için
+    koşu süresi hiç kısalmaz — kota uzantısının tüm amacı boşa gider.
+    """
+    _fresh, rows = _run_days(monkeypatch, tmp_path, ["2026-07-30", "2026-07-31"])
+
+    assert not [r for r in rows if r["model"] == "google/gemini-3.5-flash"]
+
+
+def test_schema_retries_are_charged_to_the_quota_pool(monkeypatch, tmp_path) -> None:
+    """Şema retry'ı sağlayıcıya AYRI bir istek gider; tavandan düşmezse kota aşılır.
+
+    `acquire` hücre başına bir kez çağrılıyor, ama pydantic-ai'nin retry'ı modele
+    yeni bir istek yolluyor ve sağlayıcının sayacından düşüyor. Fark işlenmezse
+    koşucu 8 hakkı kaldığını sanırken sağlayıcı 429 döndürür ve o hatalar
+    results.jsonl'e MODEL KUSURU gibi yazılır. Ölçülen sevk matrisinde çarpan
+    bugün 1.00, ama bütçe şansa değil doğruya dayanmalı.
+    """
+    model = {"id": "iki-istekli", "provider": "google", "rpm": None, "rpd": 8, "priority": "high"}
+
+    def fake_call(m, task, case, *, rid, runner, extra, served=None):
+        return {
+            "result_id": rid,
+            "model": bench.model_key(m),
+            "provider": m["provider"],
+            "model_id": m["id"],
+            "served_by": (served or m)["id"],
+            "date": bench.local_date(),
+            "task": task,
+            "case_id": case["case_id"],
+            "error": None,
+            "scores": {},
+            "latency_s": 0.1,
+            "requests": 2,  # 1 asıl + 1 şema retry
+            **extra,
+        }
+
+    monkeypatch.setattr(bench, "_call_and_score", fake_call)
+    throttle = Throttle(now=lambda: 0.0, sleep=lambda _s: None, on_wait=lambda _p, _s: None)
+    rows = run_matrix([model], ("narrative",), 2, tmp_path, throttle)
+
+    # 4 vaka x 2 tekrar = 8 hücre isterdi; her hücre 2 istek yaktığı için tavan
+    # (rpd 8) yarısında dolar.
+    assert len(rows) == 4
+    assert throttle.used(bench.quota_pool(model)) == 8
+
+
+def test_ship_matrix_keeps_the_quota_extension_of_a_shipped_model() -> None:
+    """`--ship` uzantıyı da almalı, yoksa kota tavanı yarı görünür.
+
+    `gemini-3.5-flash` `fallback_only`: kendi satırlarını üretmez ama tavanı
+    birincilin havuzuna eklenir (bkz. plan_lines). Listeden düşerse `--dry-run`
+    gemini havuzunu 40 değil 20 sanar ve teslim matrisi sığmıyor gibi görünür.
+    """
+    shipped = bench.ship_matrix(load_models())
+    ids = {m["id"] for m in shipped}
+
+    assert {"gemini-3.6-flash", "gemma-4-31b-it", "thinkingmachines/inkling"} <= ids
+    assert "gemini-3.5-flash" in ids, "kota uzantısı düşmüş"
+    assert all(m.get("ship") or m.get("fallback_only") for m in shipped)
+
+
+def test_ship_matrix_calls_fit_one_day_of_the_narrowest_pool() -> None:
+    """Teslim matrisi TEK GÜNDE bitmeli: sevk edilen ayarlarla en dar havuz 1 gün.
+
+    Bu testin varlık sebebi bir kaza: tekrar sayısı ya da vaka sayısı büyürse
+    (16x3=48 > 40) koşu sessizce ikinci güne taşar ve "tek çalıştırmada sonuç"
+    vaadi ölür. Sayı değil KOŞUL bağlanıyor.
+    """
+    shipped = bench.ship_matrix(load_models())
+    per_model = sum(len(load_gold(t)) for t in bench.TASKS) * bench.DEFAULT_REPEATS
+
+    for model in shipped:
+        if model.get("fallback_only"):
+            continue  # kendi çağrısı yok; tavanı aşağıda birincile eklenir
+        cap = quota_cap(model)
+        extender = next(
+            (m for m in shipped if m["id"] == str(model.get("fallback_id") or "")), None
+        )
+        extra_cap = quota_cap(extender) if extender is not None else None
+        if cap is not None and extra_cap is not None:
+            cap += extra_cap
+        assert cap is None or per_model <= cap, (
+            f"{model['id']}: {per_model} çağrı {cap} tavanına sığmıyor — "
+            "koşu ikinci güne taşar ve 'tek çalıştırmada sonuç' vaadi ölür"
+        )
+
+
+def test_plan_lines_minutes_reflect_the_token_limit() -> None:
+    """Dakika sütunu TPM'i görmeli; görmezse --dry-run throttle'ı doğrulayamaz.
+
+    Gün sütunu gemma'da her hâlükârda 1 çıkar (rpd 14.400), yani TPM throttle'ının
+    olup olmadığını ayırt etmez. Süre tahmini token aralığından gelmezse
+    `--dry-run` "her şey yolunda" der ve koşu 429'a çarpar.
+    """
+    gemma = [m for m in load_models() if m["id"] == "gemma-4-31b-it"]
+    lines = plan_lines(gemma, ("cleaning",), 2)
+    pool_row = next(line for line in lines if line.startswith("google/gemma-4-31b-it"))
+    minutes = int(pool_row.split()[-1])
+
+    calls = len(load_gold("cleaning")) * 2
+    by_tpm = calls * Throttle.interval(rpm=30, tpm=16_000, est_tokens=7_000) / 60.0
+    by_rpm = calls * (60.0 / 30) / 60.0
+
+    assert minutes == round(by_tpm), "dakika sütunu token aralığından gelmiyor"
+    assert round(by_rpm) == 0, "rpm'e göre hesaplansaydı 0 dk çıkardı — test ayırt etmiyor"
+
+
+def test_circuit_breaker_skips_the_rest_of_a_dead_model(monkeypatch, tmp_path) -> None:
+    """Ölü uç her görevde en fazla `CIRCUIT_BREAK_ERRORS` çağrı harcar; sağlamlar tam koşar.
+
+    NVIDIA'nın ~1.000 kredisi tek seferlik ve yenilenmiyor. Ölü bir uç devre kesici
+    olmadan 48 çağrı boyunca
+    kredi ve saat yakar. Eleme görev bazlı olduğu için tavan 2 değil 2×görev sayısı
+    — karşılığında modelin hangi görevde boğulduğunu öğreniyoruz.
+    """
+    dead = "nvidia/nemotron-3-ultra-550b-a55b"
+    nvidia = by_priority([m for m in load_models() if m["provider"] == "nvidia"])
+    _fresh, rows = _run_days(
+        monkeypatch, tmp_path, ["2026-07-30"], models=nvidia, dead_ids=frozenset({dead})
+    )
+
+    per_model: dict[str, int] = {}
+    for row in rows:
+        per_model[row["model_id"]] = per_model.get(row["model_id"], 0) + 1
+    full = sum(len(load_gold(t)) for t in bench.TASKS) * 3
+
+    assert per_model[dead] == bench.CIRCUIT_BREAK_ERRORS * len(bench.TASKS)
+    assert [r for r in rows if r.get("circuit_broken")], "eleme rapora iz bırakmamış"
+    assert dead in "\n".join(bench._circuit_break_lines(rows))
+    for model in nvidia:
+        if model["id"] != dead:
+            assert per_model[model["id"]] == full, "sağlam model de kesilmiş"
+
+
+def test_seed_counts_prior_days_only_for_lifetime_credit_pools() -> None:
+    """Dünkü NVIDIA kredisi geri gelmez, dünkü Gemini isteği bugünün 20'sinden düşmez.
+
+    `quota_cap()` ikisini de tek sayıya indiriyor; ayrım yapılmazsa günlük havuzlar
+    ömür-boyu tavan gibi davranır ve çok günlü koşu ilk günden sonra durur.
+    """
+    daily = {"id": "d", "provider": "google", "rpm": 5, "rpd": 20}
+    lifetime = {"id": "l", "provider": "nvidia", "pool": "nvidia:hesap", "rpm": 40, "budget": 1000}
+    prior = [
+        {"model_id": "d", "served_by": "d", "date": "2026-07-29"},
+        {"model_id": "d", "served_by": "d", "date": "2026-07-30"},
+        {"model_id": "l", "served_by": "l", "date": "2026-07-29"},
+    ]
+    throttle = Throttle(now=lambda: 0.0, sleep=lambda _s: None)
+
+    bench.seed_from_prior(throttle, prior, {"d": daily, "l": lifetime}, "2026-07-30")
+
+    assert throttle.used(quota_pool(daily)) == 1
+    assert throttle.used(quota_pool(lifetime)) == 1
+
+
+def test_case_server_leaves_a_half_done_case_to_its_original_endpoint() -> None:
+    """Yarım kalmış vaka fallback'e KAYDIRILMAZ; ertesi güne bırakılır.
+
+    Kaydırılırsa vaka saflığı günler arasında kırılır (bkz.
+    test_case_repeats_never_split_across_two_endpoints) — aynı vakanın dünkü
+    tekrarları bir uçtan, bugünkü tekrarları başka uçtan gelir.
+    """
+    primary = {"id": "p", "provider": "google", "rpm": None, "rpd": 20, "fallback_id": "f"}
+    extender = {"id": "f", "provider": "google", "rpm": None, "rpd": 20, "fallback_only": True}
+    lookup = {"p": primary, "f": extender}
+    throttle = Throttle(now=lambda: 0.0, sleep=lambda _s: None)
+    throttle.seed(quota_pool(primary), 19)  # birincilde 1 hak kaldı, vaka 3 istiyor
+
+    picked = bench.case_server(throttle, primary, needed=3, pinned_id=None, lookup=lookup)
+    pinned = bench.case_server(throttle, primary, needed=3, pinned_id="p", lookup=lookup)
+
+    assert picked is not None and picked["id"] == "f"
+    assert pinned is None
+
+
+def test_case_server_reserves_a_retry_margin_before_filling_a_pool() -> None:
+    """Vaka SIFIR payla onaylanmaz: retry `acquire`'dan sonra gelir, tavanı taşırır.
+
+    Ölçülen kaza (simülasyon, 2026-07-31): gemini-3.6-flash tavan 20, vaka başına
+    2 çağrı -> 10. vaka tam `remaining == 2` ile onaylanıyordu. O vakanın ilk
+    hücresinde tek bir şema retry'ı sayacı 20'ye çıkarıyor ve ikinci hücrenin
+    `acquire`'ı QuotaExhausted atıyordu. Pay, vakayı bir erken devrettirir.
+    """
+    primary = {"id": "p", "provider": "google", "rpm": None, "rpd": 20, "fallback_id": "f"}
+    extender = {"id": "f", "provider": "google", "rpm": None, "rpd": 20, "fallback_only": True}
+    lookup = {"p": primary, "f": extender}
+    throttle = Throttle(now=lambda: 0.0, sleep=lambda _s: None)
+    # Birincide tam `needed` kadar hak var ama pay yok: paysız seçim burayı
+    # onaylardı ve tek retry koşuyu düşürürdü.
+    throttle.seed(quota_pool(primary), 20 - 2)
+
+    picked = bench.case_server(throttle, primary, needed=2, pinned_id=None, lookup=lookup)
+
+    assert picked is not None and picked["id"] == "f", (
+        "birincide pay kalmadı; vaka uzantıya devredilmeliydi"
+    )
+
+
+def test_case_server_spends_the_last_calls_when_no_endpoint_has_margin() -> None:
+    """Pay ZORUNLU değil tercihli: hiçbir uçta pay yoksa havuzun artığı kullanılır.
+
+    Payı zorunlu kılmak dar havuzlarda her koşuda `RETRY_MARGIN` kadar hakkı
+    kalıcı olarak çöpe atardı (gemini'de gün başına 3 çağrı). Vaka ortasında
+    dolma riskini `run_matrix`'teki QuotaExhausted yakalaması karşılıyor —
+    bkz. test_mid_case_quota_exhaustion_does_not_kill_the_whole_run.
+    """
+    solo = {"id": "p", "provider": "google", "rpm": None, "rpd": 20}
+    throttle = Throttle(now=lambda: 0.0, sleep=lambda _s: None)
+    throttle.seed(quota_pool(solo), 20 - 2)  # tam 2 hak: pay yok, uzantı da yok
+
+    picked = bench.case_server(throttle, solo, needed=2, pinned_id=None, lookup={"p": solo})
+
+    assert picked is not None and picked["id"] == "p"
+    assert bench.case_server(throttle, solo, needed=3, pinned_id=None, lookup={"p": solo}) is None
+
+
+def test_mid_case_quota_exhaustion_does_not_kill_the_whole_run(monkeypatch, tmp_path) -> None:
+    """Vaka ortasında dolan kota koşuyu ÖLDÜRMEZ; sıradaki model koşmaya devam eder.
+
+    Ölçülen kaza (simülasyon, 2026-07-31): teslim koşusunda gemini'nin 19.
+    hücresindeki tek retry yakalanmamış QuotaExhausted üretiyor, `main()` bunu
+    yakalamadığı için gemma ve inkling HİÇ koşmadan traceback'e düşülüyordu —
+    yani tek bir retry, üç modelin tamamının ölçümünü siliyordu. Doğru davranış
+    sağlayıcının 429'uyla aynı: o modeli durdur, diğerleri sürsün.
+    """
+    # Tavan 2 = tam bir vaka. İlk hücrenin retry'ı sayacı 2'ye çıkarır, İKİNCİ
+    # hücrenin `acquire`'ı vaka ortasında QuotaExhausted atar — `case_server`'ın
+    # None döndüğü zarif yol DEĞİL, tam olarak yakalanması gereken yol.
+    dar = {"id": "dar", "provider": "google", "rpm": None, "rpd": 2, "priority": "high"}
+    sonraki = {"id": "sonraki", "provider": "groq", "rpm": None, "rpd": 100, "priority": "normal"}
+
+    def fake_call(m, task, case, *, rid, runner, extra, served=None):
+        return {
+            "result_id": rid,
+            "model": bench.model_key(m),
+            "provider": m["provider"],
+            "model_id": m["id"],
+            "served_by": (served or m)["id"],
+            "date": bench.local_date(),
+            "task": task,
+            "case_id": case["case_id"],
+            "error": None,
+            "scores": {},
+            "latency_s": 0.1,
+            "requests": 2 if m["id"] == "dar" else 1,
+            **extra,
+        }
+
+    monkeypatch.setattr(bench, "_call_and_score", fake_call)
+    throttle = Throttle(now=lambda: 0.0, sleep=lambda _s: None, on_wait=lambda _p, _s: None)
+
+    rows = run_matrix([dar, sonraki], ("narrative",), 2, tmp_path, throttle)
+
+    assert len([r for r in rows if r["model_id"] == "dar"]) == 1, (
+        "dar model kota dolmadan önceki tek satırını yazmalıydı"
+    )
+    assert len([r for r in rows if r["model_id"] == "sonraki"]) == 8, (  # 4 vaka x 2 tekrar
+        "dar modelin kotası vaka ortasında dolunca koşu ölmüş — sıradaki model hiç koşmadı"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Hata politikası: neyi ölçüm sayıyoruz, neyi elemeye sayıyoruz
+# --------------------------------------------------------------------------- #
+def test_fast_provider_errors_do_not_eliminate_the_model() -> None:
+    """429/503 sağlayıcı kaynaklı; model masum ve maliyeti ~0,5sn.
+
+    Canlı kanıt (2026-07-30): gemma-4-31b-it 3 başarılı çağrıdan sonra 429 yedi,
+    dakikalar sonra aynı uç HTTP 200 döndü. Bunları elemeye saymak sağlam bir adayı
+    ops sebebiyle listeden düşürür — classify_error'ın 'model masum' ayrımının
+    devre kesiciye de uygulanması gerekiyor.
+    """
+    for kind in ("kota", "sunucu", "yetki", "anahtar_yok", "model_yok"):
+        assert bench.counts_toward_elimination(kind) is False, kind
+
+
+def test_schema_failures_do_not_eliminate_the_model() -> None:
+    """Şema/doğrulayıcı hataları benchmark'ın ÖLÇTÜĞÜ şey.
+
+    Eleyerek susturursak benchmark kendi sorusunu ('bu model şemayı tutturuyor mu')
+    cevaplayamaz: 2 ardışık şema hatası tam olarak kaydedilmesi gereken sinyal.
+    """
+    for kind in ("sema_tutmadi", "dogrulayici_reddetti"):
+        assert bench.counts_toward_elimination(kind) is False, kind
+    assert bench.counts_toward_elimination("hata:TimeoutError") is True
+
+
+def test_provider_errors_are_retried_but_measurements_are_not() -> None:
+    """Geçici 429/503 matris hücresini kalıcı olarak zehirlememeli.
+
+    Hücre 'yapıldı' sayılırsa o model o vakayı BİR DAHA hiç koşmaz ve rapor eksik
+    n'i sessizce final okuma gibi gösterir. Modelin kendi kusurları ise tekrar
+    DENENMEMELİ — ikinci çekilişte geçmesi ölçümü yumuşatır.
+    """
+    retryable: tuple[str | None, ...] = ("kota", "sunucu", "yetki", "anahtar_yok", "model_yok")
+    measured: tuple[str | None, ...] = (
+        None,
+        "sema_tutmadi",
+        "dogrulayici_reddetti",
+        "hata:TimeoutError",
+    )
+    for kind in retryable:
+        assert bench.is_retryable_error(kind) is True, kind
+    for kind in measured:
+        assert bench.is_retryable_error(kind) is False, kind
+
+
+def test_slow_failures_count_even_when_the_class_is_infra() -> None:
+    """504 @ 181sn 'altyapı' etiketli ama en pahalı sınıf: 48 çağrı × 180sn ≈ 2,4 saat.
+
+    Devre kesicinin ölçütü hata etiketi değil MALİYET olmak zorunda; yoksa yavaş
+    başarısızlık veren bir uç etiketinin arkasına saklanıp saatleri yakar.
+    """
+    assert bench.elimination_signal("sunucu", 181.0) is True
+    assert bench.elimination_signal("sunucu", 0.5) is False
+
+
+def test_slow_schema_failures_never_count_no_matter_how_long_they_take() -> None:
+    """Yavaş bir ŞEMA hatası elemeye sayılmaz — yavaşlığın sebebi ölçülen kusurun kendisi.
+
+    Canlı kanıt (2026-07-31): gpt-oss-120b `cleaning`'de 9/9 `sema_tutmadi` verdi,
+    bazıları 72-90sn sürdü çünkü pydantic-ai şemayı yeniden denedi
+    (`requests=2..4`). Bunları "pahalı hata" sayan ilk sürüm, "şema hataları
+    ölçümdür" kuralını arka kapıdan iptal edip görevi haksız yere kesti.
+    """
+    for latency in (0.5, 72.5, 90.0, 600.0):
+        assert bench.elimination_signal("sema_tutmadi", latency) is False, latency
+        assert bench.elimination_signal("dogrulayici_reddetti", latency) is False, latency
+
+
+def test_transport_errors_count_without_a_latency_gate() -> None:
+    """`hata:*` sınıfında gecikme kapısı YOK: hızlı başarısızlık da kredi yakar.
+
+    `nvidia:hesap` ömür-boyu 1.000 kredi. Hızlı hata veren bir uçta 2 çağrıda
+    durmak ile 48 çağrıda durmak 46 kredi fark eder — maliyet yalnız süre değil.
+    """
+    assert bench.elimination_signal("hata:TimeoutError", 0.1) is True
+    assert bench.elimination_signal("hata:ConnectError", 900.0) is True
+
+
+def test_streak_resets_when_the_endpoint_produced_a_model_response() -> None:
+    """Sıfırlama ölçütü: uç GERÇEKTEN bir cevap üretti mi.
+
+    Başarı ve ölçüm hatası ikisi de üretti → sayaç sıfırlanır. Sıfırlamayı atlamak
+    "ardışık" kelimesini yalan yapıyordu: araya 3 ölçüm hatası girmiş iki yavaş
+    hata "2 ardışık" sayılıp gpt-oss-120b'nin cleaning görevini kesti (2026-07-31).
+    Hızlı altyapı hatası ne sayar ne sıfırlar — iki timeout arasındaki 429 seriyi
+    bozmamalı.
+    """
+    assert bench.resets_streak(None) is True
+    assert bench.resets_streak("sema_tutmadi") is True
+    assert bench.resets_streak("dogrulayici_reddetti") is True
+    assert bench.resets_streak("kota") is False
+    assert bench.resets_streak("hata:TimeoutError") is False
+
+
+def test_interleaved_measurement_errors_prevent_a_false_elimination(monkeypatch, tmp_path) -> None:
+    """gpt-oss-120b senaryosunun uçtan uca hali: kesilmemeli.
+
+    Sıra: yavaş şema hatası (72sn) → 3 ölçüm hatası → yavaş şema hatası (90sn).
+    Eski mantık bunu "2 ardışık pahalı hata" sayıp görevi kesiyordu; hiçbiri
+    altyapı hatası olmadığı için hiçbiri sayılmamalı ve görev tam koşmalı.
+    """
+    model = {"id": "openai/gpt-oss-120b", "provider": "groq", "rpm": None, "rpd": None}
+    # (hata sınıfı, gecikme): iki yavaş SAYAN hatanın arasına ölçüm hatası giriyor.
+    # Doğru davranış: ölçüm hatası sayacı sıfırlar, ikinci 504 "2. ardışık" olmaz.
+    script = [
+        ("sunucu", 181.0),  # sayar   -> streak 1
+        ("sema_tutmadi", 72.5),  # sıfırlar -> streak 0 (uç cevap üretti)
+        ("sema_tutmadi", 90.0),  # sıfırlar -> streak 0
+        ("sunucu", 181.0),  # sayar   -> streak 1, KESMEMELİ
+    ]
+    outcomes = iter(script + [(None, 30.0)] * 50)
+
+    def fake_call(m, task, case, *, rid, runner, extra, served=None):
+        kind, latency = next(outcomes)
+        return {
+            "result_id": rid,
+            "model": bench.model_key(m),
+            "provider": m["provider"],
+            "model_id": m["id"],
+            "served_by": (served or m)["id"],
+            "date": bench.local_date(),
+            "task": task,
+            "case_id": case["case_id"],
+            "schema_ok": kind is None,
+            "validator_passed": kind is None,
+            "error": kind,
+            "scores": {} if kind is None else None,
+            "latency_s": latency,
+            "requests": 2,
+            **extra,
+        }
+
+    monkeypatch.setattr(bench, "_call_and_score", fake_call)
+    throttle = Throttle(now=lambda: 0.0, sleep=lambda _s: None, on_wait=lambda _p, _s: None)
+    rows = run_matrix([model], ("cleaning",), 3, tmp_path, throttle)
+
+    assert not [r for r in rows if r.get("circuit_broken")], "görev haksız yere kesilmiş"
+    # `sunucu` satırları retry edilebilir olduğu için toplam satır sayısı 12'yi aşabilir;
+    # asıl iddia görevin KESİLMEMESİ, yani 4 vakanın hepsine dokunulması.
+    assert {r["case_id"] for r in rows} == {c["case_id"] for c in load_gold("cleaning")}
+
+
+def test_circuit_breaker_is_scoped_to_one_task_not_the_whole_model(monkeypatch, tmp_path) -> None:
+    """Bir görevde boğulan model diğer görevlerde ölçülmeye devam etmeli.
+
+    gemma-4-31b-it `cleaning/medicaid`'i 3/3 geçip `cleaning/card_krueger`'da 504
+    aldı. Modeli tümden elemek onun estimand/spec_menu/narrative performansını da
+    silerdi — oysa 'şu görevde boğuluyor' rapora girmesi gereken bulgu.
+    """
+    model = {"id": "gemma-4-31b-it", "provider": "google", "rpm": None, "rpd": None}
+    slow_task = "cleaning"
+
+    def fake_call(m, task, case, *, rid, runner, extra, served=None):
+        failed = task == slow_task
+        return {
+            "result_id": rid,
+            "model": bench.model_key(m),
+            "provider": m["provider"],
+            "model_id": m["id"],
+            "served_by": (served or m)["id"],
+            "date": bench.local_date(),
+            "task": task,
+            "case_id": case["case_id"],
+            "schema_ok": not failed,
+            "validator_passed": not failed,
+            "error": "sunucu" if failed else None,
+            "scores": None if failed else {},
+            "latency_s": 181.0 if failed else 1.0,
+            "requests": 1,
+            **extra,
+        }
+
+    monkeypatch.setattr(bench, "_call_and_score", fake_call)
+    throttle = Throttle(now=lambda: 0.0, sleep=lambda _s: None, on_wait=lambda _p, _s: None)
+    rows = run_matrix([model], bench.TASKS, 1, tmp_path, throttle)
+
+    per_task: dict[str, int] = {}
+    for row in rows:
+        per_task[row["task"]] = per_task.get(row["task"], 0) + 1
+
+    assert per_task[slow_task] == bench.CIRCUIT_BREAK_ERRORS
+    for task in bench.TASKS:
+        if task != slow_task:
+            assert per_task[task] == len(load_gold(task)), f"{task} de kesilmiş"
+
+
+def test_report_counts_a_retried_cell_once(tmp_path) -> None:
+    """Tekrar denenen hücrenin iki satırı `n`'i şişirmemeli.
+
+    429 yemiş bir çağrı + sonraki koşudaki başarılı çağrı aynı `result_id`'yi
+    taşır. İkisini de saymak başarı oranını olduğundan düşük gösterir: sağlayıcı
+    kaynaklı bir ret, modelin başarısızlığı gibi okunur.
+    """
+    rid = "google/x|cleaning|medicaid|0"
+    base: dict[str, Any] = {
+        "model": "google/x",
+        "task": "cleaning",
+        "case_id": "medicaid",
+        "result_id": rid,
+    }
+    rows: list[dict[str, Any]] = [
+        {**base, "error": "kota", "schema_ok": None, "validator_passed": False, "scores": None},
+        {**base, "error": None, "schema_ok": True, "validator_passed": True, "scores": {}},
+    ]
+
+    assert len(bench.latest_per_cell(rows)) == 1
+    assert bench.latest_per_cell(rows)[0]["error"] is None
+    assert "| 1 | 1/1 |" in build_report(rows, ("cleaning",))
+
+
+def test_unparseable_output_is_a_schema_failure_whatever_the_transport() -> None:
+    """Ayrıştırılamayan structured output ŞEMA kusurudur, taşıyıcısı ne olursa olsun.
+
+    Groq bunu HTTP 400 ile döndürüyor (canlı: gpt-oss-20b, 2026-07-31), pydantic-ai
+    retry tükenmesiyle. Ayırmazsak `hata:*` sınıfına düşüyor ve iki yanlış sonuç
+    doğuruyor: `schema_ok=True` (başarısızlık BAŞARI sayılır, birincil metrik bozulur)
+    ve elemeye koşulsuz sayılma (şema hatası transport gibi davranır).
+    """
+
+    class ModelHTTPError(RuntimeError):
+        pass
+
+    exc = ModelHTTPError(
+        "status_code: 400, model_name: openai/gpt-oss-20b, body: {'error': {'message': "
+        '"Parsing failed. The model generated output that could not be parsed. Please '
+        "adjust your prompt. See 'failed_generation' for more details.\", "
+        "'type': 'invalid_request_error'}}"
+    )
+    kind = classify_error(exc)
+
+    assert kind == "sema_tutmadi"
+    assert schema_verdict(kind) is False, "ayrıştırılamayan çıktı 'şema geçti' sayılamaz"
+    assert bench.elimination_signal(kind, 53.3) is False, "şema kusuru elemeye sayılmamalı"
+
+
+def test_real_infra_signals_still_win_over_parse_text() -> None:
+    """Gövdesinde 'parsing failed' geçen bir 429 yine `kota` sayılmalı.
+
+    Altyapı sinyali daha bağlayıcı bilgi: 429 gelmişse modelin çıktısı hiç
+    değerlendirilmedi. Yeni parse kontrolü bu sırayı bozmamalı.
+    """
+    exc = RuntimeError("status_code: 429, body: {'message': 'quota exceeded, parsing failed'}")
+
+    assert classify_error(exc) == "kota"
+
+
+# --------------------------------------------------------------------------- #
+# Koşu ortasında sınıflandırma düzeltildiğinde satırların onarımı
+# --------------------------------------------------------------------------- #
+def test_repair_rederives_class_and_drops_a_now_invalid_break_flag(tmp_path) -> None:
+    """Yanlış sınıfla yazılmış satır onarılır; geçersiz kalan eleme bayrağı kalkar.
+
+    Koşu sırasında `classify_error` düzeltilirse çalışan süreç eski sürümü yüklü
+    tutar, yani kalan satırlar eski sınıfla yazılır. `error_detail` ham mesajı
+    sakladığı için sınıf sonradan doğru türetilebilir — ama `circuit_broken`
+    bayrağı da düşmek zorunda: yeni sınıf elemeye saymıyorsa bayrak var olmayan
+    bir elemeyi raporlar.
+    """
+    from scripts.repair_error_classes import main as repair_main
+
+    path = tmp_path / "results.jsonl"
+    row = {
+        "result_id": "groq/x|spec_menu|castle|0",
+        "model": "groq/x",
+        "model_id": "x",
+        "task": "spec_menu",
+        "case_id": "castle",
+        "repeat": 0,
+        "error": "hata:ModelHTTPError",
+        "error_detail": "status_code: 400, body: {'code': 'output_parse_failed'}",
+        "schema_ok": True,
+        "latency_s": 61.6,
+        "circuit_broken": True,
+    }
+    path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    repair_main([str(path), "--apply"])
+    fixed = json.loads(path.read_text(encoding="utf-8").strip())
+
+    assert fixed["error"] == "sema_tutmadi"
+    assert fixed["schema_ok"] is False
+    assert "circuit_broken" not in fixed
+    assert fixed["reclassified"] is True
+
+
+def test_repair_keeps_a_still_valid_break_flag_and_is_idempotent(tmp_path) -> None:
+    """Yeni sınıf hâlâ elemeye sayıyorsa bayrak KORUNUR; ikinci koşu hiçbir şeyi değiştirmez.
+
+    İlk yazdığım sürüm bayrağı koşulsuz siliyordu — geçerli bir elemeyi de silerdi.
+    İdempotentlik ayrıca şart: onarım kazayla iki kez koşulabilir.
+    """
+    from scripts.repair_error_classes import main as repair_main
+
+    path = tmp_path / "results.jsonl"
+    row = {
+        "result_id": "nvidia/y|cleaning|castle|0",
+        "model": "nvidia/y",
+        "model_id": "y",
+        "task": "cleaning",
+        "case_id": "castle",
+        "repeat": 0,
+        "error": "hata:ModelHTTPError",
+        # 504 → `sunucu`, 181sn ile hâlâ pahalı: eleme geçerli kalır.
+        "error_detail": "status_code: 504, body: 'Deadline expired'",
+        "schema_ok": True,
+        "latency_s": 181.0,
+        "circuit_broken": True,
+    }
+    path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    repair_main([str(path), "--apply"])
+    first = path.read_text(encoding="utf-8")
+    fixed = json.loads(first.strip())
+
+    assert fixed["error"] == "sunucu"
+    assert fixed["circuit_broken"] is True, "geçerli eleme bayrağı silinmiş"
+
+    repair_main([str(path), "--apply"])
+    assert path.read_text(encoding="utf-8") == first, "onarım idempotent değil"
+
+
+def test_capacity_refusal_is_its_own_class_permanent_and_not_a_schema_pass() -> None:
+    """413 "Request too large" KALICI bir kapasite reddi: 429/503'ten farklı davranmalı.
+
+    Canlı örnek (2026-07-31): llama-3.1-8b-instant cleaning payload'unu kabul
+    etmiyor. Payload küçülmediği sürece her denemede aynı sonuç geliyor, yani:
+    - tekrar DENENMEZ (`kota`/`sunucu` gibi geçici değil; her koşuda 2 çağrı yakardı)
+    - koşulsuz elemeye SAYAR (gecikme kapısına takılsa 12 çağrının hepsi aynı 413'ü yer)
+    - `schema_ok=None` — model isteği hiç görmedi, şema hakkında kanıt yok
+    """
+    exc = RuntimeError(
+        "status_code: 413, body: {'error': {'message': 'Request too large for model "
+        "`llama-3.1-8b-instant`, please reduce'}}"
+    )
+    kind = classify_error(exc)
+
+    assert kind == "kapasite"
+    assert schema_verdict(kind) is None
+    assert bench.is_retryable_error(kind) is False, "kalıcı hata her koşuda tekrar denenmemeli"
+    assert bench.elimination_signal(kind, 5.5) is True, "hızlı da olsa koşulsuz saymalı"
+    assert bench.resets_streak(kind) is False
+
+
+def test_schema_verdict_defaults_to_no_evidence_for_unreached_models() -> None:
+    """Modele ULAŞILAMAMIŞ çağrılar "şema geçti" sayılamaz — varsayılan None olmalı.
+
+    Eski sürüm kara liste kullanıyordu (bilinmeyen her sınıf True), bu yüzden 413 ve
+    `hata:ConnectError` birincil metriği sessizce şişiriyordu. Beyaz liste, ileride
+    eklenecek sınıflarda da güvenli tarafta kalır.
+
+    `dogrulayici_reddetti` istisnası bilinçli: orada şema TUTTU, reddedilen içerik.
+    """
+    assert schema_verdict(None) is True
+    assert schema_verdict("sema_tutmadi") is False
+    assert schema_verdict("dogrulayici_reddetti") is True
+    for kind in ("kapasite", "kota", "sunucu", "yetki", "hata:ConnectError", "gelecek_sinif"):
+        assert schema_verdict(kind) is None, kind

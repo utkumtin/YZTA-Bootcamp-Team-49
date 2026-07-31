@@ -28,6 +28,57 @@ logger = logging.getLogger(__name__)
 
 HARD_CAP = SETTINGS.max_specifications  # sert tavan 24
 
+# JUDGE'a spesifikasyon bütçesini ANLATAN blok (generate_spec_menu promptu).
+#
+# NEDEN VAR: prompt eskiden HARD_CAP'ten hiç söz etmiyordu. Model 7 eksende
+# bolca aday seviye öneriyor, `expand_to_specs` bunların kartezyen çarpımını
+# alıyor ve tavanı aşınca fail-loud atıyor — yani kullanıcı JUDGE'ın menüsünü
+# onayladığında eğri yerine hata görüyordu. Benchmark'ta ölçüldü (2026-07-31,
+# runs/benchmark): 960-2160 spesifikasyonla reddedilen menüler; inkling 6/12,
+# llama-3.3-70b 6/12, nemotron-nano 6/12, gpt-oss-120b 8/12. Modelin kusuru
+# değil, söylenmemiş bir kısıt.
+#
+# NEDEN yalnız prompt, şema validator'ı DEĞİL: çarpımı kontrol eden bir pydantic
+# validator eklenirse pydantic-ai retry'a girer ve model geri bildirimle kendini
+# düzeltir. O zaman bu dikiş "açıkça bildirilmiş sert bir kısıta İLK denemede
+# uydu mu" ölçmeyi bırakır, "geri bildirimle düzelebiliyor mu" ölçmeye başlar.
+# Birincisi JUDGE seçiminde aradığımız talimat-uyumu ekseni. Kısıt burada
+# söylenir, `expand_to_specs` fail-loud kalır.
+#
+# Sayı HARD_CAP'ten gelir; literal yazılmamalı, yoksa SETTINGS.max_specifications
+# değişince prompt sessizce yalan söyler (tests/test_model_benchmark.py bunu bağlar).
+_SPEC_BUDGET_RULE = f"""SPECIFICATION BUDGET — HARD CONSTRAINT
+Your menu is not a list of options. It is expanded into a specification curve by
+taking the CARTESIAN PRODUCT across all 7 axes. Each axis contributes
+    n(axis) = number of DISTINCT levels = |{{baseline_level}} U candidate_levels|
+and the curve size is
+    n(control_set) x n(sample) x n(pre_period) x n(clustering)
+      x n(never_treated) x n(estimator) x n(weighting)
+This product MUST NOT exceed {HARD_CAP}. There is no silent truncation: a menu
+whose product exceeds {HARD_CAP} is rejected outright, and the user gets an error
+instead of a specification curve.
+
+Worked arithmetic:
+    every axis at 2 levels          = 2^7 = 128   -> far over budget, REJECTED
+    3 axes at 2 levels, 4 pinned    = 8           -> well inside budget
+    two axes at 2, one at 3, rest pinned = 12     -> inside budget
+An axis with an empty candidate_levels list is PINNED at its baseline and costs a
+factor of 1. Pinning is how you buy room for the axes that matter.
+
+How to spend the budget:
+1. PIN every axis you are not deliberately testing. Pinning is a positive claim,
+   not an omission: it says "this baseline is defensible and the alternatives are
+   not worth a fold of the curve". Name the alternative you rejected, and why, in
+   that axis's rationale.
+2. SPEND the budget on the 2-3 axes where THIS estimand is most fragile. For
+   panel/DiD designs that is usually control_set, estimator and clustering — but
+   let the estimand and the available columns decide, not habit.
+3. COMPUTE the product before you answer. If it exceeds {HARD_CAP}, drop candidate
+   levels from the least decision-relevant axis and recompute. Repeat until the
+   product is at or below {HARD_CAP}.
+4. Every axis still needs a baseline_level and a rationale, pinned or not.
+"""
+
 AxisName = Literal[
     "control_set",
     "sample",
@@ -239,6 +290,7 @@ def generate_spec_menu(
         "- estimator: 'OLS' or 'TWFE'\n"
         f"- weighting: '{DEFAULT_WEIGHT_COL}' (population-weighted default) or "
         "'none' for unweighted\n"
+        f"\n{_SPEC_BUDGET_RULE}"
     )
 
     agent = build_agent(
