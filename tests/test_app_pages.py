@@ -98,6 +98,52 @@ def _load_variance_panel(app: AppTest, results_path: Path) -> None:
     app.run()
 
 
+def _failed_results_file(tmp_path: Path) -> Path:
+    """Katsayı üretmemiş tek spesifikasyon: spec curve çizilemeyen durum."""
+    results = [
+        EstimationResult(
+            spec_id="s1",
+            estimator="OLS",
+            status="failed",
+            error="singular matrix",
+        ).model_dump()
+    ]
+    path = tmp_path / "results.json"
+    path.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def test_variance_panel_explains_missing_spec_curve(tmp_path: Path) -> None:
+    """Hiçbir spesifikasyon katsayı üretmediğinde spec curve bölümü tamamen
+    kayboluyordu; panel sanki o bölüm hiç yokmuş gibi görünüyordu.
+
+    Kırılganlık teşhisi ürünün ana iddiası, bu yüzden grafiğin YOKLUĞU da
+    açıklanmalı. Mesaj kaldırılırsa test düşer.
+    """
+    app = AppTest.from_file(PAGE_PATH, default_timeout=10)
+    _load_variance_panel(app, _failed_results_file(tmp_path))
+
+    assert not app.exception
+    assert any("spec curve çizilemiyor" in warning.value for warning in app.warning)
+
+
+def test_variance_panel_reports_unreadable_results_file(tmp_path: Path) -> None:
+    """Multiverse yarıda kesilirse results.json bozuk kalıyor ve sayfa ham
+    traceback'e düşüyordu.
+
+    Jüri demosunda görülebilecek en kötü hata yolu buydu; yönlendirici bir
+    mesaja bağlanması gerekiyor.
+    """
+    path = tmp_path / "results.json"
+    path.write_text('[{"spec_id": "s1", "estim', encoding="utf-8")
+
+    app = AppTest.from_file(PAGE_PATH, default_timeout=10)
+    _load_variance_panel(app, path)
+
+    assert not app.exception
+    assert any("Sonuç dosyası okunamadı" in error.value for error in app.error)
+
+
 def test_variance_panel_prompts_for_explicit_selection_when_columns_missing(tmp_path: Path) -> None:
     app = AppTest.from_file(PAGE_PATH, default_timeout=10)
     app.session_state["clean_df"] = _panel_missing_cohort_columns()

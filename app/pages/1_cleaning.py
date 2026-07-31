@@ -24,12 +24,12 @@ from pareto.cleaning.ledger import LedgerEntry, persist_ledger
 from pareto.cleaning.uploads import uploaded_file_identity
 from pareto.llm.cache import CannedModeCacheMissError
 from pareto.profiling import load_raw_file, profile_dataframe
-from pareto.streamlit_ui import render_clean_panel, render_compact_sidebar
+from pareto.streamlit_ui import render_clean_panel, render_compact_sidebar, render_page_title
 
 with st.sidebar:
     render_compact_sidebar()
 
-st.title("1 - Temizleme")
+render_page_title("broom", "Temizleme")
 
 # --------------------------------------------------------------------------- #
 # Veri yükleme (mevcut davranış)
@@ -168,7 +168,12 @@ if st.session_state.get("clean_df") is not None:
             st.rerun()
 
     entries = st.session_state.get("ledger")
-    if entries is not None and len(entries) == 0:
+    if entries is None:
+        st.info(
+            "Karar defteri henüz boş. Yukarıdaki "
+            '"Temizlik kararlarını üret (JUDGE)" butonuna basın.'
+        )
+    elif len(entries) == 0:
         st.info("JUDGE 0 karar üretti — veri temiz görünüyor.")
 
     if entries is not None and len(entries) > 0:
@@ -182,6 +187,8 @@ if st.session_state.get("clean_df") is not None:
             st.subheader(f"Otomatik onaylanan kararlar ({len(auto)})")
             for _, e in auto:
                 st.success(f"**{e.transform_name}** — {e.bulgu}")
+        else:
+            st.caption("Otomatik onaylanan karar yok; JUDGE her kararı onayınıza bıraktı.")
 
         if flagged:
             st.subheader(f"Belirsiz kararlar — onayınız gerekli ({len(flagged)})")
@@ -264,6 +271,8 @@ if st.session_state.get("clean_df") is not None:
         all_resolved = len(pending) == 0
         if pending:
             st.warning(f"{len(pending)} belirsiz karar çözülmeden ilerlenemez.")
+        else:
+            st.success("Tüm kararlar çözüldü. Aşağıdan uygulayabilirsiniz.")
 
         if st.button(
             "Kararları uygula (codegen + apply)", type="primary", disabled=not all_resolved

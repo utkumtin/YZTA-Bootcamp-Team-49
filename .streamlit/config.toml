@@ -1,0 +1,17 @@
+# Marka rengi: navbar ve Ayarlar panelindeki indigo ile aynı tonlar. Streamlit'in
+# varsayılan kırmızısı primary butonlarda, radio ve slider'larda görünüyordu.
+#
+# NEDEN iki bölüm: yalnız `[theme]` yazıldığında Streamlit temayı AÇIĞA sabitliyor ve
+# istemcinin koyu tema tercihini yok sayıyor. Uygulamanın kendi CSS'i (navbar, ayarlar
+# paneli, başlık ikonları) açık/koyu ayrımını `prefers-color-scheme` ile yaptığı için bu,
+# koyu temada beyaz zeminde beyaz ikon gibi görünmez öğeler üretiyor. `[theme.dark]`
+# tanımlanınca tema takibi geri geliyor. İkisi birlikte kalmalı; biri silinirse koyu tema
+# desteği sessizce kırılır.
+#
+# NEDEN `base` yok: taban bilinçli olarak sabitlenmiyor, istemcinin OS/tarayıcı tercihi
+# takip ediliyor.
+[theme]
+primaryColor = "#4f46e5"
+
+[theme.dark]
+primaryColor = "#818cf8"

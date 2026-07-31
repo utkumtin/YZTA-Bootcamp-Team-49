@@ -59,6 +59,16 @@ def _patch_pipeline(monkeypatch: pytest.MonkeyPatch, entry: LedgerEntry) -> None
     monkeypatch.setattr("pareto.cleaning.agent.generate_ledger", lambda _: [entry])
 
 
+def _auto_entry() -> LedgerEntry:
+    return LedgerEntry(
+        bulgu="Yinelenen satır",
+        transform_name="drop_duplicates",
+        params={"subset": None},
+        gerekce="Test kararı",
+        belirsizlik_bayragi=False,
+    )
+
+
 def _flagged_entry() -> LedgerEntry:
     return LedgerEntry(
         bulgu="İnceleme gerekli",
@@ -184,6 +194,66 @@ def test_page_renders_without_upload(monkeypatch: pytest.MonkeyPatch) -> None:
     assert not app.exception
     assert "clean_df" not in app.session_state
     assert not any("JUDGE" in button.label for button in app.button)
+
+
+def test_ledger_section_directs_user_before_judge_has_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Dosya yüklü ama JUDGE koşmamışken karar defteri bölümü tamamen boştu.
+
+    Kullanıcı akışın bittiğini mi yoksa bir şeyin kırıldığını mı anlayamıyordu.
+    Bu test niyeti kodluyor: her duraklama noktası bir sonraki adımı söylemeli.
+    """
+    _patch_uploader(monkeypatch)
+    _patch_pipeline(monkeypatch, _flagged_entry())
+
+    app = AppTest.from_file(PAGE_PATH, default_timeout=10)
+    app.session_state[UPLOADER_KEY] = _UploadedFile()
+    app.run()
+
+    assert "ledger" not in app.session_state
+    assert any("Karar defteri henüz boş" in item.value for item in app.info)
+
+
+def test_missing_auto_group_is_stated_instead_of_disappearing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """JUDGE'ın tüm kararları onaya bıraktığı turda "otomatik onaylanan" bölümü
+    sessizce hiç çizilmiyordu.
+
+    Bölümün yokluğu ile bölümün boş olması kullanıcı için aynı görünüyor; ayrımı
+    ekranda söylemek gerekiyor.
+    """
+    _patch_uploader(monkeypatch)
+    _patch_pipeline(monkeypatch, _flagged_entry())
+
+    app = AppTest.from_file(PAGE_PATH, default_timeout=10)
+    app.session_state[UPLOADER_KEY] = _UploadedFile()
+    app.run()
+    _run_judge_round(app)
+
+    assert any("Otomatik onaylanan karar yok" in item.value for item in app.caption)
+
+
+def test_fully_resolved_ledger_is_confirmed_before_apply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Çözülmemiş karar varken uyarı çıkıyordu, hepsi çözülünce hiçbir şey.
+
+    "Uygula" butonu aktifleşiyordu ama neden aktifleştiği yazmıyordu; olumlu
+    durumun da sesi olmalı.
+    """
+    _patch_uploader(monkeypatch)
+    _patch_pipeline(monkeypatch, _auto_entry())
+
+    app = AppTest.from_file(PAGE_PATH, default_timeout=10)
+    app.session_state[UPLOADER_KEY] = _UploadedFile()
+    app.run()
+    _run_judge_round(app)
+
+    assert not [i for i in app.session_state["resolutions"] if i is None]
+    assert any("Tüm kararlar çözüldü" in item.value for item in app.success)
+    assert not any("çözülmeden ilerlenemez" in item.value for item in app.warning)
 
 
 def test_clearing_session_empties_uploader_so_file_is_not_reingested(

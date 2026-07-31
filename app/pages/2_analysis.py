@@ -29,7 +29,7 @@ from pareto.analysis.menu import (
 from pareto.analysis.runner import launch_multiverse
 from pareto.llm.cache import CannedModeCacheMissError
 from pareto.memory.frozen_menu import build_frozen_menu_record, save_frozen_menu_record
-from pareto.streamlit_ui import render_compact_sidebar
+from pareto.streamlit_ui import render_compact_sidebar, render_page_title
 
 # -------------------------------------------------
 # SIDEBAR
@@ -39,7 +39,7 @@ with st.sidebar:
     render_compact_sidebar()
 
 
-st.title("2 - Analiz (v2)")
+render_page_title("lens", "Analiz")
 
 
 def _persist_frozen_menu(*, frozen_estimand, frozen_menu, specs, run_id: str) -> None:
@@ -100,7 +100,7 @@ df = _df_from_state()
 
 
 if df is None:
-    st.warning("Veriseti bulunamadı. Lütfen önce Temizleme (Cleaning) adımını tamamlayın.")
+    st.warning("Veriseti bulunamadı. Lütfen önce Temizleme adımını tamamlayın.")
 
     manual = st.text_area("Kolonları manuel olarak girin (virgülle ayırın)")
 
@@ -113,6 +113,10 @@ else:
 
 
 if not columns:
+    st.info(
+        "Devam etmek için kolon adı gerekiyor. Temizleme adımını tamamlayın ya da "
+        "yukarıdaki alana kolon adlarını virgülle ayırarak yazın."
+    )
     st.stop()
 
 
@@ -213,7 +217,7 @@ if not st.session_state.socratic_submitted:
 # -------------------------------------------------
 
 else:
-    st.success("✓ Sokratik beyan tamamlandı.")
+    st.success("Sokratik beyan tamamlandı.")
 
     with st.expander("Sokratik Beyanı Görüntüle / Düzenle"):
         declaration = st.session_state["declaration_draft"]
@@ -295,7 +299,7 @@ draft_proposal = st.session_state.get("estimand_draft")
 
 if draft_proposal is not None and not frozen_estimand:
     if getattr(draft_proposal, "needs_clarification", False):
-        st.warning("⚠️ Teknik eşleme için ek açıklama gerekiyor.")
+        st.warning("Teknik eşleme için ek açıklama gerekiyor.")
 
         st.info(draft_proposal.clarification_question)
 
@@ -718,6 +722,10 @@ else:
 # -------------------------------------------------
 
 if menu is None:
+    st.info(
+        "Spesifikasyon menüsü oluşmadı. Yukarıdaki menü kaynağını seçip menüyü "
+        "üretin ve dondurun."
+    )
     st.stop()
 
 

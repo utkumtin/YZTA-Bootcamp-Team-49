@@ -418,6 +418,40 @@ Board state at the end of Sprint 2 (WIP limits and Fibonacci `Estimate` field un
 
 ---
 
+# Sprint 3
+
+<details>
+<summary><h2>Product Status</h2></summary>
+
+Sprint 3 is the polish-and-ship sprint. On the UI side the four surfaces were brought to one
+standard: page navigation and titles are Turkish throughout, every branch that used to render
+nothing now states what happened and what to do next, and error paths that previously fell
+through to a raw traceback are caught and explained:
+
+| Landing: mode + BYOK + session summary | Temizleme: profiling + agent + ledger |
+|---|---|
+| ![Landing page (Sprint 3)](docs/img/s3-landing.png) | ![Cleaning page (Sprint 3)](docs/img/s3-cleaning.png) |
+
+| Analiz: frozen estimand + JUDGE spec menu | Varyans Paneli: diagnostics + narrative |
+|---|---|
+| ![Analysis page (Sprint 3)](docs/img/s3-analysis.png) | ![Variance panel page (Sprint 3)](docs/img/s3-variance-panel.png) |
+
+<details>
+<summary><h4>Türkçe açıklama</h4></summary>
+
+Sprint 3 cila ve ship sprinti. UI tarafında dört yüzey tek standarda çekildi: sol menü ve
+sayfa başlıkları baştan sona Türkçe, daha önce hiçbir şey çizmeyen dallar artık ne olduğunu
+ve sıradaki adımı söylüyor, ham traceback'e düşen hata yolları yakalanıp açıklanıyor.
+Sayfa başlıkları çizgi stilinde SVG ikonlarla geliyor (süpürge · mercek · normal dağılım) ve
+primary kontroller marka indigosuna alındı. Görseller: açılış (oturum özeti) · Temizleme
+(profilleme + ajan + karar defteri) · Analiz (donmuş estimand + JUDGE menü) · Varyans Paneli
+(diagnostik + narrative).
+
+</details>
+</details>
+
+---
+
 ## Technical Details
 
 **Single engine.** The atomic unit is **Specification** ([pareto/spec.py](pareto/spec.py)):
