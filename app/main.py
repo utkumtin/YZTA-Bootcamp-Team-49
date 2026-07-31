@@ -12,14 +12,23 @@ otomatik keşif kapanıyor, etiketler burada tanımlanıyor.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import streamlit as st
 
 from pareto.config import load_dotenv_file
 
 load_dotenv_file()
 
+# NEDEN PNG: favicon olarak SVG verilince Streamlit'in tarayıcı sekmesine düşürdüğü
+# çıktı güvenilir değil. PNG, pareto_mark.svg'den üretiliyor; geometri değişirse
+# `magick -background none -density 1200 pareto_mark.svg -resize 512x512 pareto_mark.png`
+# ile yeniden üretilmeli. Statik olduğu için koyu temaya uyarlanmıyor, açık tondaki
+# marka rengiyle sabit.
+_FAVICON = Path(__file__).resolve().parent / "assets" / "pareto_mark.png"
+
 # set_page_config, st.navigation dahil her Streamlit çağrısından önce gelmeli.
-st.set_page_config(page_title="Pareto", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Pareto", page_icon=str(_FAVICON), layout="wide")
 
 # Sol menü ikonu emoji ya da material kısayolu olmak zorunda; özel SVG kabul edilmiyor.
 # Sayfa başlıklarındaki SVG ikonlar ayrı, `render_page_title` üzerinden geliyor.
