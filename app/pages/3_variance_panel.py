@@ -43,12 +43,12 @@ from pareto.repro import (
     package_key,
 )
 from pareto.spec import Specification
-from pareto.streamlit_ui import render_compact_sidebar
+from pareto.streamlit_ui import render_compact_sidebar, render_page_title
 
 with st.sidebar:
     render_compact_sidebar()
 
-st.title("📊 3 · Varyans Paneli")
+render_page_title("normal-curve", "Varyans Paneli")
 st.caption("Tek kesin cevap yok; savunulabilir seçimler menüsü ve her birinin sonucu.")
 
 # local-only: dosya sistemi erişimi güvenilir ortamda varsayılır.
@@ -60,8 +60,19 @@ if not Path(results_path).exists():
     st.warning(f"Sonuç dosyası yok: {results_path}. Önce multiverse runner koş.")
     st.stop()
 
-raw = json.loads(Path(results_path).read_text(encoding="utf-8"))
-results = [EstimationResult(**r) for r in raw]
+# NEDEN sarmalama: multiverse yarıda kesilirse results.json eksik/bozuk yazılıyor. Sarmalama
+# olmadan bu durum kullanıcıya ham traceback olarak düşüyor, ne olduğu ve ne yapılacağı
+# anlaşılmıyor.
+try:
+    raw = json.loads(Path(results_path).read_text(encoding="utf-8"))
+    results = [EstimationResult(**r) for r in raw]
+except (OSError, ValueError) as exc:
+    st.error(
+        f"Sonuç dosyası okunamadı: {results_path} ({exc}). Dosya yarıda kalmış olabilir; "
+        "multiverse'i yeniden koşun."
+    )
+    st.stop()
+
 summary = summarize(results)
 
 specs_path = Path(results_path).with_name("specs.json")
@@ -104,7 +115,7 @@ def _render_run_provenance(results_path: str) -> None:
     run_id = _resolve_run_id(Path(results_path))
     record = load_frozen_menu_record(run_id)
 
-    st.subheader("Run provenance")
+    st.subheader("Run künyesi")
     if record is None:
         st.caption(
             "Bu run için ProjectStore'da dondurulmuş estimand/menu kaydı bulunamadı "
@@ -125,14 +136,14 @@ def _render_run_provenance(results_path: str) -> None:
 
     if current_estimand_hash and stored_estimand_hash:
         if current_estimand_hash == stored_estimand_hash:
-            st.success("✓ Oturumdaki estimand, bu run'ı üreten dondurulmuş estimand ile eşleşiyor.")
+            st.success("Oturumdaki estimand, bu run'ı üreten dondurulmuş estimand ile eşleşiyor.")
         else:
             st.warning(
-                "⚠️ Oturumdaki estimand hash'i, bu run'ı üreten dondurulmuş estimand ile "
+                "Oturumdaki estimand hash'i, bu run'ı üreten dondurulmuş estimand ile "
                 "**eşleşmiyor**. Aşağıdaki sonuçlar farklı bir estimand'dan üretilmiş olabilir."
             )
     elif stored_estimand_hash:
-        st.info("Oturumda aktif bir estimand yok; run provenance'ı yalnız kayıttan gösteriliyor.")
+        st.info("Oturumda aktif bir estimand yok; run künyesi yalnız kayıttan gösteriliyor.")
 
 
 _render_run_provenance(results_path)
@@ -248,6 +259,11 @@ if ok:
     fig.data[0].text = [r.spec_id for r, _coefficient in ok]
     st.plotly_chart(fig, use_container_width=True)
     _capture_figure("specification_curve.html", fig)
+else:
+    st.warning(
+        "Katsayı üreten spesifikasyon yok, bu yüzden spec curve çizilemiyor. Aşağıdaki "
+        "şeffaflık makbuzları tablosunda her spesifikasyonun hata nedeni yazıyor."
+    )
 
 st.subheader("Eksen atfı paneli")
 if specs:
@@ -260,10 +276,14 @@ if specs:
     matched_pairs = pd.DataFrame.from_dict(diagnosis.get("matched_pairs", {}), orient="index")
     if not matched_pairs.empty:
         st.dataframe(matched_pairs, use_container_width=True)
+    else:
+        st.caption("Eşleşen spesifikasyon çifti yok; eksen başına etki farkı hesaplanamadı.")
     anova_r2 = pd.DataFrame([diagnosis.get("anova_partial_r2", {})]).T
     if not anova_r2.empty:
         anova_r2.columns = ["partial_r2"]
         st.dataframe(anova_r2, use_container_width=True)
+    else:
+        st.caption("Partial R² tablosu boş; varyansı eksenlere dağıtacak kadar sonuç yok.")
     if diagnosis.get("warnings"):
         for warning in diagnosis.get("warnings", []):
             st.caption(f"• {warning}")
@@ -316,7 +336,7 @@ if rows:
 else:
     st.info("Efektif N bilgisi bulunamadı.")
 
-st.subheader("Pre-trend event study")
+st.subheader("Ön-trend event study")
 payload = build_event_study_payload(
     st.session_state.get("clean_df"),
     estimand=st.session_state.get("frozen_estimand"),
@@ -374,7 +394,7 @@ else:
             key=lambda value: str(value),
         )
         treated_cohort_selection = st.multiselect(
-            "Treated cohorts",
+            "Treated kohortlar",
             options=cohort_values,
             default=cohort_values[:1] if cohort_values else [],
             key="event_study_treated_cohorts",

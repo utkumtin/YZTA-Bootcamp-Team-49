@@ -103,6 +103,20 @@ def test_analysis_page_shows_multiverse_success_path(monkeypatch: pytest.MonkeyP
     assert not app.exception
 
 
+def test_missing_columns_explains_the_dead_end_instead_of_stopping_silently() -> None:
+    """Veri yokken ve manuel kolon da girilmemişken sayfa çıplak `st.stop()` ile
+    kesiliyordu: kullanıcı boş ekranda kalıyor, uyarının ne istediğini anlamıyordu.
+
+    Bu test niyeti kodluyor: çıkmaza giren her dal kullanıcıya ne yapacağını
+    söylemeli. Mesaj kaldırılırsa test düşer.
+    """
+    app = AppTest.from_file(PAGE_PATH, default_timeout=20)
+    app.run()
+
+    assert any("kolon adı gerekiyor" in item.value for item in app.info)
+    assert not app.exception
+
+
 def test_analysis_page_shows_multiverse_failure_path(monkeypatch: pytest.MonkeyPatch) -> None:
     app = AppTest.from_file(PAGE_PATH, default_timeout=20)
     _prepare_analysis_page(app)

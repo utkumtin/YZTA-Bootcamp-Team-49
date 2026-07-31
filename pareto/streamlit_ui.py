@@ -20,6 +20,7 @@ from .llm.providers import (
 from .llm.router import is_canned_mode
 
 _LOGO_PATH = Path(__file__).resolve().parent.parent / "app" / "assets" / "pareto_logo.svg"
+_ICONS_DIR = Path(__file__).resolve().parent.parent / "app" / "assets" / "icons"
 
 BYOK_WIDGET_KEYS: dict[str, str] = {
     "GEMINI_API_KEY": "byok_gemini_input",
@@ -229,15 +230,15 @@ _MODE_HIGHLIGHT_HTML = r"""
 """
 
 
-# "main" sayfasındaki H1 kaldırıldı (bkz. app/main.py) — st.tabs artık üstteki tek başlık
-# hiyerarşisi, bu yüzden native görünümünü (küçük punto, Streamlit'in varsayılan kırmızı
-# primaryColor'ı) bir navbar'a yükseltiyoruz: daha ağır tipografi, sekmeler arası geniş boşluk,
-# tek bir marka rengi (indigo) ile ince/yuvarlak kayan alt çizgi — kayma animasyonunun kendisi
-# zaten Streamlit'in `tab-highlight` mekanizmasında var, yalnız yeniden renklendiriyoruz.
+# Ana sayfada H1 yok; st.tabs orada üstteki tek başlık hiyerarşisi, bu yüzden native
+# görünümünü (küçük punto, ince alt çizgi) bir navbar'a yükseltiyoruz: daha ağır tipografi,
+# sekmeler arası geniş boşluk, marka indigosuyla kalın/yuvarlak kayan alt çizgi — kayma
+# animasyonunun kendisi zaten Streamlit'in `tab-highlight` mekanizmasında var, yalnız
+# yeniden renklendiriyoruz.
 # `key="main_tab"` sayesinde `.st-key-main_tab` ile scope ediliyor, başka st.tabs'e sızmıyor.
 # Metin rengi açık/koyu temaya göre değişiyor (logo SVG'deki `prefers-color-scheme` deseniyle
-# aynı) — Streamlit tema tercihini config.toml ile sabitlemiyor, istemcinin OS/tarayıcı
-# tercihini takip ediyor; sabit "neredeyse beyaz" bir renk açık temada görünmez olurdu.
+# aynı) — tema TABANI config.toml'da sabitlenmiyor, istemcinin OS/tarayıcı tercihi takip
+# ediliyor; sabit "neredeyse beyaz" bir renk açık temada görünmez olurdu.
 #
 # Sayfanın varsayılan üst boşluğu (`.block-container`'da 96px) eskiden H1'in altına yer
 # açıyordu; title kaldırılınca ölü boşluk olarak kaldı. `stHeader` üstte `position:absolute`,
@@ -298,6 +299,58 @@ _MAIN_NAV_HTML = """
 def render_main_nav_style() -> None:
     """Ana sayfadaki st.tabs'i (key="main_tab") navbar gibi göstermek için stil enjekte eder."""
     st.html(_MAIN_NAV_HTML)
+
+
+# Sayfa başlığı = SVG ikon + H1, tek satırda. İkon `st.title`'ın İÇİNE konamıyor: markdown
+# sanitizer `<svg>` etiketini düşürüyor, `st.html` ise ayrı bir blok elemanı üretiyor. Bu yüzden
+# ikisi `horizontal=True` bir container'da yan yana diziliyor ve H1 gerçek `st.title` olarak
+# kalıyor — tipografiyi, tema uyumunu ve anchor linkini elle taklit etmeye çalışmıyoruz.
+# NEDEN scope: `key` verilen container `.st-key-...` sınıfı üretiyor; stil yalnız oraya iniyor,
+# sayfadaki başka yatay container'lara sızmıyor.
+_PAGE_TITLE_KEY_PREFIX = "pa_page_title"
+
+# Ölçülen değerler (Streamlit 1.58, layout="wide"): H1 44px / 700 / 52.8px satır yüksekliği,
+# padding yok. İkon 38px kutu, çizim 24'lük viewBox'ın ~19'unu dolduruyor: görünen glif ~30px,
+# yani H1'in cap-height'ı. 1.5px kontur, 700 ağırlıklı metnin yanında aynı optik ağırlıkta.
+#
+# NEDEN elle renk: SVG `currentColor` kullanıyor, ama miras aldığı renk gövde metni rengi;
+# başlıkla eşleşmesi için burada sabitleniyor, koyu tema kuralı da bu yüzden gerekiyor.
+#
+# NEDEN `class*=` seçici: container key'i ikon adıyla tekilleştiriliyor (aynı sayfada iki
+# başlık olursa Streamlit yinelenen key hatası veriyor), bu yüzden tam eşleşme kullanılamaz.
+_PAGE_TITLE_HTML = """
+<style>
+[class*="st-key-pa_page_title"] {
+    gap: 0.65rem;
+    margin-bottom: 0.4rem;
+}
+[class*="st-key-pa_page_title"] svg {
+    display: block;
+    width: 38px;
+    height: 38px;
+    color: #31333f;
+}
+@media (prefers-color-scheme: dark) {
+    [class*="st-key-pa_page_title"] svg {
+        color: #fafafa;
+    }
+}
+</style>
+"""
+
+
+def render_page_title(icon_name: str, text: str) -> None:
+    """Sayfa H1'i, solunda `app/assets/icons/` altındaki çizgi stilinde SVG ikonla.
+
+    NEDEN `st.markdown`: `st.html` içeriği sanitize ederken `<svg>` etiketini tamamen
+    düşürüyor, ikon sessizce kaybolur. Inline SVG'yi ayakta tutan tek yol bu.
+    """
+    svg = (_ICONS_DIR / f"{icon_name}.svg").read_text(encoding="utf-8")
+    st.html(_PAGE_TITLE_HTML)
+    key = f"{_PAGE_TITLE_KEY_PREFIX}_{icon_name}"
+    with st.container(horizontal=True, vertical_alignment="center", key=key):
+        st.markdown(svg, unsafe_allow_html=True, width="content")
+        st.title(text)
 
 
 def _render_canned_mode_banner() -> None:
@@ -919,13 +972,20 @@ def render_session_overview() -> None:
 
 
 def _render_session_pills() -> None:
-    if st.session_state.get("clean_df") is not None:
-        df = st.session_state["clean_df"]
-        st.caption(f"Veri: {df.shape[0]}×{df.shape[1]}")
-    if st.session_state.get("frozen_estimand") is not None:
-        h = st.session_state["frozen_estimand"].freeze_hash[:8]
-        st.caption(f"Estimand: `{h}…`")
+    df = st.session_state.get("clean_df")
+    frozen = st.session_state.get("frozen_estimand")
     specs = st.session_state.get("analysis_specs")
+
+    if df is None and frozen is None and not specs:
+        # NEDEN: üçü de yokken burası tamamen boş kalıyordu; sidebar'daki boşluk
+        # "oturum boş" mu "bir şey kırıldı" mı anlaşılmıyordu.
+        st.caption("Oturum boş; Temizleme sayfasından veri yükleyin.")
+        return
+
+    if df is not None:
+        st.caption(f"Veri: {df.shape[0]}×{df.shape[1]}")
+    if frozen is not None:
+        st.caption(f"Estimand: `{frozen.freeze_hash[:8]}…`")
     if specs:
         st.caption(f"Specs: {len(specs)}")
 
