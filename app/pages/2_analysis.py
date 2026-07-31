@@ -27,9 +27,11 @@ from pareto.analysis.menu import (
     validate_spec_menu_to_specs,
 )
 from pareto.analysis.runner import launch_multiverse
+from pareto.config import ModelRole
 from pareto.llm.cache import CannedModeCacheMissError
+from pareto.llm.router import last_used_model
 from pareto.memory.frozen_menu import build_frozen_menu_record, save_frozen_menu_record
-from pareto.streamlit_ui import render_compact_sidebar, render_page_title
+from pareto.streamlit_ui import llm_call_status, render_compact_sidebar, render_page_title
 
 # -------------------------------------------------
 # SIDEBAR
@@ -57,6 +59,10 @@ def _persist_frozen_menu(*, frozen_estimand, frozen_menu, specs, run_id: str) ->
         run_id=run_id,
         estimand=frozen_estimand.estimand.model_dump(),
         menu=frozen_menu.model_dump(),
+        # Menüyü üreten model, üretim anında yakalanıp oturuma konuldu; burada
+        # yeniden çözülmez çünkü kullanıcı arada Ayarlar'dan modeli değiştirmiş
+        # olabilir ve kayıt o zaman menüyü üretmeyen bir modeli işaret ederdi.
+        judge_model=st.session_state.get("menu_proposal_model"),
     )
     save_frozen_menu_record(run_id, record)
 
@@ -268,7 +274,7 @@ if st.session_state.socratic_submitted and draft_proposal is None and frozen_est
         type="primary",
     ):
         try:
-            with st.spinner("Teknik eşleme hazırlanıyor..."):
+            with llm_call_status("JUDGE teknik eşlemeyi hazırlıyor…"):
                 proposal = draft_tac_proposal(
                     research_story=(st.session_state["last_research_story"]),
                     available_columns=columns,
@@ -526,13 +532,17 @@ else:
         type="primary",
     ):
         try:
-            with st.spinner("JUDGE dayanıklılık menüsü hazırlıyor..."):
+            with llm_call_status("JUDGE dayanıklılık menüsünü hazırlıyor…"):
                 menu_proposal = generate_spec_menu(
                     frozen=frozen_estimand,
                     available_columns=columns,
                 )
 
                 st.session_state["menu_proposal"] = menu_proposal
+                # Kimliği çağrının hemen ardından al: `last_used_model` süreç
+                # genelinde son kurulan modeli tutuyor, sonraki bir okuma
+                # kullanıcının bu arada seçtiği başka bir modeli döndürebilir.
+                st.session_state["menu_proposal_model"] = last_used_model(ModelRole.JUDGE)
 
                 st.session_state.pop(
                     "menu_approved_axes",

@@ -24,8 +24,18 @@ def build_frozen_menu_record(
     run_id: str | None,
     estimand: dict[str, Any],
     menu: dict[str, Any],
+    judge_model: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Diske yazılacak provenance kaydını üretir."""
+    """Diske yazılacak provenance kaydını üretir.
+
+    `judge_model`, menüyü fiilen üreten modelin kimliği (sağlayıcı + model id +
+    gizlilik modu + canned bayrağı). Model hem `.env`'den hem kullanıcı seçiminden
+    gelebildiği için "bu spec menüsünü hangi model üretti" sorusunun cevabı başka
+    hiçbir artefaktta yok. Çağıran taraf bunu üretim çağrısının HEMEN ardından
+    okumalı (`router.last_used_model`); sonradan okunursa kullanıcı arada modeli
+    değiştirmiş olabilir. Kayıt yoksa None yazılır — uydurulmuş bir kimlik,
+    kimliksizlikten kötüdür.
+    """
     return {
         "estimand_hash": estimand_hash,
         "menu_hash": menu_hash,
@@ -33,6 +43,7 @@ def build_frozen_menu_record(
         "run_id": run_id,
         "estimand": estimand,
         "menu": menu,
+        "judge_model": judge_model,
     }
 
 

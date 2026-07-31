@@ -43,7 +43,7 @@ from pareto.repro import (
     package_key,
 )
 from pareto.spec import Specification
-from pareto.streamlit_ui import render_compact_sidebar, render_page_title
+from pareto.streamlit_ui import llm_call_status, render_compact_sidebar, render_page_title
 
 with st.sidebar:
     render_compact_sidebar()
@@ -293,7 +293,7 @@ if specs:
     )
     if st.button("LLM narrative oluştur"):
         try:
-            with st.spinner("LLM narrative hazırlanıyor..."):
+            with llm_call_status("JUDGE varyans anlatısını hazırlıyor…"):
                 st.session_state["_variance_narrative"] = generate_narrative(summary, diagnosis)
                 st.session_state["_variance_narrative_key"] = narrative_key
         except (ValueError, CannedModeCacheMissError) as exc:

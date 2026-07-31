@@ -32,6 +32,14 @@ class ParetoSettings:
     # --- Model router. Model adları/slotları providers.py'de (tek kaynak). ---
     llm_temperature: float = 0.0  # deterministik → reprodüksiyon + cache
 
+    # --- Geçici (transient) hata dayanıklılığı ---
+    # JUDGE zinciri tek üyeli ve pinli (ADR 0004), yani failover yok: tek bir 429
+    # ya da 5xx tüm akışı düşürüyordu. Deneme sayısı düşük tutuluyor çünkü serbest
+    # katmanda asıl darboğaz RPM; agresif retry kotayı daha hızlı yakar.
+    llm_max_attempts: int = 3  # 1 asıl + 2 yeniden deneme
+    llm_retry_base_delay: float = 1.0  # saniye, üstel: 1s, 2s, 4s...
+    llm_retry_max_delay: float = 8.0  # tavan; jitter bunun üstüne çıkmaz
+
     # --- Privacy ---
     privacy_mode: PrivacyMode = PrivacyMode.PUBLIC
 
@@ -54,6 +62,15 @@ class ParetoSettings:
     store_dir: str = "runs/store"
     audit_trail_dir: str = "runs/audit_trail"
     llm_cache_dir: str = "runs/llm_cache"  # temp=0 yanıt cache'i (free-tier RPM azaltır)
+    # Private modda yanıtlar buraya, oturum başına ayrı alt dizine yazılır ve oturum
+    # bitince silinir. Ayrı kök olmasının sebebi `llm_cache_dir`'in commit'lenmiş
+    # golden-path dosyalarını taşıması: özel veriden türeyen yanıtlar oraya karışamaz.
+    # Oturum alt dizini burada DEĞİL, çağrı anında çözülür (SETTINGS'in oturum
+    # bağlamı yok).
+    llm_cache_private_dir: str = "runs/llm_cache_private"
+    # Tarayıcısını kapatıp giden oturumların dizinleri bu süreden sonra süpürülür.
+    # Streamlit'in public bir "oturum bitti" kancası olmadığı için gereken yaklaşım.
+    llm_private_cache_ttl_seconds: int = 3600
 
 
 SETTINGS = ParetoSettings()

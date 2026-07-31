@@ -66,9 +66,56 @@ _PROMPT_GUARD_THRESHOLD_ENV = "PARETO_L7_PROMPT_GUARD_THRESHOLD"
 _PROMPT_GUARD_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 _PROMPT_GUARD_DEFAULT_THRESHOLD = "0.5"
 _FALSE_LIKE = {"0", "false", "off", "no"}
+
+# Prompt Guard 2 86m'in penceresi 512 token. Karakter cinsinden tutuyoruz çünkü
+# tokenizer'ı yerelde çalıştırmıyoruz; ~1200 karakter Türkçe/JSON metinde bile
+# pencerenin altında kalıyor. Parça sayısı tarama başına Groq isteği demek, bu
+# yüzden düşük (bkz. `_chunk_scan_surface`).
+_PROMPT_GUARD_CHUNK_CHARS = 1200
+_PROMPT_GUARD_MAX_CHUNKS = 3
 # Değer eşleşmeleri kolon adlarından daha gürültülü: tek bir kategorik değerin
 # ("Assistant: yes") tüm kararları onaya düşürmemesi için eşik.
 _VALUE_SIGNAL_THRESHOLD = 2
+
+# Türkçe enjeksiyon desenleri. Model bacağı bunları yakalamıyor: Prompt Guard 2'nin
+# çok dilli bir varyantı yok ve 86m modeli Türkçe denemelere temiz metinle aynı bandda
+# skor veriyor. Yani Türkçede tek savunma bu regex bacağı.
+#
+# Aksansız yazıma tolerans kasıtlı (`[ıi]`, `[öo]`, `[üu]`, `[şs]`): jüri kendi verisini
+# Türkçe kolon adlarıyla yüklerse bunlar sıkça ASCII'ye düşürülmüş oluyor. Fiil her
+# desende zorunlu — yalnız "kurallar" gibi bir isim meşru bir kolon adı olabilir,
+# "kuralları yoksay" olamaz. Bu, yanlış pozitifi düşük tutan kısıt.
+_TURKISH_INJECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "ignore_previous_tr",
+        re.compile(
+            r"(?:(?:[öo]nceki|yukar[ıi]daki|t[üu]m|b[üu]t[üu]n)\s+)?"
+            r"(?:talimat|kural|y[öo]nerge)\w*\s+"
+            r"(?:yoksay|unut|g[öo]rmezden|dikkate\s+alma|[şs]imdilik\s+unut)",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "reveal_prompt_tr",
+        re.compile(
+            r"sistem\s+(?:prompt\w*|talimat\w*|mesaj\w*)\s+"
+            r"(?:g[öo]ster|s[öo]yle|yaz|payla[şs]|a[çc][ıi]kla)",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "remove_constraints_tr",
+        re.compile(
+            r"k[ıi]s[ıi]t\w*\s+(?:kald[ıi]r|yoksay|devre\s*d[ıi][şs][ıi])",
+            re.IGNORECASE,
+        ),
+    ),
+    ("do_anything_now_tr", re.compile(r"\bdan\s+mod\w*", re.IGNORECASE)),
+    # `jailbreak` sözcüğünün kendisi bilinçli olarak burada YOK: İngilizce sette
+    # zaten var ve iki desen aynı metne birden sayarsa `_VALUE_SIGNAL_THRESHOLD`
+    # tek bir eşleşmeyle aşılır, yani değer kanalının eşiği anlamını yitirir.
+    ("jailbreak_tr", re.compile(r"k[ıi]s[ıi]tlamas[ıi]z\s+mod", re.IGNORECASE)),
+)
 
 _COLUMN_NAME_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("ignore_all_previous", re.compile(r"ignore\s+all\s+previous", re.IGNORECASE)),
@@ -79,6 +126,10 @@ _COLUMN_NAME_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("jailbreak", re.compile(r"jailbreak", re.IGNORECASE)),
     ("do_anything_now", re.compile(r"do\s+anything\s+now", re.IGNORECASE)),
     ("reveal_prompt", re.compile(r"reveal\s+prompt", re.IGNORECASE)),
+    *_TURKISH_INJECTION_PATTERNS,
+    ("system_role_tag_tr", re.compile(r"sistem\s*:", re.IGNORECASE)),
+    ("developer_role_tag_tr", re.compile(r"geli[şs]tirici\s*:", re.IGNORECASE)),
+    ("assistant_role_tag_tr", re.compile(r"asistan\s*:", re.IGNORECASE)),
 )
 
 _VALUE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -87,6 +138,7 @@ _VALUE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("jailbreak", re.compile(r"jailbreak", re.IGNORECASE)),
     ("do_anything_now", re.compile(r"do\s+anything\s+now", re.IGNORECASE)),
     ("reveal_prompt", re.compile(r"reveal\s+prompt", re.IGNORECASE)),
+    *_TURKISH_INJECTION_PATTERNS,
 )
 
 
@@ -163,6 +215,88 @@ def _parse_prompt_guard_score(raw_content: str) -> float:
     return float(raw_content.strip())
 
 
+def _prompt_guard_scan_surface(profile: dict[str, Any]) -> list[str]:
+    """Taranacak güvenilmeyen metinleri sırayla döndür (kolon adları önce).
+
+    Tüm profil JSON'u değil: enjeksiyon yalnız kullanıcıdan gelen serbest metinle
+    girebilir, o da kolon adları ve `top_values`. dtype/sayaç gibi bizim ürettiğimiz
+    alanlar tarama bütçesini yemesin. Kolon adları başa alınır çünkü tek başına
+    yeterli kanıt sayılan kanal odur (bkz. `_heuristic_prompt_injection_signals`);
+    bütçe dolarsa kesilen taraf daha zayıf sinyal olan değerler olur.
+    """
+    seen: set[str] = set()
+    surface: list[str] = []
+    for text in _collect_untrusted_column_names(profile) + _collect_untrusted_values(profile):
+        cleaned = text.strip()
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            surface.append(cleaned)
+    return surface
+
+
+def _chunk_scan_surface(surface: list[str]) -> list[str]:
+    """Yüzeyi modelin penceresine sığan parçalara böl, parça sayısını sınırla.
+
+    Prompt Guard 2 86m 512 token pencereli; üretimdeki profil bunun katları
+    olabiliyor ve sağlayıcı tüm isteği `400 invalid_request_error` ile reddediyordu
+    (yani katman sessizce hiç koşmuyordu). Parça sayısı bilinçli olarak düşük tutulur:
+    bu tarama `cleaning/agent.py` içinde JUDGE çağrısının hemen öncesinde koşuyor ve
+    JUDGE de Groq'a pinliyse aynı hesap limitini paylaşırlar. Bütçe aşılırsa yüzeyin
+    kuyruğu taranmadan kalır, bu bilinçli bir takas: katmanın tamamen kapalı olmasından
+    iyidir ve zaten fail-open, detective bir katman.
+    """
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    for item in surface:
+        piece = item[:_PROMPT_GUARD_CHUNK_CHARS]
+        if current and current_len + len(piece) + 1 > _PROMPT_GUARD_CHUNK_CHARS:
+            chunks.append("\n".join(current))
+            if len(chunks) >= _PROMPT_GUARD_MAX_CHUNKS:
+                return chunks
+            current, current_len = [], 0
+        current.append(piece)
+        current_len += len(piece) + 1
+    if current:
+        chunks.append("\n".join(current))
+    return chunks[:_PROMPT_GUARD_MAX_CHUNKS]
+
+
+def _prompt_guard_request(
+    model_id: str, api_key: str, text: str
+) -> tuple[float | None, str | None]:
+    """Tek bir parçayı Prompt Guard'a sor. Dönüş: (score, error)."""
+    body = {
+        "model": model_id,
+        # Prompt Guard sınıflandırma modeli tek bir user mesajı bekler.
+        "messages": [{"role": "user", "content": text}],
+        "temperature": 0,
+    }
+
+    # httpx (urllib değil): Groq'un önündeki Cloudflare `Python-urllib/3.x`
+    # User-Agent'ını 403 ile kesiyor, yani katman hiç koşmuyordu. httpx zaten
+    # pydantic-ai üzerinden bağımlılıkta; şema doğrulamasını da kendisi yapar.
+    try:
+        resp = http_post(
+            _PROMPT_GUARD_ENDPOINT,
+            headers={"Authorization": f"Bearer {api_key}"},
+            json=body,
+            timeout=20,
+        )
+        resp.raise_for_status()
+        content = str(resp.json()["choices"][0]["message"]["content"])
+        return _parse_prompt_guard_score(content), None
+    except httpx.HTTPStatusError as exc:
+        # Gövdeyi mesaja kat: durum kodu tek başına sağlayıcının neye itiraz
+        # ettiğini söylemiyor. Bu bacak fail-open olduğu için hata yalnız loga
+        # düşüyor; gövde olmadan katmanın neden sessizce kapalı kaldığı
+        # anlaşılamıyor.
+        detail = exc.response.text[:500].strip()
+        return None, f"Prompt Guard call failed: {exc} · body={detail}"
+    except (httpx.HTTPError, KeyError, IndexError, ValueError, TypeError) as exc:
+        return None, f"Prompt Guard call failed: {exc}"
+
+
 def _scan_with_groq_prompt_guard(profile: dict[str, Any]) -> tuple[str, float | None, str | None]:
     """Groq'ta Llama Prompt Guard 2 ile tarama yap.
 
@@ -185,34 +319,31 @@ def _scan_with_groq_prompt_guard(profile: dict[str, Any]) -> tuple[str, float | 
     except OSError:
         return "unknown", None, f"{resolved.api_key_env} missing"
 
+    chunks = _chunk_scan_surface(_prompt_guard_scan_surface(profile))
+    if not chunks:
+        return "unknown", None, "no untrusted text to scan"
+
     model_id = resolved.model_id
-    payload = json.dumps(profile, ensure_ascii=True, sort_keys=True, default=str)
-    snippet = payload[:8000]
-    body = {
-        "model": model_id,
-        # Prompt Guard sınıflandırma modeli tek bir user mesajı bekler.
-        "messages": [{"role": "user", "content": snippet}],
-        "temperature": 0,
-    }
+    threshold = _prompt_guard_threshold()
+    best: float | None = None
+    first_error: str | None = None
+    for chunk in chunks:
+        score, error = _prompt_guard_request(model_id, api_key, chunk)
+        if error is not None:
+            first_error = first_error or error
+            continue
+        if score is not None and (best is None or score > best):
+            best = score
+        # Erken çıkış: bir parça eşiği geçtiyse kalan parçalar kararı
+        # değiştiremez, boşuna kota harcamayalım.
+        if best is not None and best >= threshold:
+            return "suspicious", best, None
 
-    # httpx (urllib değil): Groq'un önündeki Cloudflare `Python-urllib/3.x`
-    # User-Agent'ını 403 ile kesiyor, yani katman hiç koşmuyordu. httpx zaten
-    # pydantic-ai üzerinden bağımlılıkta; şema doğrulamasını da kendisi yapar.
-    try:
-        resp = http_post(
-            _PROMPT_GUARD_ENDPOINT,
-            headers={"Authorization": f"Bearer {api_key}"},
-            json=body,
-            timeout=20,
-        )
-        resp.raise_for_status()
-        content = str(resp.json()["choices"][0]["message"]["content"])
-        score = _parse_prompt_guard_score(content)
-    except (httpx.HTTPError, KeyError, IndexError, ValueError, TypeError) as exc:
-        return "unknown", None, f"Prompt Guard call failed: {exc}"
-
-    verdict = "suspicious" if score >= _prompt_guard_threshold() else "clean"
-    return verdict, score, None
+    if best is None:
+        return "unknown", None, first_error or "Prompt Guard returned no score"
+    # Kısmi başarı da fail-open kaydına girsin: yüzeyin bir bölümü taranamadıysa
+    # "clean" verdict'i eksik kanıta dayanıyor demektir.
+    return "clean", best, first_error
 
 
 def prompt_guard_scan(

@@ -372,6 +372,10 @@ def _build_manifest(
         "estimand_hash": (frozen or {}).get("estimand_hash"),
         "menu_hash": (frozen or {}).get("menu_hash"),
         "estimand": (frozen or {}).get("estimand"),
+        # Spec menüsünü üreten modelin kimliği. Dondurma kaydından okunur, canlı
+        # olarak yeniden çözülmez: paket aylar sonra da üretilebiliyor ve o anda
+        # etkin olan model menüyü üreten model değildir. Kayıt yoksa None kalır.
+        "judge_model": (frozen or {}).get("judge_model"),
         "spec_count": len(specs),
         "spec_hashes": {spec.spec_id: spec.content_hash() for spec in specs},
         # Doğrulama script'i eşikleri BURADAN okur. Script'te ikinci bir kopya

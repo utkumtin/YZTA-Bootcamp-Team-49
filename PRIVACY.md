@@ -67,9 +67,22 @@ gönderilmez, telemetri toplanmaz.
 Model yanıtları, tekrar koşularını hızlandırmak ve ücretsiz katman istek limitini korumak
 için yerel diske önbelleklenir. Önbellek dosyasının adı isteğin özetinden türetilen bir
 karmadır, yani gönderilen istem düz metin olarak saklanmaz; yanıt gövdesi ise düz JSON
-olarak yazılır ve içinde kolon adları ile karar gerekçeleri bulunabilir. Hassas bir
-oturumdan sonra önbellek dizinini (`runs/llm_cache`) silmek istersiniz. `PARETO_LLM_CACHE=0`
-ortam değişkeni önbelleği tamamen kapatır.
+olarak yazılır ve içinde kolon adları ile karar gerekçeleri bulunabilir.
+`PARETO_LLM_CACHE=0` ortam değişkeni önbelleği her iki modda da tamamen kapatır.
+
+Özel modda önbellek public moddan **ayrışır**: yanıtlar `runs/llm_cache` yerine
+`runs/llm_cache_private/<oturum>` altına yazılır ve oturum bitince silinir. Silme üç
+yoldan yapılır: özel moddan herkese açık moda dönüldüğünde o oturumun dizini hemen
+silinir; tarayıcısı kapatılarak terk edilmiş oturumların dizinleri bir saatlik süre
+sonunda süpürülür; uygulama normal şekilde kapandığında o sürecin yazdığı dizinler
+kaldırılır.
+
+**Sınır — bunlar garanti değil, en iyi çabadır.** Streamlit'in "oturum bitti" için genel
+bir kancası yoktur, bu yüzden "sekme kapandığı anda silinir" denemez. Uygulama kapanış
+temizliği de yalnız düzgün kapanışta çalışır; süreç `SIGKILL` ile ya da makine kapanarak
+sonlanırsa dizinler bir sonraki açılışta TTL süpürmesiyle gider. Bu aralıkta özel veriden
+türeyen yanıtlar diskte kalır. Kesinlik isteyen bir oturumda tek kesin yol
+`PARETO_LLM_CACHE=0` ile önbelleği baştan kapatmaktır.
 
 ## Sağlayıcı taahhütleri
 

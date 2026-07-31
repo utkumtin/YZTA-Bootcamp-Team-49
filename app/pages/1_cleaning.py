@@ -24,7 +24,12 @@ from pareto.cleaning.ledger import LedgerEntry, persist_ledger
 from pareto.cleaning.uploads import uploaded_file_identity
 from pareto.llm.cache import CannedModeCacheMissError
 from pareto.profiling import load_raw_file, profile_dataframe
-from pareto.streamlit_ui import render_clean_panel, render_compact_sidebar, render_page_title
+from pareto.streamlit_ui import (
+    llm_call_status,
+    render_clean_panel,
+    render_compact_sidebar,
+    render_page_title,
+)
 
 with st.sidebar:
     render_compact_sidebar()
@@ -140,7 +145,8 @@ if st.session_state.get("clean_df") is not None:
         raw_df = st.session_state.setdefault("clean_df_raw", st.session_state["clean_df"].copy())
         raw_profile = profile_dataframe(raw_df)
         try:
-            entries = generate_ledger(raw_profile)
+            with llm_call_status("JUDGE temizlik kararlarını üretiyor…"):
+                entries = generate_ledger(raw_profile)
         except CannedModeCacheMissError as exc:
             # O5: canned mod + cache miss ayrı bir vaka — router/cache.py zaten
             # kullanıcıya dönük, yönlendirici bir mesaj üretiyor (BYOK gerektiği,

@@ -79,8 +79,9 @@ Not: Bu akış, etkileşim sırasındaki çalışma hattını gösterir; L1-L7 n
 ### L7
 
 - Uygulama: [pareto/llm/guardrails.py](pareto/llm/guardrails.py)
-- İlke: Llama Prompt Guard 2 (Groq) ile detective tarama; hata durumunda fail-open (akış kesilmez), yalnız log + ledger izi bırakır.
-- Sınır: Prompt Guard 2 86m İngilizce enjeksiyon kalıplarında güçlü, Türkçe enjeksiyonu pratikte yakalamıyor; kolon adları teknik/İngilizce olduğu için bugün kritik değil, ama katman Türkçe için garanti vermez. Anahtarsız (canned) çalıştırmada Groq çağrısı hiç yapılmaz, tarama regex heuristiğine iner.
+- İlke: iki bacaklı detective tarama — regex heuristiği + Llama Prompt Guard 2 (Groq); hata durumunda fail-open (akış kesilmez), yalnız log + ledger izi bırakır.
+- Tarama yüzeyi: yalnız güvenilmeyen kullanıcı metni (kolon adları ve `top_values`), tüm profil değil. Model penceresine (512 token) sığması için parçalanır ve tarama başına en çok 3 istekle sınırlıdır; çok geniş profillerde yüzeyin kuyruğu taranmadan kalabilir.
+- Sınır: Prompt Guard 2 86m İngilizce enjeksiyon kalıplarında güçlü, **Türkçe enjeksiyonu yakalamıyor** (canlı ölçüm: açık bir Türkçe enjeksiyon denemesi 0.02, temiz metinle aynı bandda). Modelin çok dilli varyantı olmadığı için Türkçede tek savunma regex bacağıdır; desenler bu yüzden Türkçe karşılıkları ve aksansız yazımı da kapsar. Anahtarsız (canned) çalıştırmada Groq çağrısı hiç yapılmaz, tarama regex heuristiğine iner.
 
 ## 5) Operasyonel Özeti
 

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from html import escape
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import streamlit as st
@@ -353,6 +356,29 @@ def render_page_title(icon_name: str, text: str) -> None:
         st.title(text)
 
 
+@contextmanager
+def llm_call_status(label: str, *, done_label: str | None = None) -> Iterator[Any]:
+    """LLM isteği süresince durum göstergesi; bitince tamamlandı/hata durumuna geçer.
+
+    NEDEN `st.status`, `st.spinner` değil: spinner yalnız "bekleniyor" halini biliyor,
+    yanıt geldiğinde iz bırakmadan kayboluyor. Serbest katman gecikmelerinde kullanıcının
+    sorduğu soru "uygulama dondu mu" olduğu için istek gönderildi → tamamlandı/hata
+    geçişini gösterebilen primitif gerekiyor.
+
+    `st.rerun()` ve `st.stop()` bilinçli olarak yakalanmıyor: ikisi de
+    `ScriptControlException` (BaseException) türevi, `except Exception` bunları görmez ve
+    akış kontrolü hata gibi işaretlenmez. Cache isabetinde çağrı anında döner; gösterge
+    yanıp sönmez, doğrudan tamamlandı durumunda çizilir.
+    """
+    with st.status(label, expanded=False) as status:
+        try:
+            yield status
+        except Exception:
+            status.update(label=f"{label} — başarısız", state="error")
+            raise
+        status.update(label=done_label or f"{label} — tamamlandı", state="complete")
+
+
 def _render_canned_mode_banner() -> None:
     """Canned mod bildirimi (O1 + O4).
 
@@ -377,6 +403,29 @@ def _render_canned_mode_banner() -> None:
     )
 
 
+def _sync_private_cache(privacy: PrivacyMode) -> None:
+    """Private cache'in yaşam döngüsünü sidebar'a bağlar.
+
+    Sidebar her sayfada koştuğu için temizlemenin doğal yeri burası. İki iş yapar:
+    bayat oturum dizinlerini süpürür (tarayıcısını kapatıp gidenler) ve kullanıcı
+    PRIVATE'tan PUBLIC'e döndüğünde o oturumun dizinini hemen siler.
+
+    SINIR: Streamlit'in public bir "oturum bitti" kancası yok, bu yüzden "sekme
+    kapandığı anda silinir" garantisi verilemez. Üçüncü ayak süreç kapanışındaki
+    `atexit` (bkz. `pareto/llm/cache.py`). Süpürme ucuz: dizin yoksa hemen döner.
+    """
+    from .llm.cache import current_session_id, purge_private_cache, sweep_stale_private_cache
+
+    sweep_stale_private_cache()
+    if privacy is PrivacyMode.PUBLIC and st.session_state.get("_private_cache_used"):
+        purge_private_cache(current_session_id())
+        st.session_state["_private_cache_used"] = False
+    elif privacy is PrivacyMode.PRIVATE:
+        # Sonraki PUBLIC dönüşünde neyin silineceğini bilmek için işaretlenir;
+        # hiç private'a girmemiş oturumda boşuna silme çağrısı yapılmaz.
+        st.session_state["_private_cache_used"] = True
+
+
 def render_compact_sidebar() -> str:
     """Her sayfada: marka (logo, sayfa navigasyonunun üstünde) + gizlilik modu + oturum özeti."""
     st.logo(str(_LOGO_PATH), size="medium")
@@ -392,7 +441,13 @@ def render_compact_sidebar() -> str:
     )
     st.html(_MODE_HIGHLIGHT_HTML, unsafe_allow_javascript=True)
 
+    privacy = PrivacyMode.PRIVATE if str(mode) == PrivacyMode.PRIVATE.value else PrivacyMode.PUBLIC
+    _sync_private_cache(privacy)
+
     _render_canned_mode_banner()
+    # Oturum boşken de gösterilir (pills erken dönüyor): "hangi modelle
+    # çalışıyorum" sorusu veri yüklenmeden önce de geçerli.
+    _render_active_model_pill(privacy)
     _render_session_pills()
     _render_api_key_status()
 
@@ -425,9 +480,8 @@ def render_settings_panel() -> None:
     stored = str(st.session_state.get("judge_provider_choice", ""))
     if stored and stored not in slots_by_provider:
         st.session_state["judge_provider_choice"] = default_provider
-        stored = default_provider
-    provider = stored or default_provider
 
+    provider, _slot = active_judge_route(privacy)
     _render_route_strip(privacy, provider, slots_by_provider[provider])
     _render_privacy_note(privacy)
 
@@ -455,6 +509,36 @@ def render_settings_panel() -> None:
 
 def _rail_label(text: str, *, kind: str) -> None:
     st.html(f'<div class="{kind}">{escape(text)}</div>')
+
+
+def active_judge_route(privacy: PrivacyMode) -> tuple[str, ModelSlot]:
+    """Bu gizlilik modunda çalışacak JUDGE sağlayıcısı ve slotu.
+
+    Salt okunur: oturumdaki seçim bu katmanda geçerli değilse sessizce defaulta
+    düşer ama session_state'i DÜZELTMEZ. Düzeltme yalnız Ayarlar panelinde, widget
+    render edilmeden hemen önce yapılmalı; sidebar her sayfada çalıştığı için
+    buradan yazmak kullanıcının seçimini o farkında olmadan değiştirirdi.
+    """
+    slots_by_provider = judge_slots_for(privacy)
+    default_provider = (
+        JUDGE_PRIVATE_SLOT.provider if privacy is PrivacyMode.PRIVATE else JUDGE_SLOT.provider
+    )
+    stored = str(st.session_state.get("judge_provider_choice", ""))
+    provider = stored if stored in slots_by_provider else default_provider
+    return provider, slots_by_provider[provider]
+
+
+def _render_active_model_pill(privacy: PrivacyMode) -> None:
+    """Sidebar'da aktif modeli göster.
+
+    Model artık kullanıcı seçimine açık, ama seçim yalnız ana sayfadaki Ayarlar
+    panelinde görünüyordu; temizleme/analiz/varyans sayfalarında "hangi modelle
+    çalışıyorum" sorusunun cevabı yoktu. Kayıt tarafıyla (repro manifesti,
+    dondurma kaydı) aynı bilginin ekrandaki karşılığı bu.
+    """
+    provider, slot = active_judge_route(privacy)
+    label = _PROVIDER_DISPLAY.get(provider, provider)
+    st.caption(f"Model: {label} · `{_resolved_model_id(slot)}`")
 
 
 def _render_route_strip(privacy: PrivacyMode, provider: str, slot: ModelSlot) -> None:

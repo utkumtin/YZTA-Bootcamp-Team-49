@@ -105,6 +105,22 @@ def _model_from_provider(pm: ProviderModel) -> Any:
 _get_effective_privacy_mode = get_effective_privacy_mode
 
 
+# Rol başına en son kurulan modelin kimliği. Denetlenebilirlik için var: model artık
+# hem `.env`'den hem kullanıcı seçiminden geldiği için "bu çıktıyı hangi model üretti"
+# sorusunun cevabı koda bakarak verilemiyor.
+#
+# NEDEN burada yazılıyor: `build_agent` dört üretim çağrısının da tek geçtiği yer,
+# yani model kimliğinin bilindiği tek dikiş. Okuyan taraf kaydı çağrının HEMEN
+# ardından almalı (bkz. `app/pages/2_analysis.py`); kullanıcı arada model değiştirirse
+# sonradan okunan değer o çıktıyı üreten model olmaz.
+_LAST_MODEL_BY_ROLE: dict[ModelRole, dict[str, str]] = {}
+
+
+def last_used_model(role: ModelRole) -> dict[str, str] | None:
+    """Bu süreçte rol için en son kurulan modelin kimliği; hiç kurulmadıysa None."""
+    return _LAST_MODEL_BY_ROLE.get(role)
+
+
 def is_canned_mode(role: ModelRole = ModelRole.MECHANICAL) -> bool:
     """Verilen rol için zincirin canned modda olup olmadığını hesaplar.
 
@@ -165,6 +181,10 @@ def _resolve_model(role: ModelRole) -> tuple[Any, dict[str, Any]]:
     notu #2).
     """
     if _TEST_MODEL is not None:
+        # Test modelinin kimliği de kaydedilir: aksi halde test koşusunda üretilen
+        # bir artefakt, kayıtta bir önceki gerçek modeli taşımaya devam eder ve
+        # provenance sessizce yalan söyler.
+        _LAST_MODEL_BY_ROLE[role] = {"provider": "test", "model_id": type(_TEST_MODEL).__name__}
         return _TEST_MODEL, {}
     from .cache import wrap_with_cache
 
@@ -192,7 +212,21 @@ def _resolve_model(role: ModelRole) -> tuple[Any, dict[str, Any]]:
                 "ile ortam değişkeni olarak tanımlayın."
             )
 
+    from .retry import RetryingModel
+
     model, canned_mode = _chain_model(chain)
+    # Retry cache'in ALTINDA kalır: cache isabeti yeniden deneme yolundan geçmemeli,
+    # ve bir yeniden deneme cache'e ikinci kez bakmamalı.
+    model = RetryingModel(model)
+    head = chain[0]
+    _LAST_MODEL_BY_ROLE[role] = {
+        "provider": head.provider,
+        "model_id": head.model_id,
+        "privacy_mode": effective_privacy_mode.value,
+        # Canned modda yanıt diskteki golden-path cache'inden geliyor; kayıt bunu
+        # söylemezse artefakt canlı bir çağrıymış gibi okunur.
+        "canned_mode": str(canned_mode).lower(),
+    }
     return wrap_with_cache(model, canned_mode=canned_mode), extra_model_settings
 
 
