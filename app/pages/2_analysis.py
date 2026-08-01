@@ -511,9 +511,10 @@ if menu_source == "deterministic":
         preview_specs = expand_to_specs(
             menu.freeze(),
             outcome=frozen_estimand.estimand.outcome,
-            treatment=frozen_estimand.estimand.treatment_coding,
+            treatment=frozen_estimand.estimand.treatment,
             unit_col=unit_col or cluster_by,
             time_col=time_col or cluster_by,
+            available_columns=columns,
         )
         with menu_status_placeholder.container():
             st.success(f"Canlı spec sayacı: {len(preview_specs)} spesifikasyon üretilebilir")
@@ -577,7 +578,7 @@ else:
         menu_proposal,
         available_columns=columns,
         outcome=frozen_estimand.estimand.outcome,
-        treatment=frozen_estimand.estimand.treatment_coding,
+        treatment=frozen_estimand.estimand.treatment,
         unit_col=unit_col or cluster_by,
         time_col=time_col or cluster_by,
     )
@@ -777,9 +778,10 @@ try:
     specs = expand_to_specs(
         frozen_menu,
         outcome=(frozen_estimand.estimand.outcome),
-        treatment=(frozen_estimand.estimand.treatment_coding),
+        treatment=(frozen_estimand.estimand.treatment),
         unit_col=(unit_col or cluster_by),
         time_col=(time_col or cluster_by),
+        available_columns=columns,
     )
 
     validate_spec_menu_to_specs(frozen_menu, specs)

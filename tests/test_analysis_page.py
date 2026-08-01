@@ -36,8 +36,8 @@ class _FakeHandle:
 def _frozen_estimand():
     proposal = TACProposal(
         estimand_type="ATT",
-        treatment="Medicaid expansion adoption",
-        treatment_coding="expanded",
+        treatment="expanded",
+        treatment_coding="1 = expanded state x post-expansion year, 0 = otherwise",
         outcome="uninsured_rate",
         outcome_unit="percentage points",
         population="US states",

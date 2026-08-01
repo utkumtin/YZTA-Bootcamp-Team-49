@@ -123,7 +123,9 @@ JUDGE_LEDGER_OUTPUT: dict[str, Any] = {
 JUDGE_ESTIMAND_OUTPUT: dict[str, Any] = {
     "estimand_type": "ATT",
     "treatment": "treated_post",
-    "treatment_coding": "treated_post",
+    # Kolon adı `treatment`'ta; burası kodlamanın tarifi. Eskiden ikisi de kolon
+    # adıydı ve bu yüzden `expand_to_specs` yanlış alanı okuduğu hâlde geçiyordu.
+    "treatment_coding": "1 = genişleyen eyaletteki ilçe x 2014 sonrası, 0 = diğer",
     "outcome": "pct_uninsured",
     "outcome_unit": "yüzde puan",
     "population": "2014 genişleme kohortundaki ilçeler ile hiç genişlemeyen ilçeler",
@@ -393,9 +395,10 @@ def _seam_menu(state: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     specs = expand_to_specs(
         frozen_menu,
         outcome=frozen_estimand.estimand.outcome,
-        treatment=frozen_estimand.estimand.treatment_coding,
+        treatment=frozen_estimand.estimand.treatment,
         unit_col=str(panel_cfg["unit"]),
         time_col=str(panel_cfg["time"]),
+        available_columns=columns,
     )
     validate_spec_menu_to_specs(frozen_menu, specs)
 

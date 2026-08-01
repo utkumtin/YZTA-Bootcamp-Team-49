@@ -518,6 +518,7 @@ def _collect_menu_proposal_reasons(
                 treatment=treatment or "",
                 unit_col=unit_col or "",
                 time_col=time_col or "",
+                available_columns=available_columns,
             )
         except ValueError as exc:
             reasons.append(str(exc))
@@ -589,6 +590,7 @@ def evaluate_menu_defensibility(
         treatment=treatment.strip(),
         unit_col=unit_col.strip(),
         time_col=time_col.strip(),
+        available_columns=available_columns,
     )
     return True, [], len(specs)
 
@@ -684,8 +686,23 @@ def expand_to_specs(
     treatment: str,
     unit_col: str,
     time_col: str,
+    available_columns: list[str],
 ) -> list[Specification]:
     """Aktif eksenlerin faktöriyel çarpımı. Sessiz eksenler baseline'a pinli. Sert tavan 24."""
+    # `available_columns` ZORUNLU: `outcome`/`treatment` doğrudan
+    # `Specification`'a yazılıyor ve oradan tahminciye `df[...]` olarak gidiyor.
+    # Bağlayan çağrı yerinin kolon listesi hep elinde; opsiyonel yapmak kontrolü
+    # tam da en az bağlamı olan çağrıda atlatırdı.
+    known = set(map(str, available_columns))
+    bound = [("outcome", outcome), ("treatment", treatment)]
+    unknown = [f"{field}='{value}'" for field, value in bound if value not in known]
+    if unknown:
+        raise ValueError(
+            "Spesifikasyona bağlanan kolon veri setinde yok: "
+            + ", ".join(unknown)
+            + ". Kolon adı bekleniyor, açıklama metni değil."
+        )
+
     menu = frozen_menu.menu
     active = set(menu.active_axes) if menu.active_axes else _default_active(menu)
 

@@ -225,7 +225,7 @@ CARD_KRUEGER = DatasetProfile(
     judge_estimand={
         "estimand_type": "ATT",
         "treatment": "treated_post",
-        "treatment_coding": "treated_post",
+        "treatment_coding": "1 = New Jersey mağazası x dalga 2 (artış sonrası), 0 = diğer",
         "outcome": "fte_employment",
         "outcome_unit": "tam zamanlı eşdeğer çalışan",
         "population": "New Jersey ve Pennsylvania'daki fast-food restoranları",
@@ -279,7 +279,7 @@ DIVORCE = DatasetProfile(
     judge_estimand={
         "estimand_type": "ATT",
         "treatment": "post",
-        "treatment_coding": "post",
+        "treatment_coding": "1 = tek-taraflı boşanma yasası o eyalet-yılda yürürlükte, 0 = değil",
         "outcome": "suicide_rate_f",
         "outcome_unit": "milyon kadın başına intihar",
         "population": "ABD eyaletleri, 1964-1996",
@@ -337,7 +337,7 @@ MEDICAID = DatasetProfile(
     judge_estimand={
         "estimand_type": "ATT",
         "treatment": "treated_post",
-        "treatment_coding": "treated_post",
+        "treatment_coding": "1 = genişleyen eyaletteki ilçe x 2014 sonrası, 0 = diğer",
         "outcome": "pct_uninsured",
         "outcome_unit": "yüzde puan",
         "population": "Genişleme yapan ve hiç genişletmeyen eyaletlerdeki ilçeler",
@@ -580,6 +580,7 @@ def _step_menu(state: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         treatment=state["treatment_col"],
         unit_col=str(panel_cfg["unit"]),
         time_col=str(panel_cfg["time"]),
+        available_columns=columns,
     )
     validate_spec_menu_to_specs(frozen_menu, specs)
 

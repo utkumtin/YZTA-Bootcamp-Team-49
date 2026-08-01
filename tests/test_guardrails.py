@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 from pydantic_ai.models.test import TestModel
 
 from pareto.cleaning.agent import generate_ledger
@@ -320,3 +321,132 @@ def test_l7_tarama_yuzeyi_yalniz_kullanici_metnini_tasir():
     assert "10" in surface
     assert "int64" not in surface
     assert "42" not in surface
+
+
+def test_modelin_geri_getirdigi_spotlight_ambalaji_soyulur():
+    """Model işaretli kolon adını cevabına kopyalarsa ambalaj dönüş yolunda sökülmeli.
+
+    NEDEN: profil L2'de `〈untrusted〉gelir〈/untrusted〉` olarak modele gidiyor;
+    sistem promptu çıplak ad istiyor ama bu yalnız talimat. Ambalaj soyulmazsa
+    üç şey birden bozulur: kolon varlık kontrolü "profilde yok" der, yüksek-eksik
+    gatekeeper eşiği `columns.get(col)` boş dönüp SESSİZCE açık kalır ve ledger
+    `df[ambalajlı_ad]` ile KeyError alır. Bu test üçünün de kaynağını sınıyor.
+    """
+    profile = {
+        "n_rows": 10,
+        "n_cols": 1,
+        "duplicate_row_count": 0,
+        "potential_join_keys": [],
+        "columns": {
+            "gelir": {
+                "dtype": "object",
+                "n_missing": 9,
+                "pct_missing": 0.9,
+                "n_unique": 2,
+                "top_values": {"1.200": 1},
+            },
+        },
+    }
+
+    judge_output = {
+        "decisions": [
+            {
+                "bulgu": "〈untrusted〉gelir〈/untrusted〉 metin tipinde.",
+                "transform": {
+                    "transform_name": "coerce_numeric",
+                    "col": "〈untrusted〉gelir〈/untrusted〉",
+                },
+                "gerekce": "Sayısal karşılaştırma için gerekir.",
+                "confidence": "high",
+            }
+        ]
+    }
+
+    with use_test_model(TestModel(custom_output_args=judge_output)):
+        entries = generate_ledger(profile)
+
+    assert entries[0].params == {"col": "gelir"}
+    assert "〈untrusted〉" not in entries[0].bulgu
+    # pct_missing 0.9 eşiğin üstünde: ambalaj soyulduğu için kural kolonu bulup
+    # kararı gatekeeper'a düşürebiliyor. Soyulmasaydı sessizce False olurdu.
+    assert entries[0].belirsizlik_bayragi is True
+
+
+def test_uydurma_kolon_ambalaj_soyulduktan_sonra_da_fail_loud():
+    """Soyma guardrail'i gevşetmemeli: allowlist kontrolü aynen koşmalı."""
+    profile = {
+        "n_rows": 10,
+        "n_cols": 1,
+        "duplicate_row_count": 0,
+        "potential_join_keys": [],
+        "columns": {
+            "gelir": {
+                "dtype": "object",
+                "n_missing": 0,
+                "pct_missing": 0.0,
+                "n_unique": 2,
+                "top_values": {"1.200": 1},
+            },
+        },
+    }
+
+    judge_output = {
+        "decisions": [
+            {
+                "bulgu": "Uydurma kolon.",
+                "transform": {
+                    "transform_name": "coerce_numeric",
+                    "col": "〈untrusted〉olmayan_kolon〈/untrusted〉",
+                },
+                "gerekce": "…",
+                "confidence": "high",
+            }
+        ]
+    }
+
+    with use_test_model(TestModel(custom_output_args=judge_output)):
+        with pytest.raises(ValueError, match="profilde olmayan kolon"):
+            generate_ledger(profile)
+
+
+def test_liste_alanindaki_spotlight_ambalaji_da_soyulur():
+    """`drop_duplicates.subset` kolon adlarını LİSTE olarak taşır.
+
+    NEDEN ayrı test: string alanı soyup listeyi atlamak sessizce geçen bir
+    yarım düzeltme olurdu ve tam da yüksek-etki (satır düşüren) transform'u
+    vururdu — `_uncertainty_flag`'in koşulsuz gatekeeper'a yolladığı yol.
+    """
+    profile = {
+        "n_rows": 3,
+        "n_cols": 1,
+        "duplicate_row_count": 1,
+        "potential_join_keys": ["county_fips"],
+        "columns": {
+            "county_fips": {
+                "dtype": "object",
+                "n_missing": 0,
+                "pct_missing": 0.0,
+                "n_unique": 2,
+                "top_values": {"01001": 2},
+            },
+        },
+    }
+
+    judge_output = {
+        "decisions": [
+            {
+                "bulgu": "Yinelenen satır olabilir.",
+                "transform": {
+                    "transform_name": "drop_duplicates",
+                    "subset": ["〈untrusted〉county_fips〈/untrusted〉"],
+                },
+                "gerekce": "Yinelenen satırlar analizi bozar.",
+                "confidence": "high",
+            }
+        ]
+    }
+
+    with use_test_model(TestModel(custom_output_args=judge_output)):
+        entries = generate_ledger(profile)
+
+    assert entries[0].params == {"subset": ["county_fips"]}

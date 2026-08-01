@@ -114,7 +114,7 @@ def _make_run(tmp_path: Path, *, with_cleaning: bool = True, units: int = 40) ->
                     "outcome": "y",
                     "outcome_unit": "puan",
                     "treatment": "d",
-                    "treatment_coding": "d",
+                    "treatment_coding": "1 = tedavi dönemi x tedavi grubu, 0 = diğer",
                     "population": "tedavi edilen birimler",
                     "time_scope": "1-6 dönem",
                     "expected_sign": "positive",

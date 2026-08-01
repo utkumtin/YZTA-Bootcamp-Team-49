@@ -279,8 +279,11 @@ def test_cleaning_scorer_does_not_call_structural_hesitation_unnecessary() -> No
 # --------------------------------------------------------------------------- #
 def _tac(**overrides) -> TACProposal:
     base = dict(
-        treatment="asgari ücret artışı",
-        treatment_coding="treated_post",
+        # `treatment` kolon adı, `treatment_coding` kodlamanın serbest metin
+        # tarifi. Bu fixture eskiden ikisini ters tutuyordu ve puanlayıcı da
+        # kolonu treatment_coding'den okuduğu için tutarlı görünüyordu.
+        treatment="treated_post",
+        treatment_coding="1 = New Jersey mağazası x dalga 2, 0 = diğer",
         outcome="fte_employment",
         outcome_unit="çalışan",
         population="NJ/PA restoranları",
@@ -902,8 +905,8 @@ def test_run_estimand_uses_real_panel_columns() -> None:
     """available_columns panelden geliyor; altın set kolon listesini tekrarlamıyor."""
     case = _case("estimand", "divorce")
     output = {
-        "treatment": "tek-taraflı boşanma",
-        "treatment_coding": "post",
+        "treatment": "post",
+        "treatment_coding": "1 = tek-taraflı boşanma yasası o eyalet-yılda yürürlükte, 0 = değil",
         "outcome": "suicide_rate_f",
         "outcome_unit": "1M kadın başına",
         "population": "ABD eyaletleri",
@@ -1007,7 +1010,11 @@ def test_spec_menu_gold_labels_reference_real_axes_and_columns(case: dict) -> No
         assert column in columns, f"{case['case_id']}: panelde olmayan bad control {column}"
     for column in case["baseline_must_be_in"].get("clustering", []):
         assert column in columns, f"{case['case_id']}: panelde olmayan cluster kolonu {column}"
-    assert case["estimand"]["treatment_coding"] in columns
+    # Kolon adını taşıyan alan `treatment`. `treatment_coding` kodlamanın serbest
+    # metin tarifi ve KOLON OLMAMALI: altın kayıt onu kolon adıyla doldurursa
+    # spec_menu promptu modele üretimin üretemeyeceği bir sözleşme gösterir.
+    assert case["estimand"]["treatment"] in columns
+    assert case["estimand"]["treatment_coding"] not in columns
     assert case["estimand"]["outcome"] in columns
 
 
@@ -1464,8 +1471,8 @@ def test_run_matrix_order_check_adds_a_reversed_column_variant(tmp_path) -> None
     """
     case = _case("estimand", "divorce")
     output = {
-        "treatment": "tek-taraflı boşanma",
-        "treatment_coding": "post",
+        "treatment": "post",
+        "treatment_coding": "1 = tek-taraflı boşanma yasası o eyalet-yılda yürürlükte, 0 = değil",
         "outcome": "suicide_rate_f",
         "outcome_unit": "1M kadın başına",
         "population": "ABD eyaletleri",

@@ -142,12 +142,19 @@ _VALUE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 
-def _strip_spotlight(value: str) -> str:
+def strip_spotlight(value: str) -> str:
+    """`spotlight()` ambalajını söker.
+
+    Public: yalnız tarama yolunda değil, modelin DÖNÜŞÜNDE de gerekiyor. Model
+    işaretli adı cevabına kopyaladığında (sistem promptu yasaklasa da oluyor)
+    ambalajı soymak, allowlist kontrolünü gevşetmez — kontrol soymadan sonra
+    aynen koşar.
+    """
     return value.replace(_MARK_OPEN, "").replace(_MARK_CLOSE, "")
 
 
 def _collect_untrusted_column_names(profile: dict[str, Any]) -> list[str]:
-    return [_strip_spotlight(str(col_name)) for col_name in profile.get("columns", {})]
+    return [strip_spotlight(str(col_name)) for col_name in profile.get("columns", {})]
 
 
 def _collect_untrusted_values(profile: dict[str, Any]) -> list[str]:
@@ -155,7 +162,7 @@ def _collect_untrusted_values(profile: dict[str, Any]) -> list[str]:
     for info in profile.get("columns", {}).values():
         if isinstance(info, dict):
             for top_val in info.get("top_values", {}):
-                values.append(_strip_spotlight(str(top_val)))
+                values.append(strip_spotlight(str(top_val)))
     return values
 
 

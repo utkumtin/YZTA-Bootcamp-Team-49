@@ -178,7 +178,10 @@ def validate_estimand_spec_mapping(
     errors: list[str] = []
     warnings: list[str] = []
 
-    if spec.treatment != estimand.treatment_coding:
+    # `treatment` müdahale KOLONUNUN adı, `treatment_coding` kodlamanın tarifi
+    # (bkz. Estimand alan tanımları). Spec'e bağlanan kolonla karşılaştırılacak
+    # olan ilkidir; ikincisi serbest metin ve rapora gider.
+    if spec.treatment != estimand.treatment:
         errors.append("Treatment mismatch.")
 
     if spec.outcome != estimand.outcome:

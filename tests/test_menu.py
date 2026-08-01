@@ -19,6 +19,10 @@ from pareto.spec import Specification
 
 _MENU_COLUMNS = ["state", "year", "expanded", "uninsured_rate", "population", "unemployment_rate"]
 
+# `expand_to_specs` artık bağladığı outcome/treatment'ı kolon listesine karşı
+# sınıyor; soyut isimlerle koşan testlerin kolon evreni.
+_ABSTRACT_COLUMNS = ["y", "d", "u", "t", "g", "state", "year"]
+
 
 def _frozen(**kw):
     base: dict = {
@@ -33,8 +37,8 @@ def _frozen(**kw):
 def _fake_frozen_estimand() -> FrozenEstimand:
     proposal = TACProposal(
         estimand_type="ATT",
-        treatment="Medicaid expansion adoption",
-        treatment_coding="expanded",
+        treatment="expanded",
+        treatment_coding="1 = expanded state x post-expansion year, 0 = otherwise",
         outcome="uninsured_rate",
         outcome_unit="percentage points",
         population="US states",
@@ -110,7 +114,14 @@ def test_freeze_is_deterministic_16char_hash():
 def test_silent_axis_pinned_to_baseline():
     # NEDEN: aktif olmayan eksen baseline'a (ilk seviye) pinlenir → okunaklı + tekrarlanabilir.
     frozen = _frozen(estimators=("OLS",), active_axes=("control_set",))
-    specs = expand_to_specs(frozen, outcome="y", treatment="d", unit_col="u", time_col="t")
+    specs = expand_to_specs(
+        frozen,
+        outcome="y",
+        treatment="d",
+        unit_col="u",
+        time_col="t",
+        available_columns=_ABSTRACT_COLUMNS,
+    )
     assert len(specs) == 2  # yalnız kontrol seti ekseni açık
     assert {s.estimator for s in specs} == {"OLS"}
 
@@ -123,7 +134,14 @@ def test_hard_cap_24_fails_loud():
         active_axes=("control_set",),
     ).freeze()
     with pytest.raises(ValueError, match="sert tavan"):
-        expand_to_specs(frozen, outcome="y", treatment="d", unit_col="u", time_col="t")
+        expand_to_specs(
+            frozen,
+            outcome="y",
+            treatment="d",
+            unit_col="u",
+            time_col="t",
+            available_columns=_ABSTRACT_COLUMNS,
+        )
 
 
 def test_weighting_axis_expands_with_population_default():
@@ -134,15 +152,48 @@ def test_weighting_axis_expands_with_population_default():
         weighting_levels=("population", None),
         active_axes=("weighting",),
     ).freeze()
-    specs = expand_to_specs(frozen, outcome="y", treatment="d", unit_col="state", time_col="year")
+    specs = expand_to_specs(
+        frozen,
+        outcome="y",
+        treatment="d",
+        unit_col="state",
+        time_col="year",
+        available_columns=_ABSTRACT_COLUMNS,
+    )
     assert len(specs) == 2
     assert {s.weight_col for s in specs} == {"population", None}
 
 
 def test_validate_spec_menu_to_specs_accepts_clean_mapping():
     frozen = _frozen()
-    specs = expand_to_specs(frozen, outcome="y", treatment="d", unit_col="u", time_col="t")
+    specs = expand_to_specs(
+        frozen,
+        outcome="y",
+        treatment="d",
+        unit_col="u",
+        time_col="t",
+        available_columns=_ABSTRACT_COLUMNS,
+    )
     validate_spec_menu_to_specs(frozen, specs)
+
+
+def test_expand_to_specs_rejects_treatment_that_is_not_a_column():
+    """NEDEN: `treatment` spesifikasyona bağlanıp tahmincide `df[...]` oluyor.
+
+    Estimand'ın `treatment_coding` alanı ("1 = genişleyen eyalet x post, 0 = diğer")
+    yanlışlıkla buraya bağlanırsa eskiden sessizce geçip koşu ortasında KeyError
+    olarak patlıyordu. Kapı bağlama anında kesmeli.
+    """
+    frozen = _frozen()
+    with pytest.raises(ValueError, match="Kolon adı bekleniyor"):
+        expand_to_specs(
+            frozen,
+            outcome="y",
+            treatment="1 = genişleyen eyalet x post, 0 = diğer",
+            unit_col="u",
+            time_col="t",
+            available_columns=_ABSTRACT_COLUMNS,
+        )
 
 
 def test_validate_spec_menu_to_specs_fails_loud_on_dirty_spec():
@@ -248,6 +299,7 @@ def test_clustering_axis_expands_none_and_column_as_two_specs():
         treatment="expanded",
         unit_col="state",
         time_col="year",
+        available_columns=_MENU_COLUMNS,
     )
     assert {s.cluster_by for s in specs} == {"state", None}
     validate_spec_menu_to_specs(frozen_menu, specs)
@@ -373,6 +425,7 @@ def test_defensibility_gate_happy_path_matches_real_expansion_count():
         treatment="expanded",
         unit_col="state",
         time_col="year",
+        available_columns=_MENU_COLUMNS,
     )
 
     assert ok

@@ -214,7 +214,7 @@ def _print_rpm_wait(pool: str, seconds: float) -> None:
     Sessiz kalırsa (ör. gemini-3.6-flash rpm=5 -> istekler arası 12sn) koşu
     donmuş gibi görünür; kullanıcı neyin beklendiğini görmeli.
     """
-    print(f"  [hız] {pool}: {seconds:.1f}sn bekleniyor (rpm/tpm sınırı)")
+    print(f"  [hız] {pool}: {seconds:.1f}sn bekleniyor (rpm/tpm/cooldown sınırı)")
 
 
 # Görev başına muhafazakâr token tahmini (girdi + çıktı), TPM throttle'ı için.
@@ -268,6 +268,12 @@ class Throttle:
     # Enjekte edilebilir: testler beklemeyi sessizce yakalar, üretim varsayılanı
     # terminale basar. `now`/`sleep` ile aynı gerekçe — gerçek I/O'yu testten ayır.
     on_wait: Callable[[str, float], None] = _print_rpm_wait
+    # Çağrılar arası TABAN bekleme, saniye. 0 = kapalı (rpm/tpm ne diyorsa o).
+    # Açıkken aralık başlangıçtan değil CEVAPTAN sayılır (bkz. release): serbest
+    # katmanda sağlayıcıyı yormamak için istenen davranış "cevabı bekle, sonra
+    # bu kadar daha bekle". rpm/tpm aralığı yine tabanla birlikte geçerli, büyüğü
+    # bağlar.
+    cooldown: float = 0.0
     _last_call: dict[str, float] = field(default_factory=dict)
     _count: dict[str, int] = field(default_factory=dict)
     _observed: dict[str, int] = field(default_factory=dict)
@@ -325,7 +331,7 @@ class Throttle:
         used = self._count.get(pool, 0)
         if cap is not None and used >= cap:
             raise QuotaExhausted(f"{pool}: kota doldu ({used}/{cap})")
-        interval = self.interval(rpm=rpm, tpm=tpm, est_tokens=est_tokens)
+        interval = max(self.interval(rpm=rpm, tpm=tpm, est_tokens=est_tokens), self.cooldown)
         if interval > 0:
             last = self._last_call.get(pool)
             if last is not None:
@@ -335,6 +341,20 @@ class Throttle:
                     self.sleep(wait)
         self._last_call[pool] = self.now()
         self._count[pool] = used + 1
+
+    def release(self, pool: str) -> None:
+        """Çağrı bitti: cooldown açıksa damgayı CEVAP anına taşı.
+
+        `acquire` damgayı isteği göndermeden önce basar, yani varsayılan aralık
+        başlangıçtan başlangıcadır ve modelin cevap süresi aralığın İÇİNDEN sayılır.
+        Cooldown modunda istenen bu değil: cevap ne kadar sürerse sürsün üstüne tam
+        bir taban bekleme konmalı. Damgayı burada yenilemek aralığı bitişten
+        başlangıca çevirir.
+
+        Cooldown kapalıyken hiçbir şey yapmaz — mevcut rpm/tpm davranışı aynen kalır.
+        """
+        if self.cooldown:
+            self._last_call[pool] = self.now()
 
     @staticmethod
     def interval(*, rpm: int | None, tpm: int | None = None, est_tokens: int = 0) -> float:
@@ -646,8 +666,12 @@ def score_estimand(
     declared_sign = case["declaration"]["expected_sign"]
     known = set(available_columns)
 
+    # Kolon adı taşıyan alanlar `treatment` ve `outcome`. `treatment_coding`
+    # kodlamanın serbest metin tarifi ("1 = genişleyen eyalet x post, 0 = diğer");
+    # onu kolon listesine karşı sınamak her doğru öneriyi "uydurma kolon"
+    # damgalar (ölçüldü: tur-1'de 70 puanlanabilir satırın 69'u).
     hallucinated = [
-        name for name in (proposal.treatment_coding, proposal.outcome) if name and name not in known
+        name for name in (proposal.treatment, proposal.outcome) if name and name not in known
     ]
 
     accept_t = set(case.get("accept_treatment", []))
@@ -659,13 +683,17 @@ def score_estimand(
         outcome_ok: bool | None = None
         hallucinated = []
     else:
-        treatment_ok = proposal.treatment_coding in accept_t if accept_t else None
+        treatment_ok = proposal.treatment in accept_t if accept_t else None
         outcome_ok = proposal.outcome in accept_o if accept_o else None
 
     return {
         "treatment_ok": treatment_ok,
         "outcome_ok": outcome_ok,
-        "proposed_treatment": proposal.treatment_coding,
+        "proposed_treatment": proposal.treatment,
+        # Kodlama tarifi de kaydediliyor: `treatment` düzeltmesinden sonra eski
+        # koşularla karışmasın diye ayrı anahtar, ve tarif alanı gerileme
+        # yaparsa (kolon adı yazmaya başlarsa) ham satırdan görülebilsin.
+        "proposed_treatment_coding": proposal.treatment_coding,
         "proposed_outcome": proposal.outcome,
         # Prompt açıkça yasaklıyor: "expected_sign değerini değiştirme".
         # İhlali her zaman hatadır, adversarial vakada bile.
@@ -700,7 +728,10 @@ def score_spec_menu(
         proposal,
         available_columns=available_columns,
         outcome=estimand["outcome"],
-        treatment=estimand["treatment_coding"],
+        # `treatment` = kolon adı. Bu satır önceden `treatment_coding` okuyordu ve
+        # yalnız altın kayıt iki alanı ters doldurduğu için çalışıyordu; ikisi
+        # birlikte düzeltildi (bkz. benchmarks/gold/spec_menu.json).
+        treatment=estimand["treatment"],
         unit_col=str(panel_cfg["unit"]),
         time_col=str(panel_cfg["time"]),
     )
@@ -1482,9 +1513,15 @@ def run_matrix(
                         )
                         stop = True
                         break
-                    row = _call_and_score(
-                        model, task, case, rid=rid, runner=runner, extra=extra, served=server
-                    )
+                    try:
+                        row = _call_and_score(
+                            model, task, case, rid=rid, runner=runner, extra=extra, served=server
+                        )
+                    finally:
+                        # `finally`: çağrı istisnayla düşerse damga acquire anında
+                        # kalır ve sonraki çağrı kısalmış bir aralık öder — tam da
+                        # işler kötü giderken sağlayıcıyı hızlandırmak olurdu.
+                        throttle.release(quota_pool(server))
                     # Şema retry'ı sağlayıcıya ayrı bir istek olarak gitti ve kotadan
                     # düştü; `acquire` yalnız birini saydı. Farkı işlemezsek tavan
                     # sessizce aşılır (bkz. Throttle.seed).
@@ -1570,6 +1607,20 @@ def _answer_consistency(rows: list[dict[str, Any]]) -> tuple[float | None, int]:
     return agree / len(countable), len(countable)
 
 
+def _measured_total(rows: list[dict[str, Any]], field: str) -> int | None:
+    """Toplam; hiçbir satırda ölçüm yoksa `None`.
+
+    `sum(... or 0)` ÖLÇÜLMEDİ ile SIFIR'ı aynı hücreye düşürüyordu: CLI referans
+    koşusunda retry/token bilerek `None` yazılıyor (harness içinden ölçülemez),
+    tablo ise "Retry: 0" / "0 token" basıyor ve okuyan "retry olmadı" anlıyor.
+    Rapor önsözündeki uyarı tabloya taşınmıyor, o yüzden hücrenin kendisi
+    ölçümsüzlüğü söylemeli: tablo `None`'ı diğer ölçülmemiş sütunlarla aynı
+    biçimde `-` basıyor.
+    """
+    measured = [r[field] for r in rows if r.get(field) is not None]
+    return sum(int(v) for v in measured) if measured else None
+
+
 def _agg(rows: list[dict[str, Any]]) -> dict[str, Any]:
     # order-check varyantları ayrı bir soruya cevap veriyor (sıra değişince cevap
     # değişiyor mu); ana eleme tablosunun ok_rate/latency/token istatistiklerine
@@ -1586,12 +1637,12 @@ def _agg(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "n": n,
         "ok": len(ok),
         "ok_rate": (len(ok) / n) if n else None,
-        "retries": sum(int(r.get("retries") or 0) for r in rows),
+        "retries": _measured_total(rows, "retries"),
         "latency_median": (statistics.median(lat) if lat else None),
         "latency_p95": _percentile(lat, 95),
         "tokens_out_median": (statistics.median(out_tokens) if out_tokens else None),
-        "tokens_in_total": sum(int(r.get("input_tokens") or 0) for r in rows),
-        "tokens_out_total": sum(int(r.get("output_tokens") or 0) for r in rows),
+        "tokens_in_total": _measured_total(rows, "input_tokens"),
+        "tokens_out_total": _measured_total(rows, "output_tokens"),
         "answer_consistency": consistency,
         "answer_consistency_n": consistency_n,
         "errors": sorted({str(r["error"]) for r in rows if r.get("error")}),
@@ -1838,6 +1889,8 @@ def build_report(rows: list[dict[str, Any]], tasks: tuple[str, ...]) -> str:
     for name in sorted(by_model):
         a = _agg(by_model[name])
         rate = f"{a['ok']}/{a['n']}" if a["n"] else "-"
+        # Ölçülmemiş retry `-`; `0` yalnız GERÇEKTEN ölçülüp sıfır çıktığında.
+        ret = f"{a['retries']}" if a["retries"] is not None else "-"
         med = f"{a['latency_median']:.2f}" if a["latency_median"] is not None else "-"
         p95 = f"{a['latency_p95']:.2f}" if a["latency_p95"] is not None else "-"
         tok = f"{a['tokens_out_median']:.0f}" if a["tokens_out_median"] is not None else "-"
@@ -1847,7 +1900,7 @@ def build_report(rows: list[dict[str, Any]], tasks: tuple[str, ...]) -> str:
             else "- (yetersiz tekrar)"
         )
         lines.append(
-            f"| `{name}` | {a['n']} | {rate} | {a['retries']} | {med} | {p95} | {tok} | {cons} | "
+            f"| `{name}` | {a['n']} | {rate} | {ret} | {med} | {p95} | {tok} | {cons} | "
             f"{', '.join(a['errors']) or '-'} |"
         )
     lines += [
@@ -2067,6 +2120,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--out", type=Path, help="çıktı dizini (varsayılan runs/benchmark/<ts>)")
     parser.add_argument(
+        "--cooldown",
+        type=float,
+        default=0.0,
+        help=(
+            "cevap geldikten SONRA bir sonraki çağrıya kadar beklenecek taban süre "
+            "(sn); rpm/tpm aralığıyla birlikte büyüğü bağlar. 0 = kapalı"
+        ),
+    )
+    parser.add_argument(
         "--report-from",
         nargs="+",
         type=Path,
@@ -2137,7 +2199,12 @@ def main(argv: list[str] | None = None) -> int:
     out_dir = args.out or (DEFAULT_OUT_ROOT / time.strftime("%Y%m%d-%H%M%S"))
     print(f"Çıktı: {out_dir}")
     rows = run_matrix(
-        models, tasks, args.repeats, out_dir, Throttle(), order_check=args.order_check
+        models,
+        tasks,
+        args.repeats,
+        out_dir,
+        Throttle(cooldown=args.cooldown),
+        order_check=args.order_check,
     )
     # Rapor tüm koşuyu kapsasın: bu oturumda atlanan (resume) satırlar da dahil.
     # Dosya hiç oluşmamış olabilir (ilk çağrıdan önce kota bittiyse) — read_rows

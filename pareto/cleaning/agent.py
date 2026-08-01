@@ -17,7 +17,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from ..config import SETTINGS, ModelRole
-from ..llm.guardrails import prompt_guard_scan, prompt_json, sanitize_profile
+from ..llm.guardrails import prompt_guard_scan, prompt_json, sanitize_profile, strip_spotlight
 from ..llm.router import build_agent
 from .ledger import LedgerEntry
 from .transforms import REGISTRY
@@ -267,6 +267,56 @@ def _build_judge_prompt(profile: dict[str, Any], *, already_sanitized: bool = Fa
 # --------------------------------------------------------------------------- #
 # Deterministik kapılar (L5): kolon varlığı + yüksek-eksik eşiği
 # --------------------------------------------------------------------------- #
+def _unmark_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return strip_spotlight(value)
+    if isinstance(value, list):
+        return [strip_spotlight(v) if isinstance(v, str) else v for v in value]
+    return value
+
+
+def _unmark_decisions(decisions: list[TransformDecision]) -> list[TransformDecision]:
+    """JUDGE'ın cevabına kopyaladığı `〈untrusted〉…〈/untrusted〉` ambalajını soyar.
+
+    Profil L2 sanitizasyonundan geçtiği için kolon adları modele işaretli
+    gidiyor; `_SYSTEM_PROMPT` çıplak ad istiyor ama bu yalnız talimat, dönüş
+    yolunda normalizasyon yoktu ve model ambalajı bazen geri getiriyor
+    (ölçüldü: referans koşusunda sonnet/cleaning/card_krueger).
+
+    Soyma DOĞRULAYICIDA değil, cevabın girdiği yerde yapılıyor; çünkü ambalajlı
+    ad üç ayrı yeri bozuyor ve doğrulayıcı bunlardan yalnız biri:
+      1. `_validate_referenced_columns` — kolon "profilde yok" sanılır.
+      2. `_uncertainty_flag` — `columns.get(col, {})` boş döner, pct_missing 0.0
+         okunur ve yüksek-eksik gatekeeper kuralı SESSİZCE açık kalır.
+      3. `TransformCall.params()` — ambalajlı ad ledger'a yazılır, `apply_ledger`
+         `df[col]` ile KeyError alır.
+
+    Guardrail gevşemiyor: allowlist kontrolü soymadan sonra aynen koşuyor,
+    uydurma kolon hâlâ fail-loud. Ambalaj bizim kendi sarmalayıcımız, veride
+    meşru olarak bulunamaz; o yüzden her string alandan sökülüyor (kolon adı
+    taşımayan `fmt` gibi alanlarda no-op).
+
+    LİSTE alanları da soyuluyor: `DropDuplicatesCall.subset` kolon adlarını liste
+    olarak taşır ve tam da `_uncertainty_flag`'in koşulsuz gatekeeper'a
+    yönlendirdiği yüksek-etki transform'dur; `StandardizeNaCall.markers` ise
+    profildeki işaretli örnek DEĞERLERden kopyalanabilir.
+    """
+    unmarked: list[TransformDecision] = []
+    for decision in decisions:
+        call = decision.transform
+        call_updates = {name: _unmark_value(value) for name, value in call.model_dump().items()}
+        unmarked.append(
+            decision.model_copy(
+                update={
+                    "bulgu": strip_spotlight(decision.bulgu),
+                    "gerekce": strip_spotlight(decision.gerekce),
+                    "transform": call.model_copy(update=call_updates),
+                }
+            )
+        )
+    return unmarked
+
+
 def _validate_referenced_columns(
     decisions: list[TransformDecision], profile: dict[str, Any]
 ) -> None:
@@ -364,8 +414,10 @@ def generate_ledger(profile: dict[str, Any]) -> list[LedgerEntry]:
         output_type=CleaningProposal,
     )
     proposal = agent.run_sync(_build_judge_prompt(sanitized_profile, already_sanitized=True)).output
-    _validate_referenced_columns(proposal.decisions, profile)
-    _log_gate_reasons(proposal.decisions, l7_scan)
+    # Ambalaj sökme, HAM profile karşı koşan her kontrolden önce gelmeli.
+    decisions = _unmark_decisions(proposal.decisions)
+    _validate_referenced_columns(decisions, profile)
+    _log_gate_reasons(decisions, l7_scan)
 
     return [
         LedgerEntry(
@@ -377,5 +429,5 @@ def generate_ledger(profile: dict[str, Any]) -> list[LedgerEntry]:
             l7_prompt_guard_status=str(l7_scan.get("status", "unknown")),
             l7_prompt_guard_suspicious=bool(l7_scan.get("status") == "suspicious"),
         ).stamped()
-        for decision in proposal.decisions
+        for decision in decisions
     ]
