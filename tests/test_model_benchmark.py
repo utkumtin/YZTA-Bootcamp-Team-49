@@ -1836,9 +1836,21 @@ def _lifetime_credit_trio(dead_id: str) -> list[dict[str, Any]]:
     şekli önemli (bkz. eski `nvidia:hesap` havuzu, artık matriste yok).
     """
     return [
-        {"id": "lifetime-a", "provider": "test", "pool": "lifetime:test", "rpm": 40, "budget": 1000},
+        {
+            "id": "lifetime-a",
+            "provider": "test",
+            "pool": "lifetime:test",
+            "rpm": 40,
+            "budget": 1000,
+        },
         {"id": dead_id, "provider": "test", "pool": "lifetime:test", "rpm": 40, "budget": 1000},
-        {"id": "lifetime-c", "provider": "test", "pool": "lifetime:test", "rpm": 40, "budget": 1000},
+        {
+            "id": "lifetime-c",
+            "provider": "test",
+            "pool": "lifetime:test",
+            "rpm": 40,
+            "budget": 1000,
+        },
     ]
 
 
