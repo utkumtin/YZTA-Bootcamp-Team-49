@@ -29,12 +29,6 @@ logger = logging.getLogger(__name__)
 
 _TEST_MODEL: Any | None = None  # test enjeksiyonu (TestModel/FunctionModel)
 
-# NVIDIA NIM'in OpenAI-uyumlu ucu. pydantic-ai'de ayrı bir `nvidia` provider modülü
-# yok (bkz. pydantic_ai.providers listesi), o yüzden OpenAI istemcisi base_url ile
-# yönlendiriliyor. Sabit burada çünkü providers.py deklaratif config tutar; hangi
-# pydantic-ai sınıfının hangi adrese bağlandığı bu dosyanın işi.
-NVIDIA_NIM_BASE_URL = "https://integrate.api.nvidia.com/v1"
-
 
 @contextmanager
 def use_test_model(model: Any):
@@ -82,20 +76,29 @@ def _model_from_provider(pm: ProviderModel) -> Any:
             pm.model_id,
             provider=GroqProvider(api_key=get_api_key(pm.api_key_env, allow_canned=True)),
         )
-    if pm.provider == "nvidia":
+    if pm.provider == "openai":
         from pydantic_ai.models.openai import OpenAIChatModel
         from pydantic_ai.providers.openai import OpenAIProvider
 
-        # Diğer üç dalla aynı sözleşme: anahtarsız ortamda da kurulum yapılabilsin.
+        # Diğer dallarla aynı sözleşme: anahtarsız ortamda da kurulum yapılabilsin.
         # Zincire hangi üyenin gireceğine `_chain_model` karar verdiği için burada
         # fail-loud olmak canned fallback'i (dummy key'lerle yeniden kurulan zincir)
-        # OSError ile düşürürdü.
+        # OSError ile düşürürdü. base_url verilmiyor: OpenAIProvider'ın defaultu
+        # resmi api.openai.com ucu.
         return OpenAIChatModel(
             pm.model_id,
-            provider=OpenAIProvider(
-                api_key=get_api_key(pm.api_key_env, allow_canned=True),
-                base_url=NVIDIA_NIM_BASE_URL,
-            ),
+            provider=OpenAIProvider(api_key=get_api_key(pm.api_key_env, allow_canned=True)),
+        )
+    if pm.provider == "demo_sonnet_5":
+        from .demo_sonnet_5 import build_model
+
+        # Diğer dallardan farklı: `get_api_key` hiç çağrılmıyor çünkü gerçek bir
+        # anahtar kavramı yok — `DEMO_SONNET_5_SESSION` yalnız `_chain_model`'in
+        # bu slotu canned/dummy yola düşürüp düşürmeyeceğine karar verirken baktığı
+        # bir kapı. `effort` "off" olamaz: slotun `default_thinking="high"`'ı
+        # zaten bunu garantiliyor (bkz. providers.py: JUDGE_DEMO_SONNET_5_SLOT).
+        return build_model(
+            model_id=pm.model_id, effort=pm.thinking if pm.thinking != "off" else "high"
         )
     raise RuntimeError(f"Bilinmeyen sağlayıcı: {pm.provider!r}")
 

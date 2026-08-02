@@ -824,7 +824,7 @@ def test_read_rows_returns_empty_for_missing_file(tmp_path) -> None:
 @pytest.mark.parametrize(
     ("exc", "expected"),
     [
-        (OSError("NVIDIA_API_KEY tanımlı değil. Şunlardan biriyle ayarlayın:"), "anahtar_yok"),
+        (OSError("OPENAI_API_KEY tanımlı değil. Şunlardan biriyle ayarlayın:"), "anahtar_yok"),
         (RuntimeError("Error code: 429 - rate limit exceeded"), "kota"),
         (RuntimeError("Error code: 404 - model not found"), "model_yok"),
         (RuntimeError("Error code: 401 - Unauthorized"), "yetki"),
@@ -1063,18 +1063,13 @@ def test_models_json_has_control_group_per_pinned_default() -> None:
     controls = {m["id"] for m in load_models() if m.get("control")}
 
     assert "gemini-3.6-flash" in controls  # JUDGE_SLOT defaultu
-    assert "thinkingmachines/inkling" in controls  # AA-Omniscience/IFBench referansı
 
 
 def test_models_json_shared_pools_are_declared() -> None:
     """Aynı hesap kotasını paylaşan uçlar tek havuzda toplanmalı."""
     models = load_models()
-    nvidia = {quota_pool(m) for m in models if m["provider"] == "nvidia"}
-    openrouter = {quota_pool(m) for m in models if m["provider"] == "openrouter"}
     google = {quota_pool(m) for m in models if m["provider"] == "google"}
 
-    assert len(nvidia) == 1, "NVIDIA kredileri hesap seviyesinde ortak"
-    assert len(openrouter) == 1, "OpenRouter :free kotası ortak havuz"
     assert len(google) == 4, "Google limitleri model başına, havuz paylaşılmamalı"
 
 
@@ -1083,9 +1078,10 @@ def test_models_json_shared_pool_members_declare_the_same_rpm() -> None:
 
     Aynı havuzdaki iki uç farklı rpm bildirirse bekleme süresi, o an hangi
     modelin çağrıldığına göre rastgele geniş/dar hesaplanır — pool-level throttle
-    yalnız havuzdaki TÜM üyeler aynı rpm'i paylaşırsa doğru çalışır. Bugün NVIDIA
-    (40) ve OpenRouter (20) havuzlarında zaten böyle; bu test bunu sessizce
-    bozulmaya (ör. farklı rpm'li yeni bir model eklenmesine) karşı kilitler.
+    yalnız havuzdaki TÜM üyeler aynı rpm'i paylaşırsa doğru çalışır. Matriste bugün
+    çok-üyeli paylaşımlı havuz yok (OpenRouter çıkarıldı), ama bu test paylaşımlı
+    bir havuz geri eklenirse (farklı rpm'li bir üyeyle) sessizce bozulmaya karşı
+    kilitli kalsın diye duruyor.
     """
     by_pool: dict[str, set[int | None]] = {}
     for model in load_models():
@@ -1534,15 +1530,6 @@ def test_by_priority_keeps_file_order_within_a_tier() -> None:
     assert [m["id"] for m in by_priority(models)] == ["a", "b"]
 
 
-def test_shipped_matrix_puts_strongest_nvidia_candidates_first() -> None:
-    """NVIDIA havuzu tek ve tükenebilir; kredinin nereye gittiği önem taşır."""
-    nvidia = [m for m in by_priority(load_models()) if m["provider"] == "nvidia"]
-    first_ids = {m["id"] for m in nvidia[:4]}
-
-    assert "stepfun-ai/step-3.7-flash" not in first_ids
-    assert first_ids & {"deepseek-ai/deepseek-v4-pro", "thinkingmachines/inkling"}
-
-
 # --------------------------------------------------------------------------- #
 # Preflight ve model sabitleme
 # --------------------------------------------------------------------------- #
@@ -1791,7 +1778,7 @@ def test_ship_matrix_keeps_the_quota_extension_of_a_shipped_model() -> None:
     shipped = bench.ship_matrix(load_models())
     ids = {m["id"] for m in shipped}
 
-    assert {"gemini-3.6-flash", "gemma-4-31b-it", "thinkingmachines/inkling"} <= ids
+    assert {"gemini-3.6-flash", "gemma-4-31b-it"} <= ids
     assert "gemini-3.5-flash" in ids, "kota uzantısı düşmüş"
     assert all(m.get("ship") or m.get("fallback_only") for m in shipped)
 
@@ -1842,18 +1829,31 @@ def test_plan_lines_minutes_reflect_the_token_limit() -> None:
     assert round(by_rpm) == 0, "rpm'e göre hesaplansaydı 0 dk çıkardı — test ayırt etmiyor"
 
 
+def _lifetime_credit_trio(dead_id: str) -> list[dict[str, Any]]:
+    """Ömür-boyu (yenilenmeyen) kredi paylaşan, biri ölü 3 sentetik uç.
+
+    Gerçek bir sağlayıcıya bağlı değil — yalnız `budget`/`pool` alanlarının
+    şekli önemli (bkz. eski `nvidia:hesap` havuzu, artık matriste yok).
+    """
+    return [
+        {"id": "lifetime-a", "provider": "test", "pool": "lifetime:test", "rpm": 40, "budget": 1000},
+        {"id": dead_id, "provider": "test", "pool": "lifetime:test", "rpm": 40, "budget": 1000},
+        {"id": "lifetime-c", "provider": "test", "pool": "lifetime:test", "rpm": 40, "budget": 1000},
+    ]
+
+
 def test_circuit_breaker_skips_the_rest_of_a_dead_model(monkeypatch, tmp_path) -> None:
     """Ölü uç her görevde en fazla `CIRCUIT_BREAK_ERRORS` çağrı harcar; sağlamlar tam koşar.
 
-    NVIDIA'nın ~1.000 kredisi tek seferlik ve yenilenmiyor. Ölü bir uç devre kesici
-    olmadan 48 çağrı boyunca
-    kredi ve saat yakar. Eleme görev bazlı olduğu için tavan 2 değil 2×görev sayısı
-    — karşılığında modelin hangi görevde boğulduğunu öğreniyoruz.
+    Ömür-boyu (yenilenmeyen) kredi paylaşan bir havuzda ölü bir uç devre kesici
+    olmadan tüm koşu boyunca kredi ve saat yakar. Eleme görev bazlı olduğu için
+    tavan 2 değil 2×görev sayısı — karşılığında modelin hangi görevde boğulduğunu
+    öğreniyoruz.
     """
-    dead = "nvidia/nemotron-3-ultra-550b-a55b"
-    nvidia = by_priority([m for m in load_models() if m["provider"] == "nvidia"])
+    dead = "lifetime-b"
+    trio = _lifetime_credit_trio(dead)
     _fresh, rows = _run_days(
-        monkeypatch, tmp_path, ["2026-07-30"], models=nvidia, dead_ids=frozenset({dead})
+        monkeypatch, tmp_path, ["2026-07-30"], models=trio, dead_ids=frozenset({dead})
     )
 
     per_model: dict[str, int] = {}
@@ -1864,19 +1864,19 @@ def test_circuit_breaker_skips_the_rest_of_a_dead_model(monkeypatch, tmp_path) -
     assert per_model[dead] == bench.CIRCUIT_BREAK_ERRORS * len(bench.TASKS)
     assert [r for r in rows if r.get("circuit_broken")], "eleme rapora iz bırakmamış"
     assert dead in "\n".join(bench._circuit_break_lines(rows))
-    for model in nvidia:
+    for model in trio:
         if model["id"] != dead:
             assert per_model[model["id"]] == full, "sağlam model de kesilmiş"
 
 
 def test_seed_counts_prior_days_only_for_lifetime_credit_pools() -> None:
-    """Dünkü NVIDIA kredisi geri gelmez, dünkü Gemini isteği bugünün 20'sinden düşmez.
+    """Dünkü ömür-boyu kredi geri gelmez, dünkü Gemini isteği bugünün 20'sinden düşmez.
 
     `quota_cap()` ikisini de tek sayıya indiriyor; ayrım yapılmazsa günlük havuzlar
     ömür-boyu tavan gibi davranır ve çok günlü koşu ilk günden sonra durur.
     """
     daily = {"id": "d", "provider": "google", "rpm": 5, "rpd": 20}
-    lifetime = {"id": "l", "provider": "nvidia", "pool": "nvidia:hesap", "rpm": 40, "budget": 1000}
+    lifetime = {"id": "l", "provider": "test", "pool": "lifetime:test", "rpm": 40, "budget": 1000}
     prior = [
         {"model_id": "d", "served_by": "d", "date": "2026-07-29"},
         {"model_id": "d", "served_by": "d", "date": "2026-07-30"},

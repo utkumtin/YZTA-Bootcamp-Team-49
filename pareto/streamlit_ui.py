@@ -11,12 +11,19 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
-from .config import ModelRole, PrivacyMode, resolve_api_key, resolve_setting
+from .config import (
+    ModelRole,
+    PrivacyMode,
+    get_effective_privacy_mode,
+    resolve_api_key,
+    resolve_setting,
+)
 from .llm.providers import (
     JUDGE_PRIVATE_SLOT,
     JUDGE_SLOT,
     ModelOption,
     ModelSlot,
+    chain_for,
     judge_slots_for,
     option_ids,
 )
@@ -27,17 +34,28 @@ _ICONS_DIR = Path(__file__).resolve().parent.parent / "app" / "assets" / "icons"
 
 BYOK_WIDGET_KEYS: dict[str, str] = {
     "GEMINI_API_KEY": "byok_gemini_input",
+    "GEMINI_PAID_API_KEY": "byok_gemini_paid_input",
     "GROQ_API_KEY": "byok_groq_input",
     "OPENROUTER_API_KEY": "byok_openrouter_input",
-    "NVIDIA_API_KEY": "byok_nvidia_input",
+    "OPENAI_API_KEY": "byok_openai_input",
 }
 
 _PROVIDER_LABELS: dict[str, str] = {
     "GEMINI_API_KEY": "Gemini",
+    "GEMINI_PAID_API_KEY": "Gemini (private)",
     "GROQ_API_KEY": "Groq",
     "OPENROUTER_API_KEY": "OpenRouter",
-    "NVIDIA_API_KEY": "NVIDIA",
+    "OPENAI_API_KEY": "OpenAI",
 }
+
+# no-train/DPA garantisi hesap-seviyesinde bir özelliktir, uygulama bunu doğrulayamaz
+# (bkz. JUDGE_GROQ_PRIVATE_SLOT'taki aynı varsayım, providers.py). BYOK ile kendi
+# anahtarını giren kullanıcı bu sorumluluğu üstlenir — widget'ın yanında hatırlatılır.
+_PRIVATE_KEY_WARNING = (
+    "Bu anahtarın gerçekten no-train/DPA kapsamındaki bir Gemini projesine ait "
+    "olduğunu doğrulamak size aittir — ücretsiz katman bir anahtar girerseniz "
+    "PRIVATE modun no-train garantisi sessizce bozulur."
+)
 
 # pydantic-ai provider prefix -> kullanıcının tanıdığı ad. Ayarlar sekmesi eskiden ham
 # prefix'i ("google") gösteriyordu, sidebar ise "Gemini" diyordu; aynı şey için iki
@@ -47,7 +65,8 @@ _PROVIDER_DISPLAY: dict[str, str] = {
     "google": "Gemini",
     "groq": "Groq",
     "openrouter": "OpenRouter",
-    "nvidia": "NVIDIA",
+    "openai": "OpenAI",
+    "demo_sonnet_5": "Demo (Sonnet 5)",
 }
 
 _THINKING_LABELS: dict[str, str] = {
@@ -396,6 +415,18 @@ def _render_canned_mode_banner() -> None:
     """
     if not is_canned_mode(ModelRole.JUDGE):
         return
+    # Hangi golden-path cache'in oynatıldığını söylemek için zincirin başını
+    # (gerçek anahtar aranmadan) çözüyoruz — `is_canned_mode` yalnız bool döner.
+    head_provider = chain_for(ModelRole.JUDGE, get_effective_privacy_mode())[0].provider
+    if head_provider == "demo_sonnet_5":
+        st.warning(
+            "Canned Mod Aktif: Gösterilen sonuçlar Claude Sonnet 5 (high effort) ile "
+            "önceden üretilmiş, committed bir demo çalışmasından geliyor. Kendi "
+            "verinizle analiz yapmak ve modeli canlı kullanmak için **Ayarlar** "
+            "sekmesinden kendi API anahtarınızı (BYOK) girin.",
+            icon=":material/smart_toy:",
+        )
+        return
     st.warning(
         "Canned Mod Aktif: Kendi verinizle analiz yapmak ve modeli canlı kullanmak için "
         "**Ayarlar** sekmesinden kendi API anahtarınızı (BYOK) girin.",
@@ -625,6 +656,21 @@ def _render_privacy_note(privacy: PrivacyMode) -> None:
         st.caption(f"Tam metin: [PRIVACY.md]({_PRIVACY_DOC_URL})")
 
 
+def _sync_judge_provider_choice() -> None:
+    """`judge_provider_radio` widget değerini kalıcı `judge_provider_choice`ya kopyalar.
+
+    Ayarlar sekmesi yalnız ana sayfada (`home.py`) render olur; Temizleme/Analiz gibi
+    diğer sayfalarda bu radio hiç çizilmiyor. Streamlit, bir widget bir run'da
+    render olmazsa o widget'ın session_state kaydını temizliyor
+    (`session_state.py: remove_stale_widgets`) — yani seçim widget'ın KENDİ key'inde
+    tutulsaydı sayfa değişince silinirdi. Bu yüzden radio'nun key'i (`judge_provider_radio`)
+    bilinçli olarak ayrı ve tek kullanımlık: gerçek/kalıcı değer `judge_provider_choice`da
+    (düz bir session_state girdisi, hiçbir widget'a bağlı değil) durur ve her sayfada
+    `_session_provider_choice`/`active_judge_route` oradan okur.
+    """
+    st.session_state["judge_provider_choice"] = st.session_state["judge_provider_radio"]
+
+
 def _render_provider_rail(slots_by_provider: dict[str, ModelSlot], default_provider: str) -> str:
     """Sağlayıcı listesi: her satırda ad + o sağlayıcının anahtar durumu.
 
@@ -638,28 +684,31 @@ def _render_provider_rail(slots_by_provider: dict[str, ModelSlot], default_provi
     mekanizmaya dayanmıyor, ama aynı kuralı burada da bilerek koruyoruz.)
     """
     names = list(slots_by_provider)
+    current = str(st.session_state.get("judge_provider_choice", "")) or default_provider
+    if current not in names:
+        current = default_provider
 
     def _row(name: str) -> str:
         ready = bool(resolve_api_key(slots_by_provider[name].api_key_env)[0])
         badge = ":green-badge[hazır]" if ready else ":gray-badge[anahtar yok]"
         return f"**{_PROVIDER_DISPLAY.get(name, name)}** {badge}"
 
-    return str(
-        st.radio(
-            "Sağlayıcı",
-            options=names,
-            index=names.index(default_provider),
-            key="judge_provider_choice",
-            format_func=_row,
-            label_visibility="collapsed",
-            # Sayfadaki tek yer burası: bu seçimin NEYİ sürdüğünü söylüyor. Rota şeridi
-            # zinciri gösteriyor ama zincirden neyin geçtiğini söylemiyor.
-            help=(
-                "Estimand, spec menüsü, temizleme önerisi ve varyans anlatısı bu "
-                "sağlayıcıyla üretilir. Hem **public** hem **private** modda geçerli."
-            ),
-        )
+    selected = st.radio(
+        "Sağlayıcı",
+        options=names,
+        index=names.index(current),
+        key="judge_provider_radio",
+        format_func=_row,
+        label_visibility="collapsed",
+        on_change=_sync_judge_provider_choice,
+        # Sayfadaki tek yer burası: bu seçimin NEYİ sürdüğünü söylüyor. Rota şeridi
+        # zinciri gösteriyor ama zincirden neyin geçtiğini söylemiyor.
+        help=(
+            "Estimand, spec menüsü, temizleme önerisi ve varyans anlatısı bu "
+            "sağlayıcıyla üretilir. Hem **public** hem **private** modda geçerli."
+        ),
     )
+    return str(selected)
 
 
 def _restore_hidden_byok_toggles(active_env: str) -> None:
@@ -711,9 +760,11 @@ def _render_key_section(slot: ModelSlot) -> None:
     ):
         widget_key = BYOK_WIDGET_KEYS.get(env_name)
         if widget_key is None:
-            # Operatör anahtarı (örn. private Gemini) — BYOK girişi yok, yalnız .env.
             st.markdown(f"Yalnız `.env` üzerinden ayarlanır: `{env_name}`")
             return
+
+        if env_name == "GEMINI_PAID_API_KEY":
+            st.caption(_PRIVATE_KEY_WARNING)
 
         with st.form(f"byok_form_{env_name}", clear_on_submit=False, border=False):
             st.text_input(
@@ -924,9 +975,9 @@ _SETTINGS_STYLE_HTML = """
 }
 
 /* --- Sağlayıcı rayı: radio -> tıklanabilir satır listesi --- */
-.st-key-judge_provider_choice { width: 100% !important; }
-.st-key-judge_provider_choice [role="radiogroup"] { gap: 2px; width: 100%; }
-.st-key-judge_provider_choice label[data-baseweb="radio"] {
+.st-key-judge_provider_radio { width: 100% !important; }
+.st-key-judge_provider_radio [role="radiogroup"] { gap: 2px; width: 100%; }
+.st-key-judge_provider_radio label[data-baseweb="radio"] {
     width: 100%;
     margin: 0;
     padding: 9px 12px;
@@ -935,12 +986,12 @@ _SETTINGS_STYLE_HTML = """
     transition: background-color 150ms ease, border-left-color 150ms ease;
 }
 /* Native nokta gizleniyor; seçili durum sol çubuk + zeminle veriliyor. */
-.st-key-judge_provider_choice label[data-baseweb="radio"] > div:first-of-type { display: none; }
-.st-key-judge_provider_choice label[data-baseweb="radio"] > div:last-of-type { width: 100%; }
-.st-key-judge_provider_choice label[data-baseweb="radio"] [data-testid="stMarkdownContainer"] {
+.st-key-judge_provider_radio label[data-baseweb="radio"] > div:first-of-type { display: none; }
+.st-key-judge_provider_radio label[data-baseweb="radio"] > div:last-of-type { width: 100%; }
+.st-key-judge_provider_radio label[data-baseweb="radio"] [data-testid="stMarkdownContainer"] {
     width: 100%;
 }
-.st-key-judge_provider_choice label[data-baseweb="radio"] [data-testid="stMarkdownContainer"] p {
+.st-key-judge_provider_radio label[data-baseweb="radio"] [data-testid="stMarkdownContainer"] p {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -948,15 +999,15 @@ _SETTINGS_STYLE_HTML = """
     width: 100%;
     margin: 0;
 }
-.st-key-judge_provider_choice label[data-baseweb="radio"]:hover {
+.st-key-judge_provider_radio label[data-baseweb="radio"]:hover {
     background: rgba(129, 140, 248, 0.09);
 }
-.st-key-judge_provider_choice label[data-baseweb="radio"]:has(input:checked) {
+.st-key-judge_provider_radio label[data-baseweb="radio"]:has(input:checked) {
     background: rgba(129, 140, 248, 0.14);
     border-left-color: #818cf8;
 }
 /* Nokta gizlenince klavye kullanıcısı için tek görünür ipucu odak halkası kalıyor. */
-.st-key-judge_provider_choice label[data-baseweb="radio"]:has(input:focus-visible) {
+.st-key-judge_provider_radio label[data-baseweb="radio"]:has(input:focus-visible) {
     outline: 2px solid #818cf8;
     outline-offset: 1px;
 }

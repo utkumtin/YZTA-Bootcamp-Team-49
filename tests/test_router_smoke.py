@@ -37,7 +37,6 @@ from pareto.llm.providers import (
     JUDGE_GROQ_PRIVATE_SLOT,
     JUDGE_GROQ_SLOT,
     JUDGE_OPENROUTER_PRIVATE_SLOT,
-    JUDGE_OPENROUTER_SLOT,
     JUDGE_SLOT,
     _resolve,
     chain_for,
@@ -331,12 +330,25 @@ def test_private_judge_slotlari_kuratorlu_secenek_tasir():
 
 
 def test_judge_provider_secimi_farkli_slota_yonlendirir(monkeypatch):
+    monkeypatch.setattr("streamlit.session_state", {"judge_provider_choice": "groq"})
+
+    chain = chain_for(ModelRole.JUDGE, PrivacyMode.PUBLIC)
+
+    assert chain[0].provider == "groq"
+    assert chain[0].api_key_env == JUDGE_GROQ_SLOT.api_key_env
+
+
+def test_openrouter_public_judge_secimi_yok_sayilir(monkeypatch):
+    """OpenRouter yalnız PRIVATE judge slotunda kayıtlı; PUBLIC'te seçilemez.
+
+    Herkese açık moddan kaldırıldı (:free uçları ZDR taşımıyor, ücretli uçlar da
+    yalnız PRIVATE'ta ZDR zorlanıyor) — bkz. providers.py modül docstring'i.
+    """
     monkeypatch.setattr("streamlit.session_state", {"judge_provider_choice": "openrouter"})
 
     chain = chain_for(ModelRole.JUDGE, PrivacyMode.PUBLIC)
 
-    assert chain[0].provider == "openrouter"
-    assert chain[0].api_key_env == JUDGE_OPENROUTER_SLOT.api_key_env
+    assert chain[0].provider == JUDGE_SLOT.provider
 
 
 def test_listede_olmayan_provider_secimi_yok_sayilir(monkeypatch):
@@ -350,7 +362,7 @@ def test_listede_olmayan_provider_secimi_yok_sayilir(monkeypatch):
 
 def test_provider_secimi_kimlik_alanlarini_asamaz():
     """Sağlayıcı seçilebilir olsa da provider/api_key_env/no_train hep koddaki slottan gelir."""
-    for slot in (JUDGE_SLOT, JUDGE_GROQ_SLOT, JUDGE_OPENROUTER_SLOT):
+    for slot in (JUDGE_SLOT, JUDGE_GROQ_SLOT, JUDGE_OPENROUTER_PRIVATE_SLOT):
         uc = _resolve(slot, allow_session=False)
         assert uc.provider == slot.provider
         assert uc.api_key_env == slot.api_key_env
@@ -383,7 +395,7 @@ def test_model_from_provider_openrouter_dogru_sinifi_kurar(monkeypatch):
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-anahtar")
 
-    pm = _resolve(JUDGE_OPENROUTER_SLOT, allow_session=False)
+    pm = _resolve(JUDGE_OPENROUTER_PRIVATE_SLOT, allow_session=False)
     model = _model_from_provider(pm)
 
     assert isinstance(model, OpenRouterModel)

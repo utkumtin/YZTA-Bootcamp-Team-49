@@ -9,11 +9,18 @@ yeni model çıktığında kod değişmez. Çözüm sırası: UI seçimi → env
 Slotun `provider` / `api_key_env` / `no_train` alanları KODDA pinli kalır — bunlar
 gizlilik ve kimlik-doğrulama garantileri, serbest ayar değil.
 
-JUDGE için sağlayıcı (Gemini/Groq/OpenRouter/NVIDIA) VE model seçimi artık hem PUBLIC
-hem PRIVATE modda UI'dan yapılabilir — kullanıcı yalnız küratörlü slot kümesi içinden
-seçer, kimlik alanları asla serbest değildir. MECHANICAL bu seçimin dışında, davranışı
-değişmedi (failover zinciri, UI'da hiç gösterilmez). NVIDIA yalnız PUBLIC katmanda var:
-ücretsiz NIM ucu no-train garantisi taşımıyor.
+JUDGE için sağlayıcı VE model seçimi UI'dan yapılabilir — kullanıcı yalnız küratörlü
+slot kümesi içinden seçer, kimlik alanları asla serbest değildir. PUBLIC katmanda
+Gemini/Groq/OpenAI/Anthropic(CLI); PRIVATE katmanda Gemini/Groq/OpenRouter (ikisi
+ayrık kümeler, bkz. judge_slots_for). MECHANICAL bu seçimin dışında, davranışı
+değişmedi (failover zinciri, UI'da hiç gösterilmez). OpenAI yalnız PUBLIC katmanda
+var: API girdileri eğitime girmiyor ama tam ZDR değil (abuse taraması için ≤30 gün
+tutuluyor). OpenRouter yalnız PRIVATE katmanda var: ":free" uçları ZDR taşımıyor,
+`zdr=true` istek-bazlı zorlaması yalnız ücretli uçlarda anlamlı (bkz.
+JUDGE_OPENROUTER_PRIVATE_SLOT). Anthropic(CLI) yalnız PUBLIC katmanda var ve gerçek
+bir API anahtarı taşımaz — canlı üretim trafiğine hiç girmez, yalnız demo/canned-mode
+golden-path cache'ini önceden dolduran bir üretim koşusunda gerçek bir alt süreç
+çalıştırır (bkz. demo_sonnet_5.py, JUDGE_DEMO_SONNET_5_SLOT).
 
 Privacy modu: PRIVATE modda yalnız `no_train=True` uçlar seçilir —
 free-train uçlar (Gemini free) YASAK. Anahtarlar env/BYOK; burada asla saklanmaz.
@@ -88,14 +95,32 @@ class ModelSlot:
 # değiştirilmeli (bkz. ADR 0004, 2026-07-24 notu).
 _JUDGE_GEMINI_OPTIONS: tuple[ModelOption, ...] = (ModelOption(model_id="gemini-3.6-flash"),)
 _JUDGE_GEMINI_PRIVATE_OPTIONS: tuple[ModelOption, ...] = (ModelOption(model_id="gemini-3.1-pro"),)
-_JUDGE_GROQ_OPTIONS: tuple[ModelOption, ...] = (ModelOption(model_id="llama-3.3-70b-versatile"),)
-_JUDGE_OPENROUTER_OPTIONS: tuple[ModelOption, ...] = (
-    ModelOption(model_id="deepseek/deepseek-r1:free"),
+_JUDGE_GROQ_OPTIONS: tuple[ModelOption, ...] = (
+    ModelOption(
+        model_id="llama-3.3-70b-versatile",
+        performance_note="Groq bu modeli 16 Ağustos 2026'da kaldırıyor",
+    ),
 )
 # Private: ZDR zorunlu, ":free" uçları hariç tutulur (bkz. JUDGE_OPENROUTER_PRIVATE_SLOT).
 _JUDGE_OPENROUTER_PRIVATE_OPTIONS: tuple[ModelOption, ...] = (
     ModelOption(model_id="deepseek/deepseek-r1"),
 )
+# Doğrudan OpenAI — NIM free ucunun (eski JUDGE_NVIDIA_SLOT) yerini alıyor: ZDR
+# garantisi yoktu, OpenAI da tam ZDR değil ama en azından eğitime girmiyor.
+# terra ilk eleman: sol'dan (frontier, $5/$30 MTok) ucuz, luna'dan (en zayıf) güçlü —
+# JUDGE için dengeli varsayılan. https://platform.openai.com/docs/models, 2026-08-01.
+_JUDGE_OPENAI_OPTIONS: tuple[ModelOption, ...] = (
+    ModelOption(model_id="gpt-5.6-terra"),
+    ModelOption(model_id="gpt-5.6-sol"),
+    ModelOption(model_id="gpt-5.6-luna"),
+)
+# `claude -p` CLI oturumu üzerinden (bkz. ../llm/demo_sonnet_5.py) — Anthropic
+# Developer API anahtarı gerekmez, bu yüzden burada da tek üye var: bu slot canlı
+# üretim trafiğine hiç girmez (deploy ortamında `claude` binary'si yok), yalnız
+# demo/canned-mode golden-path cache'ini önceden dolduran bir üretim koşusunda
+# gerçekten çağrılır (bkz. scripts/generate_canned_cache.py). Ziyaretçi tarafında
+# her zaman committed cache'ten karşılanır.
+_JUDGE_DEMO_SONNET_5_OPTIONS: tuple[ModelOption, ...] = (ModelOption(model_id="claude-sonnet-5"),)
 # Tüm JUDGE slotlarında aynı küratörlü thinking seçenekleri (bkz. ADR 0004,
 # 2026-07-24 notu #2) — hangi sağlayıcı seçilirse seçilsin aynı seçenekler sunulur.
 _JUDGE_THINKING_OPTIONS: tuple[ThinkingChoice, ...] = ("off", "low", "medium", "high")
@@ -142,29 +167,34 @@ JUDGE_GROQ_PRIVATE_SLOT = ModelSlot(
     options=_JUDGE_GROQ_OPTIONS,
     thinking_options=_JUDGE_THINKING_OPTIONS,
 )
-JUDGE_OPENROUTER_SLOT = ModelSlot(
-    key="judge_openrouter",
-    provider="openrouter",
-    api_key_env="OPENROUTER_API_KEY",
+JUDGE_OPENAI_SLOT = ModelSlot(
+    key="judge_openai",
+    provider="openai",
+    api_key_env="OPENAI_API_KEY",
+    # OpenAI API girdileri varsayılan olarak eğitime girmiyor (2023-03-01'den beri,
+    # platform.openai.com/docs/guides/your-data) ama abuse taraması için kısa süre
+    # (≤30 gün) tutuluyor — tam ZDR değil, bu yüzden _PRIVATE_JUDGE_SLOTS'a girmiyor.
     no_train=False,
-    model_env="OPENROUTER_JUDGE_MODEL",
-    default_model=_JUDGE_OPENROUTER_OPTIONS[0].model_id,
-    options=_JUDGE_OPENROUTER_OPTIONS,
+    model_env="OPENAI_JUDGE_MODEL",
+    default_model=_JUDGE_OPENAI_OPTIONS[0].model_id,
+    options=_JUDGE_OPENAI_OPTIONS,
     thinking_options=_JUDGE_THINKING_OPTIONS,
 )
-JUDGE_NVIDIA_SLOT = ModelSlot(
-    key="judge_nvidia",
-    provider="nvidia",
-    api_key_env="NVIDIA_API_KEY",
-    # NIM'in ücretsiz ucu ZDR/no-train garantisi vermiyor → bu slot PUBLIC'e özgüdür,
-    # _PRIVATE_JUDGE_SLOTS'a ASLA eklenmemeli (tests/test_privacy_routing.py bekçisi).
+JUDGE_DEMO_SONNET_5_SLOT = ModelSlot(
+    key="judge_demo_sonnet_5",
+    provider="demo_sonnet_5",
+    # Gerçek bir API anahtarı DEĞİL: yalnız yerel `claude` CLI oturumuyla (Claude Code
+    # OAuth, ~/.claude/.credentials.json) golden-path cache'i doldururken bilinçli
+    # olarak açılan bir kapı. Deploy edilen ortamda bu değişken hiç tanımlı değildir
+    # ve `claude` binary'si de yoktur — bu yüzden slot orada HER ZAMAN dummy-key
+    # (canned) yoluna düşer, hiçbir zaman gerçek bir alt süreç çalıştırmaz
+    # (bkz. router._model_from_provider, cache.CannedModeCacheMissError).
+    api_key_env="DEMO_SONNET_5_SESSION",
     no_train=False,
-    model_env="NVIDIA_JUDGE_MODEL",
-    default_model="nvidia/nemotron-3-super-120b-a12b",
-    # options bilerek boş: küratörlü liste JUDGE benchmark'ı sonuçlanınca doldurulacak
-    # (bkz. benchmarks/README.md). Boşken slot yalnız `.env`'den ayarlanır — ModelSlot
-    # docstring'indeki sözleşme. UI'da sağlayıcı görünür, model kutusu `.env` pinini gösterir.
-    options=(),
+    model_env="DEMO_SONNET_5_JUDGE_MODEL",
+    default_model=_JUDGE_DEMO_SONNET_5_OPTIONS[0].model_id,
+    options=_JUDGE_DEMO_SONNET_5_OPTIONS,
+    default_thinking="high",
     thinking_options=_JUDGE_THINKING_OPTIONS,
 )
 # L7 detective scanner (Prompt Guard): UI'da gösterilmez; merkezi model/env
@@ -207,13 +237,13 @@ MECH_GROQ_SLOT = ModelSlot(
     model_env="GROQ_MECHANICAL_MODEL",
     default_model="llama-3.3-70b-versatile",
 )
-MECH_OPENROUTER_SLOT = ModelSlot(
-    key="mech_openrouter",
-    provider="openrouter",
-    api_key_env="OPENROUTER_API_KEY",
-    no_train=False,
-    model_env="OPENROUTER_MECHANICAL_MODEL",
-    default_model="deepseek/deepseek-r1:free",
+MECH_OPENAI_SLOT = ModelSlot(
+    key="mech_openai",
+    provider="openai",
+    api_key_env="OPENAI_API_KEY",
+    no_train=False,  # bkz. JUDGE_OPENAI_SLOT: eğitime girmiyor, tam ZDR değil
+    model_env="OPENAI_MECHANICAL_MODEL",
+    default_model="gpt-5.6-luna",
 )
 
 # Yargı: her (sağlayıcı × privacy) için ayrı pinli tek-üyeli slot — hangi slotun
@@ -224,13 +254,13 @@ MECH_OPENROUTER_SLOT = ModelSlot(
 _JUDGE_SLOTS: tuple[ModelSlot, ...] = (
     JUDGE_SLOT,
     JUDGE_GROQ_SLOT,
-    JUDGE_OPENROUTER_SLOT,
-    JUDGE_NVIDIA_SLOT,
+    JUDGE_OPENAI_SLOT,
+    JUDGE_DEMO_SONNET_5_SLOT,
 )
 _MECHANICAL_SLOTS: tuple[ModelSlot, ...] = (
     MECH_GEMINI_SLOT,
     MECH_GROQ_SLOT,
-    MECH_OPENROUTER_SLOT,
+    MECH_OPENAI_SLOT,
 )
 _PRIVATE_JUDGE_SLOTS: tuple[ModelSlot, ...] = (
     JUDGE_PRIVATE_SLOT,

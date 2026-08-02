@@ -8,6 +8,7 @@ from typing import cast
 import pandas as pd
 import streamlit as st
 
+from app.demo import DEMO_ANALYSIS_STATE, DEMO_DECLARATION, DEMO_RESEARCH_STORY
 from pareto.analysis.hypothesis import (
     SocraticDeclaration,
     draft_tac_proposal,
@@ -150,6 +151,14 @@ for key, value in defaults.items():
 # -------------------------------------------------
 
 if not st.session_state.socratic_submitted:
+    # Demo modu: golden-path cache'i tam bu metinlerle üretildi (bkz.
+    # app/demo.py, scripts/generate_canned_cache.py) — burada bir karakter
+    # bile değişirse JUDGE isteği farklı hash'e düşer ve canned modda
+    # `CannedModeCacheMissError` fırlar. Alanlar yine de düzenlenebilir; demoyu
+    # değiştirmeden ilerlemek isteyen bir ziyaretçi bunlara dokunmaz.
+    demo_mode = bool(st.session_state.get("demo_mode"))
+    _sign_options = ["positive", "negative", "ambiguous"]
+
     with st.form("socratic_form"):
         st.subheader("Adım 1: Sokratik Beyan")
 
@@ -160,26 +169,26 @@ if not st.session_state.socratic_submitted:
 
         research_story = st.text_area(
             "Araştırma Hikayesi",
+            value=DEMO_RESEARCH_STORY if demo_mode else "",
             help=("Araştırmanın bağlamını, problemini ve beklenen mekanizmayı açıklayın."),
         )
 
         conceptual_treatment = st.text_input(
             "Kavramsal Müdahale (Treatment)",
+            value=DEMO_DECLARATION.conceptual_treatment if demo_mode else "",
             placeholder=("Örn: Eğitim programına katılım"),
         )
 
         conceptual_outcome = st.text_input(
             "Kavramsal Çıktı (Outcome)",
+            value=DEMO_DECLARATION.conceptual_outcome if demo_mode else "",
             placeholder=("Örn: Gelir seviyesi"),
         )
 
         expected_sign = st.selectbox(
             "Beklenen Etki Yönü",
-            options=[
-                "positive",
-                "negative",
-                "ambiguous",
-            ],
+            options=_sign_options,
+            index=(_sign_options.index(DEMO_DECLARATION.expected_sign) if demo_mode else 0),
             format_func=lambda x: {
                 "positive": "Pozitif",
                 "negative": "Negatif",
@@ -370,11 +379,27 @@ if frozen_estimand is None:
 state = st.session_state.get("analysis_state")
 
 if state is None:
-    guessed_unit = next((c for c in columns if "id" in c.lower()), columns[0])
-    guessed_time = next(
-        (c for c in columns if "year" in c.lower() or "date" in c.lower()), columns[0]
+    demo_mode = bool(st.session_state.get("demo_mode"))
+    demo_state = DEMO_ANALYSIS_STATE if demo_mode else {}
+
+    guessed_unit = (
+        demo_state["unit_col"]
+        if demo_mode and demo_state["unit_col"] in columns
+        else next((c for c in columns if "id" in c.lower()), columns[0])
     )
-    guessed_cluster = guessed_unit
+    guessed_time = (
+        demo_state["time_col"]
+        if demo_mode and demo_state["time_col"] in columns
+        else next((c for c in columns if "year" in c.lower() or "date" in c.lower()), columns[0])
+    )
+    guessed_cluster = (
+        demo_state["cluster_by"]
+        if demo_mode and demo_state["cluster_by"] in columns
+        else guessed_unit
+    )
+    guessed_controls = (
+        [c for c in demo_state.get("controls", []) if c in columns] if demo_mode else []
+    )
 
     st.subheader("Analiz Yapılandırması")
     with st.form("analysis_state_form"):
@@ -396,7 +421,7 @@ if state is None:
         controls_input = st.multiselect(
             "Kontrol kolonları",
             options=columns,
-            default=[],
+            default=guessed_controls,
             help="Treatment ve outcome kolonlarını kontrol olarak seçmeyin.",
         )
         saved_state = st.form_submit_button("Yapılandırmayı kaydet", type="primary")
