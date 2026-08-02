@@ -239,6 +239,70 @@ def fetch_castle() -> None:
     _dta_to_csv(dta, HERE / "castle/raw/castle.csv")
 
 
+def _card_krueger_long(wide_csv: Path, dest: Path) -> None:
+    """Geniş iki-dalga formatını unit×time uzun panele çevirir (deterministik türev extract).
+
+    Panel-merge spine'ı `store_id × wave` ister; ham dosyada iki dalga aynı satırda,
+    dalga-2 kolonları `2` sonekli. Reshape vetted transform kataloğunun kapsamı dışında
+    (keyfi reshape orada bilinçli yok), bu yüzden repo konvansiyonuna uyup türev extract
+    olarak burada üretilir: ham dosya olduğu gibi kalır, türev commit edilir.
+
+    Birim kimliği arşivdeki satır sırasıdır, anket sayfa numarası (SHEET) değil: 410
+    mağazaya karşılık 409 tekil SHEET var (407 iki farklı zincir/eyalette tekrarlıyor),
+    yani sayfa numarası birim anahtarı olamaz. SHEET izlenebilirlik için kolon kalır.
+    """
+    import pandas as pd
+
+    if dest.exists():
+        print(f"[SKIP] {dest.relative_to(HERE)} zaten var")
+        return
+
+    wide = pd.read_csv(wide_csv, dtype=str)
+    store_id = pd.Series([f"{i:03d}" for i in range(len(wide))], index=wide.index)
+    treated_state = pd.to_numeric(wide["STATE"], errors="raise").astype("Int64")
+    closed = pd.to_numeric(wide["STATUS2"], errors="coerce") == 3
+
+    frames = []
+    for wave, suffix in ((1, ""), (2, "2")):
+        num = {
+            role: pd.to_numeric(wide[f"{src}{suffix}"], errors="coerce")
+            for role, src in (
+                ("emp_ft", "EMPFT"),
+                ("emp_pt", "EMPPT"),
+                ("managers", "NMGRS"),
+                ("wage_start", "WAGE_ST"),
+            )
+        }
+        # Makaledeki FTE tanımı: tam zamanlı + müdahil müdür + yarı zamanlının yarısı.
+        fte = num["emp_ft"] + num["managers"] + 0.5 * num["emp_pt"]
+        if wave == 2:
+            # Kalıcı kapanan mağaza (STATUS2=3) dalga 2'de eksik değil, sıfır istihdamdır.
+            fte = fte.mask(closed, 0.0)
+        frames.append(
+            pd.DataFrame(
+                {
+                    "store_id": store_id,
+                    "sheet": wide["SHEET"],
+                    "wave": wave,
+                    "fte_employment": fte,
+                    "treated_state": treated_state,
+                    # 2×2 tedavi göstergesi: NJ mağazaları yalnız ikinci dalgada tedavili.
+                    "treated_post": ((treated_state == 1) & (wave == 2)).astype("Int64"),
+                    "chain": pd.to_numeric(wide["CHAIN"], errors="coerce").astype("Int64"),
+                    "co_owned": pd.to_numeric(wide["CO_OWNED"], errors="coerce").astype("Int64"),
+                    "wage_start": num["wage_start"],
+                }
+            )
+        )
+
+    # Eksik FTE satırları düşürülmez: örneklem daralması temizleme/analiz aşamasının kararı.
+    long = pd.concat(frames, ignore_index=True).sort_values(["store_id", "wave"])
+    # Byte-for-byte reproducibility across OS: commitli extract Linux'ta LF ile
+    # üretildiği için burada da satır sonunu sabitliyoruz.
+    long.to_csv(dest, index=False, na_rep="", lineterminator="\n")
+    print(f"[OK  ] {dest.relative_to(HERE)} yazıldı ({len(long)} gözlem)")
+
+
 def fetch_card_krueger() -> None:
     """Card-Krueger NJ-PA asgari ücret — minik 2×2 fixture (CI smoke)."""
     import pandas as pd
@@ -248,19 +312,20 @@ def fetch_card_krueger() -> None:
     _download("https://davidcard.berkeley.edu/data_sets/njmin.zip", zip_path)
     if csv.exists():
         print(f"[SKIP] {csv.relative_to(HERE)} zaten var")
-        return
-    with zipfile.ZipFile(zip_path) as zf:
-        raw = zf.read("public.dat")
-        # codebook/read.me kolon tanımları ve atıf için CSV'nin yanında dursun
-        for member in ("codebook", "read.me"):
-            target = zip_path.parent / member
-            if not target.exists():
-                target.write_bytes(zf.read(member))
-    df = pd.read_csv(io.BytesIO(raw), sep=r"\s+", names=NJMIN_COLUMNS, na_values=".")
-    if len(df.columns) != len(NJMIN_COLUMNS) or len(df) != 410:  # codebook: 410 gözlem
-        raise SystemExit(f"public.dat beklenen şekilde değil: {df.shape}")
-    df.to_csv(csv, index=False)
-    print(f"[OK  ] {csv.relative_to(HERE)} yazıldı ({len(df)} gözlem)")
+    else:
+        with zipfile.ZipFile(zip_path) as zf:
+            raw = zf.read("public.dat")
+            # codebook/read.me kolon tanımları ve atıf için CSV'nin yanında dursun
+            for member in ("codebook", "read.me"):
+                target = zip_path.parent / member
+                if not target.exists():
+                    target.write_bytes(zf.read(member))
+        df = pd.read_csv(io.BytesIO(raw), sep=r"\s+", names=NJMIN_COLUMNS, na_values=".")
+        if len(df.columns) != len(NJMIN_COLUMNS) or len(df) != 410:  # codebook: 410 gözlem
+            raise SystemExit(f"public.dat beklenen şekilde değil: {df.shape}")
+        df.to_csv(csv, index=False)
+        print(f"[OK  ] {csv.relative_to(HERE)} yazıldı ({len(df)} gözlem)")
+    _card_krueger_long(csv, HERE / "card_krueger/raw/card_krueger_long.csv")
 
 
 FETCHERS = [fetch_sahie, fetch_saipe, fetch_divorce, fetch_castle, fetch_card_krueger]
@@ -271,6 +336,7 @@ EXPECTED_FETCHABLE = [
     "divorce/raw/divorce.csv",
     "castle/raw/castle.csv",
     "card_krueger/raw/card_krueger.csv",
+    "card_krueger/raw/card_krueger_long.csv",
 ]
 
 

@@ -1,0 +1,19 @@
+# Uygulama yalnız koyu temada çalışır. Marka rengi navbar ve Ayarlar panelindeki
+# indigo ile aynı ton; Streamlit'in varsayılan kırmızısı primary butonlarda, radio ve
+# slider'larda görünüyordu.
+#
+# NEDEN tek bölüm: Streamlit 1.58 frontend'i, `[theme.light]`/`[theme.dark]` bölümlerinden
+# en az biri doluysa tema listesini "Light + Dark + Use system setting" olarak kuruyor ve
+# ayarlar menüsünde seçici çıkıyor. Yalnız `[theme]` varsa listeye tek bir "Custom Theme"
+# giriyor ve hazır Light/Dark temaları `keepPresetThemes:false` ile düşürülüyor — yani
+# kullanıcı açık temaya geçemiyor. Buraya `[theme.light]` veya `[theme.dark]` eklenirse
+# seçici geri gelir ve uygulama yeniden açık temada da açılabilir hale gelir.
+#
+# NEDEN `base = "dark"`: taban artık istemcinin OS/tarayıcı tercihine bırakılmıyor, koyu
+# sabitleniyor. Uygulamanın kendi CSS'i (navbar, ayarlar paneli, başlık ikonları) ve
+# `app/assets/pareto_logo.svg` bu yüzden `prefers-color-scheme` dallanması taşımıyor,
+# doğrudan koyu değerleri kullanıyor. Taban buradan değiştirilirse o dosyalar da elle
+# güncellenmeli, yoksa açık zeminde açık metin oluşur.
+[theme]
+base = "dark"
+primaryColor = "#818cf8"

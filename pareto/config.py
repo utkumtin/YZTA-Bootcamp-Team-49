@@ -1,7 +1,8 @@
 """Pareto genel ayarları — tek kaynak.
 
 Model-router rolleri, privacy modu, sert spec tavanı,
-determinizm pinleri. Sırlar buraya YAZILMAZ; yalnız env/`st.secrets` üzerinden okunur.
+determinizm pinleri. Sırlar buraya YAZILMAZ; yalnız oturum BYOK'u/env/
+`st.secrets` üzerinden okunur.
 """
 
 from __future__ import annotations
@@ -28,10 +29,16 @@ class ModelRole(StrEnum):
 
 @dataclass(frozen=True)
 class ParetoSettings:
-    # --- Model router. Gerçek model adları providers.py'de. ---
-    judge_model: str = "gemini-3.5-flash"  # pinli yargı modeli (thinking ON)
-    mechanical_model: str = "gemini-flash-lite"  # ucuz mekanik default
+    # --- Model router. Model adları/slotları providers.py'de (tek kaynak). ---
     llm_temperature: float = 0.0  # deterministik → reprodüksiyon + cache
+
+    # --- Geçici (transient) hata dayanıklılığı ---
+    # JUDGE zinciri tek üyeli ve pinli (ADR 0004), yani failover yok: tek bir 429
+    # ya da 5xx tüm akışı düşürüyordu. Deneme sayısı düşük tutuluyor çünkü serbest
+    # katmanda asıl darboğaz RPM; agresif retry kotayı daha hızlı yakar.
+    llm_max_attempts: int = 3  # 1 asıl + 2 yeniden deneme
+    llm_retry_base_delay: float = 1.0  # saniye, üstel: 1s, 2s, 4s...
+    llm_retry_max_delay: float = 8.0  # tavan; jitter bunun üstüne çıkmaz
 
     # --- Privacy ---
     privacy_mode: PrivacyMode = PrivacyMode.PUBLIC
@@ -55,6 +62,15 @@ class ParetoSettings:
     store_dir: str = "runs/store"
     audit_trail_dir: str = "runs/audit_trail"
     llm_cache_dir: str = "runs/llm_cache"  # temp=0 yanıt cache'i (free-tier RPM azaltır)
+    # Private modda yanıtlar buraya, oturum başına ayrı alt dizine yazılır ve oturum
+    # bitince silinir. Ayrı kök olmasının sebebi `llm_cache_dir`'in commit'lenmiş
+    # golden-path dosyalarını taşıması: özel veriden türeyen yanıtlar oraya karışamaz.
+    # Oturum alt dizini burada DEĞİL, çağrı anında çözülür (SETTINGS'in oturum
+    # bağlamı yok).
+    llm_cache_private_dir: str = "runs/llm_cache_private"
+    # Tarayıcısını kapatıp giden oturumların dizinleri bu süreden sonra süpürülür.
+    # Streamlit'in public bir "oturum bitti" kancası olmadığı için gereken yaklaşım.
+    llm_private_cache_ttl_seconds: int = 3600
 
 
 SETTINGS = ParetoSettings()
@@ -71,9 +87,11 @@ def load_dotenv_file() -> None:
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     load_dotenv(os.path.join(root, ".env"))
 
+
 _API_KEY_ALIASES: dict[str, tuple[str, ...]] = {
     "GEMINI_API_KEY": ("GOOGLE_API_KEY",),
 }
+
 
 def _from_env(candidates: tuple[str, ...]) -> str:
     for name in candidates:
@@ -81,6 +99,9 @@ def _from_env(candidates: tuple[str, ...]) -> str:
         if key:
             return key
     return ""
+
+
+_secrets_warned = False
 
 
 def _from_secrets(candidates: tuple[str, ...]) -> str:
@@ -95,13 +116,46 @@ def _from_secrets(candidates: tuple[str, ...]) -> str:
                 if key:
                     return key
     except Exception as exc:
-        logger.warning("st.secrets okunamadı: %s", exc)
+        # Süreç başına bir kez uyar: her anahtar/model slotu için tekrarlanırsa
+        # (zincir kurulumu başına 5+) log okunmaz hale gelir.
+        global _secrets_warned
+        if not _secrets_warned:
+            logger.warning("st.secrets okunamadı: %s", exc)
+            _secrets_warned = True
+    return ""
+
+
+def _from_session_byok(candidates: tuple[str, ...]) -> str:
+    """Oturumdaki BYOK anahtarını oku — yalnız ilgili switch açıksa (veya hiç
+    ayarlanmamışsa, geriye dönük uyumluluk için varsayılan AÇIK).
+
+    `_from_secrets` ile aynı desen: Streamlit yoksa veya session_state'e
+    erişim başarısızsa (headless/test bağlamı) sessizce boş döner —
+    `resolve_api_key` env/secrets'a düşsün.
+    """
+    try:
+        import streamlit as st
+    except ImportError:
+        return ""
+    try:
+        byok_keys = st.session_state.get("byok_keys", {})
+        if not isinstance(byok_keys, dict):
+            return ""
+        for name in candidates:
+            value = str(byok_keys.get(name, "")).strip()
+            if value and st.session_state.get(f"byok_enabled_{name}", True):
+                return value
+    except Exception:
+        return ""
     return ""
 
 
 def resolve_api_key(provider_env: str) -> tuple[str, str]:
-    """API anahtarını çöz ve kaynağı döndür: env | secrets | none."""
+    """API anahtarını çöz ve kaynağı döndür: byok | env | secrets | none."""
     candidates = (provider_env, *_API_KEY_ALIASES.get(provider_env, ()))
+    byok_key = _from_session_byok(candidates)
+    if byok_key:
+        return byok_key, "byok"
     env_key = _from_env(candidates)
     if env_key:
         return env_key, "env"
@@ -111,21 +165,57 @@ def resolve_api_key(provider_env: str) -> tuple[str, str]:
     return "", "none"
 
 
-def get_api_key(provider_env: str) -> str:
-    """Önce env, yoksa st.secrets'dan API anahtarını döndür."""
+_CANNED_DUMMY_KEY = "PARETO_CANNED_MODE_DUMMY_KEY"
+
+
+def get_api_key(provider_env: str, *, allow_canned: bool = False) -> str:
+    """API anahtarını döndürür. Varsayılan olarak fail-loud'dur.
+
+    `allow_canned=False` (varsayılan): gerçek anahtar yoksa `OSError` fırlatır.
+    Bu, fonksiyonun asıl sözleşmesidir — çağıran taraf anahtarın gerçek
+    olduğundan emin olabilir.
+
+    `allow_canned=True`: gerçek anahtar yoksa constructor'ın yine de
+    kurulabilmesi için dummy bir key döner (S3-05 canned mode). Bu yalnız
+    çağıranın canned-mode senaryosunu bilinçli olarak ele aldığı ve gerçek bir
+    ağ isteğinin başka bir katmanda (örn. `CachedModel(canned_mode=True)`)
+    engellendiği yerlerde kullanılmalıdır — bkz. `router._model_from_provider`.
+    Anahtarın gerçek mi dummy mi olduğunu ayırt etmek isteyen çağıranlar
+    `resolve_api_key()`'i doğrudan kullanmalı.
+    """
     key, _source = resolve_api_key(provider_env)
     if key:
         return key
-
+    if allow_canned:
+        return _CANNED_DUMMY_KEY
     raise OSError(
-        f"{provider_env} tanımlı değil. Şunlardan biriyle ayarlayın:\n"
-        f"  • ana sayfa: **Anahtarı kaydet** (BYOK, oturum boyunca)\n"
-        f"  • proje kökünde `.env`: {provider_env}=...\n"
-        f"  • terminal: `export {provider_env}=...` (Streamlit'i yeniden başlat)"
+        f"eksik anahtarlar: {provider_env}. Devam etmek için Ayarlar sekmesinden "
+        f"kendi API anahtarınızı (BYOK) girin, `.env` dosyasına ekleyin, ya da "
+        f"`export {provider_env}=...` ile ortam değişkeni olarak tanımlayın."
     )
 
 
-def get_api_key_source(provider_env: str) -> str:
-    """Anahtar kaynağını döndür: env | secrets | none."""
-    _key, source = resolve_api_key(provider_env)
-    return source
+def get_effective_privacy_mode() -> PrivacyMode:
+    """UI seçimi varsa kullan, yoksa varsayılan ayara dön.
+
+    Privacy kararı tek merkezden okunur: router zincir seçiminde, guardrails
+    L7 tarayıcı kapısında aynı değeri görür. Streamlit yoksa (headless/test)
+    `SETTINGS.privacy_mode` geçerlidir.
+    """
+    try:
+        import streamlit as st
+    except ImportError:
+        return SETTINGS.privacy_mode
+    raw = st.session_state.get("privacy_mode", SETTINGS.privacy_mode.value)
+    return PrivacyMode.PRIVATE if str(raw) == PrivacyMode.PRIVATE.value else PrivacyMode.PUBLIC
+
+
+def resolve_setting(env_name: str, default: str) -> str:
+    """Sır olmayan bir ayarı çöz: env → `st.secrets` → kod defaultu.
+
+    `resolve_api_key`'in kardeşi; aynı arama sırasını kullanır ama eksiklik
+    hata değildir — model ID'si gibi ayarlarda defaulta düşmek doğru davranış.
+    Boş/whitespace değer "tanımsız" sayılır.
+    """
+    candidates = (env_name,)
+    return _from_env(candidates) or _from_secrets(candidates) or default

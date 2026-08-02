@@ -1,20 +1,31 @@
+from unittest import mock
+
 import pytest
+from pydantic_ai.messages import ModelResponse, ToolCallPart
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
 
-from pareto.analysis.hypothesis import Estimand, FrozenEstimand, TACProposal, freeze_estimand
+from pareto.analysis.hypothesis import FrozenEstimand, TACProposal, freeze_estimand
 from pareto.analysis.menu import (
     SpecMenu,
-    SpecMenuAxis,
     SpecMenuProposal,
+    build_deterministic_menu,
+    defensible_estimators,
+    evaluate_menu_defensibility,
     expand_to_specs,
     freeze_spec_menu,
     generate_spec_menu,
     validate_spec_menu_to_specs,
 )
+from pareto.config import SETTINGS
 from pareto.llm.router import use_test_model
 from pareto.spec import Specification
 
 _MENU_COLUMNS = ["state", "year", "expanded", "uninsured_rate", "population", "unemployment_rate"]
+
+# `expand_to_specs` artık bağladığı outcome/treatment'ı kolon listesine karşı
+# sınıyor; soyut isimlerle koşan testlerin kolon evreni.
+_ABSTRACT_COLUMNS = ["y", "d", "u", "t", "g", "state", "year"]
 
 
 def _frozen(**kw):
@@ -30,8 +41,8 @@ def _frozen(**kw):
 def _fake_frozen_estimand() -> FrozenEstimand:
     proposal = TACProposal(
         estimand_type="ATT",
-        treatment="Medicaid expansion adoption",
-        treatment_coding="expanded",
+        treatment="expanded",
+        treatment_coding="1 = expanded state x post-expansion year, 0 = otherwise",
         outcome="uninsured_rate",
         outcome_unit="percentage points",
         population="US states",
@@ -107,7 +118,14 @@ def test_freeze_is_deterministic_16char_hash():
 def test_silent_axis_pinned_to_baseline():
     # NEDEN: aktif olmayan eksen baseline'a (ilk seviye) pinlenir → okunaklı + tekrarlanabilir.
     frozen = _frozen(estimators=("OLS",), active_axes=("control_set",))
-    specs = expand_to_specs(frozen, outcome="y", treatment="d", unit_col="u", time_col="t")
+    specs = expand_to_specs(
+        frozen,
+        outcome="y",
+        treatment="d",
+        unit_col="u",
+        time_col="t",
+        available_columns=_ABSTRACT_COLUMNS,
+    )
     assert len(specs) == 2  # yalnız kontrol seti ekseni açık
     assert {s.estimator for s in specs} == {"OLS"}
 
@@ -120,7 +138,14 @@ def test_hard_cap_24_fails_loud():
         active_axes=("control_set",),
     ).freeze()
     with pytest.raises(ValueError, match="sert tavan"):
-        expand_to_specs(frozen, outcome="y", treatment="d", unit_col="u", time_col="t")
+        expand_to_specs(
+            frozen,
+            outcome="y",
+            treatment="d",
+            unit_col="u",
+            time_col="t",
+            available_columns=_ABSTRACT_COLUMNS,
+        )
 
 
 def test_weighting_axis_expands_with_population_default():
@@ -132,7 +157,12 @@ def test_weighting_axis_expands_with_population_default():
         active_axes=("weighting",),
     ).freeze()
     specs = expand_to_specs(
-        frozen, outcome="y", treatment="d", unit_col="state", time_col="year"
+        frozen,
+        outcome="y",
+        treatment="d",
+        unit_col="state",
+        time_col="year",
+        available_columns=_ABSTRACT_COLUMNS,
     )
     assert len(specs) == 2
     assert {s.weight_col for s in specs} == {"population", None}
@@ -140,8 +170,34 @@ def test_weighting_axis_expands_with_population_default():
 
 def test_validate_spec_menu_to_specs_accepts_clean_mapping():
     frozen = _frozen()
-    specs = expand_to_specs(frozen, outcome="y", treatment="d", unit_col="u", time_col="t")
+    specs = expand_to_specs(
+        frozen,
+        outcome="y",
+        treatment="d",
+        unit_col="u",
+        time_col="t",
+        available_columns=_ABSTRACT_COLUMNS,
+    )
     validate_spec_menu_to_specs(frozen, specs)
+
+
+def test_expand_to_specs_rejects_treatment_that_is_not_a_column():
+    """NEDEN: `treatment` spesifikasyona bağlanıp tahmincide `df[...]` oluyor.
+
+    Estimand'ın `treatment_coding` alanı ("1 = genişleyen eyalet x post, 0 = diğer")
+    yanlışlıkla buraya bağlanırsa eskiden sessizce geçip koşu ortasında KeyError
+    olarak patlıyordu. Kapı bağlama anında kesmeli.
+    """
+    frozen = _frozen()
+    with pytest.raises(ValueError, match="Kolon adı bekleniyor"):
+        expand_to_specs(
+            frozen,
+            outcome="y",
+            treatment="1 = genişleyen eyalet x post, 0 = diğer",
+            unit_col="u",
+            time_col="t",
+            available_columns=_ABSTRACT_COLUMNS,
+        )
 
 
 def test_validate_spec_menu_to_specs_fails_loud_on_dirty_spec():
@@ -154,7 +210,7 @@ def test_validate_spec_menu_to_specs_fails_loud_on_dirty_spec():
         cluster_by="g",
         estimator="OLS",
     )
-    with pytest.raises(ValueError, match="Spec validation failed"):
+    with pytest.raises(ValueError, match="Spec doğrulaması başarısız"):
         validate_spec_menu_to_specs(frozen, [dirty])
 
 
@@ -181,7 +237,12 @@ def test_testmodel_proposes_expected_axes_and_levels():
     assert weighting.baseline_level == "population"
     assert "none" in weighting.candidate_levels
 
-    frozen_menu = freeze_spec_menu(proposal, available_columns=columns, approved=True)
+    frozen_menu = freeze_spec_menu(
+        proposal,
+        available_columns=columns,
+        identification_assumption="parallel_trends",
+        approved=True,
+    )
     assert frozen_menu.menu.weighting_levels[0] == "population"
     assert frozen_menu.menu.estimators[0] == "TWFE"
 
@@ -203,9 +264,31 @@ def test_clustering_none_level_freezes_instead_of_failing():
     frozen_menu = freeze_spec_menu(
         proposal,
         available_columns=_MENU_COLUMNS,
+        identification_assumption="parallel_trends",
         approved=True,
     )
     assert frozen_menu.menu.clustering_levels == (None,)
+
+
+def test_freeze_spec_menu_rejects_explicit_empty_active_axes() -> None:
+    # Z1 düzeltmesi: mesaj artık Türkçe ("En az bir aktif eksen seçilmelidir.").
+    # Önceki `match="At least one active axis"` bu Türkçe mesajı YAKALAMAZ ve
+    # testi kırar — review'ın kendi önerisi buydu: davranışa (ValueError +
+    # boş active_axes reddi) bağlı kal, İngilizce substring'e değil.
+    proposal = SpecMenuProposal(**_menu_proposal_args())
+
+    with pytest.raises(ValueError, match="aktif eksen") as exc_info:
+        freeze_spec_menu(
+            proposal,
+            available_columns=_MENU_COLUMNS,
+            identification_assumption="parallel_trends",
+            approved=True,
+            active_axes=(),
+        )
+
+    # Davranış assertion'ı: mesaj Türkçe kalmalı, İngilizceye geri dönmemeli.
+    assert "En az bir aktif eksen" in str(exc_info.value)
+    assert "At least one active axis" not in str(exc_info.value)
 
 
 def test_clustering_axis_expands_none_and_column_as_two_specs():
@@ -218,6 +301,7 @@ def test_clustering_axis_expands_none_and_column_as_two_specs():
     frozen_menu = freeze_spec_menu(
         SpecMenuProposal(**args),
         available_columns=_MENU_COLUMNS,
+        identification_assumption="parallel_trends",
         approved=True,
         active_axes=("clustering",),
     )
@@ -227,6 +311,7 @@ def test_clustering_axis_expands_none_and_column_as_two_specs():
         treatment="expanded",
         unit_col="state",
         time_col="year",
+        available_columns=_MENU_COLUMNS,
     )
     assert {s.cluster_by for s in specs} == {"state", None}
     validate_spec_menu_to_specs(frozen_menu, specs)
@@ -238,25 +323,157 @@ def test_unknown_clustering_column_still_fails_loud():
     clustering = next(a for a in args["axes"] if a["axis_name"] == "clustering")  # type: ignore[index]
     clustering["baseline_level"] = "hayali_kolon"
 
-    with pytest.raises(ValueError, match="Invalid clustering column"):
+    with pytest.raises(ValueError, match="Geçersiz clustering kolonu"):
         freeze_spec_menu(
             SpecMenuProposal(**args),
             available_columns=_MENU_COLUMNS,
+            identification_assumption="parallel_trends",
             approved=True,
         )
 
 
-def test_freeze_spec_menu_rejects_unapproved():
+# Kapının geçtiği referans bağlama. Her red testi önce bu bağlamayla geçtiğini
+# doğrular, sonra tek bir kusur enjekte eder: böylece test kapının O kusuru
+# yakaladığını kanıtlar, gerekçe metnini değil.
+_VALID_BINDINGS: dict[str, object] = {
+    "outcome": "uninsured_rate",
+    "treatment": "expanded",
+    "unit_col": "state",
+    "time_col": "year",
+}
+
+
+def _gate(args: dict[str, object], **binding_overrides: object):
+    return evaluate_menu_defensibility(
+        SpecMenuProposal(**args),
+        available_columns=_MENU_COLUMNS,
+        identification_assumption="parallel_trends",
+        **{**_VALID_BINDINGS, **binding_overrides},  # type: ignore[arg-type]
+    )
+
+
+def test_defensibility_gate_blocks_empty_baseline_level():
+    """Baseline, multiverse'ün etrafında döndüğü taahhüt edilmiş spesifikasyon.
+
+    Boş bırakılırsa "ana sonuç hangisi" sorusunun cevabı kalmaz ve eğri
+    savunulabilirliğini yitirir; kapı bu yüzden var.
+    """
+    args = _menu_proposal_args()
+    assert _gate(args)[0] is True
+
+    args["axes"][0]["baseline_level"] = ""  # type: ignore[index]
+    ok, reasons, spec_count = _gate(args)
+
+    assert ok is False
+    assert spec_count == 0
+    assert len(reasons) == 1
+
+
+def test_defensibility_gate_blocks_missing_axis():
+    """Zorunlu eksenlerden biri düşerse menü o varyans kaynağını hiç ölçemez.
+
+    Kapı eksik ekseni geçirirse panel eksiksiz görünen ama bir ekseni kör olan
+    bir eğri üretir — sessiz kayıp, bu yüzden başlamadan durdurulur.
+    """
+    args = _menu_proposal_args()
+    assert _gate(args)[0] is True
+
+    args["axes"] = [axis for axis in args["axes"] if axis["axis_name"] != "sample"]  # type: ignore[index,union-attr]
+    ok, reasons, spec_count = _gate(args)
+
+    assert ok is False
+    assert spec_count == 0
+    assert len(reasons) == 1
+
+
+def test_defensibility_gate_blocks_unsupported_estimator():
+    """Desteklenmeyen kestirici kapıdan geçerse hata multiverse koşusunda patlar.
+
+    Kapı bunu önden yakalamazsa kullanıcı N spesifikasyonluk bir koşuyu
+    başlatıp sonuçların tamamının başarısız olduğunu görür.
+    """
+    args = _menu_proposal_args()
+    assert _gate(args)[0] is True
+
+    estimator = next(a for a in args["axes"] if a["axis_name"] == "estimator")  # type: ignore[index,union-attr]
+    estimator["baseline_level"] = "IV"
+    ok, reasons, spec_count = _gate(args)
+
+    assert ok is False
+    assert spec_count == 0
+    assert len(reasons) == 1
+
+
+def test_defensibility_gate_blocks_missing_bound_columns():
+    """Menü geçerli olsa da bağlanacak kolon yoksa spesifikasyon üretilemez.
+
+    Kapı yalnız öneriye bakıp geçirirse `expand_to_specs` boş outcome ile
+    çağrılır; hata kullanıcıya kapıda değil, koşu ortasında görünür.
+    """
+    args = _menu_proposal_args()
+    assert _gate(args)[0] is True
+
+    ok, reasons, spec_count = _gate(args, outcome=None)
+
+    assert ok is False
+    assert spec_count == 0
+    assert len(reasons) == 1
+
+
+def test_defensibility_gate_happy_path_matches_real_expansion_count():
     proposal = SpecMenuProposal(**_menu_proposal_args())
-    with pytest.raises(ValueError, match="User approval required"):
+
+    ok, reasons, spec_count = evaluate_menu_defensibility(
+        proposal,
+        available_columns=_MENU_COLUMNS,
+        identification_assumption="parallel_trends",
+        outcome="uninsured_rate",
+        treatment="expanded",
+        unit_col="state",
+        time_col="year",
+    )
+
+    frozen = freeze_spec_menu(
+        proposal,
+        available_columns=_MENU_COLUMNS,
+        identification_assumption="parallel_trends",
+        approved=True,
+    )
+    expanded = expand_to_specs(
+        frozen,
+        outcome="uninsured_rate",
+        treatment="expanded",
+        unit_col="state",
+        time_col="year",
+        available_columns=_MENU_COLUMNS,
+    )
+
+    assert ok
+    assert reasons == []
+    assert spec_count == len(expanded)
+
+
+def test_freeze_spec_menu_rejects_unapproved():
+    # Z1 kapsamının genişletilmesi (#50/13): "User approval required to
+    # freeze spec menu" da İngilizceydi; bu istisna da aynı şekilde sayfa
+    # katmanında `except ValueError as exc: st.error(str(exc))` yoluyla
+    # kullanıcıya basılabilir, o yüzden mesaj Türkçeleştirildi ve test
+    # buna göre güncellendi.
+    proposal = SpecMenuProposal(**_menu_proposal_args())
+    with pytest.raises(ValueError, match="kullanıcı onayı"):
         freeze_spec_menu(
             proposal,
             available_columns=["state", "year", "expanded", "uninsured_rate", "population"],
+            identification_assumption="parallel_trends",
             approved=False,
         )
 
 
 def test_freeze_spec_menu_rejects_clarification_needed():
+    # NEDEN bu test değişmedi: burada fırlatılan mesaj sabit bir statik
+    # string değil, `proposal.clarification_question` — yani JUDGE'ın (LLM)
+    # ürettiği dinamik içerik. Hangi dilde geldiyse o dilde kalması doğru;
+    # #50/13 yalnızca Claude'un/kodun kendi ürettiği SABİT mesajlarla ilgili.
     args = _menu_proposal_args()
     args["needs_clarification"] = True
     args["clarification_question"] = "Which clustering level?"
@@ -265,5 +482,120 @@ def test_freeze_spec_menu_rejects_clarification_needed():
         freeze_spec_menu(
             proposal,
             available_columns=["state"],
+            identification_assumption="parallel_trends",
             approved=True,
         )
+
+
+def test_spec_menu_prompt_states_the_real_hard_cap():
+    """JUDGE'a giden prompt spesifikasyon bütçesini AYARDAN okuyarak söylemeli.
+
+    Prompt bu kısıttan hiç söz etmiyordu: model 7 eksende bol aday seviye
+    öneriyor, `expand_to_specs` kartezyen çarpımı alıp tavanı aşınca fail-loud
+    atıyor ve kullanıcı eğri yerine hata görüyordu. Benchmark'ta ölçüldü
+    (2026-07-31): 960-2160 spesifikasyonla reddedilen menüler, güçlü modellerin
+    hepsinde. Söylenmemiş bir kısıt modelin kusuru değil.
+
+    Test literal `24` yazmıyor, `SETTINGS.max_specifications`'ı okuyor: sabit
+    prompt'a kopyalanırsa ayar değiştiğinde prompt sessizce YALAN söyler, ki bu
+    kısıttan hiç söz etmemekten kötüdür.
+    """
+    seen: list = []
+
+    def capture(messages, info: AgentInfo) -> ModelResponse:
+        seen.append(messages)
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, _menu_proposal_args())])
+
+    with use_test_model(FunctionModel(capture)):
+        generate_spec_menu(frozen=_fake_frozen_estimand(), available_columns=_MENU_COLUMNS)
+
+    prompt = "\n".join(
+        part.content
+        for message in seen[0]
+        for part in message.parts
+        if isinstance(getattr(part, "content", None), str)
+    )
+    assert "SPECIFICATION BUDGET" in prompt
+    assert str(SETTINGS.max_specifications) in prompt
+    assert "CARTESIAN PRODUCT" in prompt
+
+
+# ---------------------------------------------------------------------------
+# OLS kapısı
+#
+# NEDEN: `OLSEstimator` `y ~ treatment` formülünü kurar (ana etki eklemez). Panel
+# bir estimand'da `treatment` etkileşim terimidir (ör. genişleten eyalet x post
+# dönem), dolayısıyla o katsayı DiD değildir. Demo panelinde ölçüldü: OLS -10.97,
+# doğru DiD -2.82. Kapı menüde durur; OLS kesitsel tasarımlarda geçerli kalır.
+# ---------------------------------------------------------------------------
+
+
+def test_did_estimand_removes_ols_from_estimator_axis():
+    assert defensible_estimators("parallel_trends") == ("TWFE",)
+
+
+def test_cross_sectional_estimand_still_offers_ols():
+    """Kapı DiD'e özgü; OLS genel olarak öldürülmedi."""
+    assert "OLS" in defensible_estimators("selection_on_observables")
+
+
+def test_unrecognized_identification_assumption_still_forbids_ols():
+    """Kapı fail-closed.
+
+    `identification_assumption` serbest metin bir `str`; TAC ajanı dolduruyor.
+    "parallel_trends"i yasaklayan bir blocklist, model boşluklu ya da Türkçe bir
+    varyant döndüğünde sessizce açılır ve demo yine hatalı katsayı basardı.
+    """
+    for assumption in ("parallel trends", "paralel trendler", "", "did"):
+        assert defensible_estimators(assumption) == ("TWFE",)
+
+
+def test_menu_proposal_offering_ols_for_did_fails_loud():
+    """Prompt kısıtı söylüyor; model yine de çiğnerse sessizce elenmez.
+
+    Sessiz eleme, kullanıcının onayladığı menü ile koşulan menünün ayrışması
+    demek olurdu.
+    """
+    args = _menu_proposal_args()
+    estimator_axis = next(a for a in args["axes"] if a["axis_name"] == "estimator")  # type: ignore[index,union-attr]
+    estimator_axis["candidate_levels"] = ["OLS"]
+
+    with pytest.raises(ValueError, match="savunulamayan kestirici"):
+        freeze_spec_menu(
+            SpecMenuProposal(**args),
+            available_columns=_MENU_COLUMNS,
+            identification_assumption="parallel_trends",
+            approved=True,
+        )
+
+
+def test_deterministic_menu_drops_ols_for_a_did_estimand():
+    menu = build_deterministic_menu(
+        controls=["unemployment_rate"],
+        cluster_by="state",
+        estimators=["OLS", "TWFE"],
+        identification_assumption="parallel_trends",
+        available_columns=_MENU_COLUMNS,
+    )
+
+    assert menu.estimators == ("TWFE",)
+
+
+def test_spec_menu_prompt_requests_turkish_rationale():
+    """`rationale`/`overall_rationale` doğrudan kullanıcıya basılıyor.
+
+    Bu dosyadaki sabit kullanıcı metinleri Türkçeleştirilmişti ama LLM'in
+    ürettiği alanlar literal olmadıkları için taramadan kaçmıştı; koşuda
+    gerekçeler İngilizce geliyordu. Emsal: pareto/cleaning/agent.py.
+    """
+    captured: dict[str, str] = {}
+
+    def _capture(role, *, system_prompt, output_type):  # noqa: ANN001, ANN202
+        captured["system"] = system_prompt
+        raise RuntimeError("stop")
+
+    with mock.patch("pareto.analysis.menu.build_agent", _capture):
+        with pytest.raises(RuntimeError):
+            generate_spec_menu(frozen=_fake_frozen_estimand(), available_columns=_MENU_COLUMNS)
+
+    assert "Turkish" in captured["system"]

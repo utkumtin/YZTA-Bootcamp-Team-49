@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Pareto">
+  <!-- NEDEN currentColor değil: bu dosya st.logo/page_icon'a dosya yolu olarak veriliyor,
+       yani <img> kaynağı oluyor ve miras alacağı bir CSS ebeveyni yok; currentColor siyaha
+       düşer.
+       NEDEN media query burada KALIYOR (pareto_logo.svg'de kaldırıldığı halde): bu dosya
+       page_icon, yani favicon — uygulama alanında değil, tarayıcı sekmesinde çiziliyor.
+       Orada uygulamanın sabitlenmiş koyu teması değil, tarayıcının kendi açık/koyu
+       kromu geçerli.
+       app/assets/icons/*.svg satır içine gömüldüğü için orada currentColor doğru. -->
+  <style>
+    path { stroke: #4f46e5; }
+    @media (prefers-color-scheme: dark) {
+      path { stroke: #818cf8; }
+    }
+  </style>
+  <!-- Kenar boşluğu ve çizgi kalınlığı 16px favicon'a göre ayarlı: daha dar boşlukta
+       çubuklar birbirine giriyor, çatal 16px'te lekeye dönüşüyordu. -->
+  <g fill="none" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 3.5 V20.5" />
+    <path d="M8 3.5 V20.5" />
+    <path d="M13 3.5 V20.5" />
+    <path d="M18.5 3.5 L18.5 11.5 L16 20.5" />
+    <path d="M18.5 11.5 L21.5 20.5" />
+  </g>
+</svg>

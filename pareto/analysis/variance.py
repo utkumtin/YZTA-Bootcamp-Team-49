@@ -196,9 +196,7 @@ def _matched_pairs(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
             "max_abs_delta": round(float(max(deltas)), 6) if deltas else None,
             "sign_comparable_pairs": sign_comparable,
             "sign_flip_count": sign_flips,
-            "sign_flip_rate": round(sign_flips / sign_comparable, 6)
-            if sign_comparable
-            else None,
+            "sign_flip_rate": round(sign_flips / sign_comparable, 6) if sign_comparable else None,
             "significance_comparable_pairs": sig_comparable,
             "significance_flip_count": sig_flips,
             "significance_flip_rate": round(sig_flips / sig_comparable, 6)

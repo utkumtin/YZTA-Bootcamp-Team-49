@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  lint-and-test:
+    name: Lint · types · tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: ${{ env.PYTHON_VERSION }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install dependencies
+        run: uv sync --extra dev --locked
+
+      # Y4: requirements.txt Community Cloud deploy'unun kurulum kaynağıdır (uv.lock
+      # okumaz) — uv.lock ile senkron kalmazsa deploy'da paket eksikliği/sürüm
+      # uyuşmazlığı sessizce üretime sızar. `make check-requirements` çalışma ağacını
+      # kirletmeden (export /tmp'e yazılıp diff'lenir) drift'i fail-loud yapar.
+      - name: Check requirements.txt drift (make check-requirements)
+        run: make check-requirements
+
+      - name: Check formatting (ruff format)
+        run: uv run ruff format --check .
+
+      - name: Lint (ruff check)
+        run: uv run ruff check .
+
+      - name: Type check (mypy)
+        run: uv run mypy pareto app scripts tests
+
+      - name: Run tests
+        run: uv run pytest -m "not live"
+
+  smoke-matrix:
+    name: Smoke matrisi (genelleme)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: ${{ env.PYTHON_VERSION }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install dependencies
+        run: uv sync --extra dev --locked
+
+      # JUDGE adımları test modeliyle koşar, anahtar gerekmez. Ham verisi repoda
+      # olmayan set (medicaid'in CDC export'u) raporda atlanır; koşan
+      # setlerde bir adım kırılırsa çıkış kodu sıfırdan farklı gelir.
+      # Rapor job özetine yazılır: yalnız stdout'a basılan bir matrise koşu kırılmadıkça
+      # kimse bakmaz, oysa hangi setin atlandığı yeşil koşularda da okunmalı.
+      - name: Uçtan uca smoke matrisi
+        run: uv run python scripts/run_smoke_matrix.py --out "$GITHUB_STEP_SUMMARY"
+
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout (tüm geçmiş)
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+        run: |
+          set -euo pipefail
+          curl -sSfL \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Scan git history
+        run: gitleaks git . --redact --no-banner --verbose

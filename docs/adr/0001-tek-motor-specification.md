@@ -1,7 +1,10 @@
 # 1. Tek motor: Specification atom birimi
 
 - Durum: accepted
-- Tarih: 2026-07-05
+- Karar tarihi: 2026-07-05
+- Son gözden geçirme: 2026-07-27
+- Supersedes: -
+- Superseded by: -
 
 ## Bağlam
 OLS, TWFE-DiD ve staggered ayrı sistemler gibi görünür. İki ayrı motor yazmak 5 haftanın

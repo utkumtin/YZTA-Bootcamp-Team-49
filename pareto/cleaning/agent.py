@@ -10,17 +10,19 @@ Yüksek güvenli kararlar otomatik yola gider; gerçek yargı gerektirenler
 
 from __future__ import annotations
 
-import json
+import logging
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from ..config import SETTINGS, ModelRole
-from ..llm.guardrails import sanitize_profile
+from ..llm.guardrails import prompt_guard_scan, prompt_json, sanitize_profile, strip_spotlight
 from ..llm.router import build_agent
 from .ledger import LedgerEntry
 from .transforms import REGISTRY
+
+logger = logging.getLogger(__name__)
 
 
 class Resolution(StrEnum):
@@ -249,9 +251,10 @@ def _transform_catalog() -> str:
     return "\n".join(f"- {t.name}: {t.doc}" for t in REGISTRY.values())
 
 
-def _build_judge_prompt(profile: dict[str, Any]) -> str:
+def _build_judge_prompt(profile: dict[str, Any], *, already_sanitized: bool = False) -> str:
     """Profili L2 sanitizasyondan geçirip deterministik JUDGE istemini kurar."""
-    payload = json.dumps(sanitize_profile(profile), ensure_ascii=False, sort_keys=True, default=str)
+    sanitized = profile if already_sanitized else sanitize_profile(profile)
+    payload = prompt_json(sanitized)
     return (
         "Dataset profile (summary statistics only, raw rows are never shared):\n"
         f"{payload}\n\n"
@@ -264,6 +267,56 @@ def _build_judge_prompt(profile: dict[str, Any]) -> str:
 # --------------------------------------------------------------------------- #
 # Deterministik kapılar (L5): kolon varlığı + yüksek-eksik eşiği
 # --------------------------------------------------------------------------- #
+def _unmark_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return strip_spotlight(value)
+    if isinstance(value, list):
+        return [strip_spotlight(v) if isinstance(v, str) else v for v in value]
+    return value
+
+
+def _unmark_decisions(decisions: list[TransformDecision]) -> list[TransformDecision]:
+    """JUDGE'ın cevabına kopyaladığı `〈untrusted〉…〈/untrusted〉` ambalajını soyar.
+
+    Profil L2 sanitizasyonundan geçtiği için kolon adları modele işaretli
+    gidiyor; `_SYSTEM_PROMPT` çıplak ad istiyor ama bu yalnız talimat, dönüş
+    yolunda normalizasyon yoktu ve model ambalajı bazen geri getiriyor
+    (ölçüldü: referans koşusunda sonnet/cleaning/card_krueger).
+
+    Soyma DOĞRULAYICIDA değil, cevabın girdiği yerde yapılıyor; çünkü ambalajlı
+    ad üç ayrı yeri bozuyor ve doğrulayıcı bunlardan yalnız biri:
+      1. `_validate_referenced_columns` — kolon "profilde yok" sanılır.
+      2. `_uncertainty_flag` — `columns.get(col, {})` boş döner, pct_missing 0.0
+         okunur ve yüksek-eksik gatekeeper kuralı SESSİZCE açık kalır.
+      3. `TransformCall.params()` — ambalajlı ad ledger'a yazılır, `apply_ledger`
+         `df[col]` ile KeyError alır.
+
+    Guardrail gevşemiyor: allowlist kontrolü soymadan sonra aynen koşuyor,
+    uydurma kolon hâlâ fail-loud. Ambalaj bizim kendi sarmalayıcımız, veride
+    meşru olarak bulunamaz; o yüzden her string alandan sökülüyor (kolon adı
+    taşımayan `fmt` gibi alanlarda no-op).
+
+    LİSTE alanları da soyuluyor: `DropDuplicatesCall.subset` kolon adlarını liste
+    olarak taşır ve tam da `_uncertainty_flag`'in koşulsuz gatekeeper'a
+    yönlendirdiği yüksek-etki transform'dur; `StandardizeNaCall.markers` ise
+    profildeki işaretli örnek DEĞERLERden kopyalanabilir.
+    """
+    unmarked: list[TransformDecision] = []
+    for decision in decisions:
+        call = decision.transform
+        call_updates = {name: _unmark_value(value) for name, value in call.model_dump().items()}
+        unmarked.append(
+            decision.model_copy(
+                update={
+                    "bulgu": strip_spotlight(decision.bulgu),
+                    "gerekce": strip_spotlight(decision.gerekce),
+                    "transform": call.model_copy(update=call_updates),
+                }
+            )
+        )
+    return unmarked
+
+
 def _validate_referenced_columns(
     decisions: list[TransformDecision], profile: dict[str, Any]
 ) -> None:
@@ -278,11 +331,35 @@ def _validate_referenced_columns(
         raise ValueError("JUDGE profilde olmayan kolon andı: " + "; ".join(errors))
 
 
-def _uncertainty_flag(decision: TransformDecision, profile: dict[str, Any]) -> bool:
-    """Düşük güven VEYA yüksek-eksik kolon: karar insana gider (gatekeeper).
+def _uncertainty_flag(
+    decision: TransformDecision,
+    profile: dict[str, Any],
+    *,
+    l7_scan: dict[str, Any],
+) -> bool:
+    """Kararın gatekeeper'a düşüp düşmediğini söyleyen saf predicate.
 
-    Eksik oranı eşiği aşan kolonda LLM güveni geçersizdir; her zaman insana sorulur.
+    Sırayla dört kural işler; ilk eşleşen `True` döndürür:
+
+    1. L5 yüksek-etki transform (ör. `drop_duplicates`): koşulsuz `True`. Satır
+       düşüren/geri alınamayan işlemde LLM güveni ne olursa olsun insan onayı
+       şart.
+    2. L7 tarama `suspicious`: koşulsuz `True`. Payload'da enjeksiyon şüphesi
+       varsa o profilden üretilen her karar şüphelidir; güven skoru bu durumda
+       modelin kendi ürettiği bir sayıdır, kanıt değildir.
+    3. LLM güveni `low`: modelin kendi beyanı yeterli sayılır.
+    4. Referans kolonlarından biri yüksek-eksik eşiğini aşıyor: eksik oranı
+       eşiği aşan kolonda LLM güveni geçersizdir.
+
+    Loglama sorumluluğu burada değil, `_log_gate_reasons`'ta.
     """
+    transform = REGISTRY[decision.transform.transform_name]
+    if transform.high_impact:
+        return True
+
+    if l7_scan.get("status") == "suspicious":
+        return True
+
     if decision.confidence == "low":
         return True
     columns = profile.get("columns", {})
@@ -291,6 +368,27 @@ def _uncertainty_flag(decision: TransformDecision, profile: dict[str, Any]) -> b
         float(columns.get(col, {}).get("pct_missing", 0.0)) >= threshold
         for col in decision.transform.referenced_columns()
     )
+
+
+def _log_gate_reasons(decisions: list[TransformDecision], l7_scan: dict[str, Any]) -> None:
+    """Onay kapısına düşüren L5/L7 kurallarını logla.
+
+    `_uncertainty_flag` saf bir predicate; iz bırakma işi buraya ayrıldı.
+    Sıra predicate ile aynı: yüksek-etki kuralı L7'yi gölgeler, yani bir karar
+    için en fazla bir satır düşer.
+    """
+    for decision in decisions:
+        if REGISTRY[decision.transform.transform_name].high_impact:
+            logger.warning(
+                "L5 high-impact decision flagged for approval: %s on %s",
+                decision.transform.transform_name,
+                list(decision.transform.referenced_columns()),
+            )
+        elif l7_scan.get("status") == "suspicious":
+            logger.warning(
+                "L7 suspicious payload escalated to approval gate: %s",
+                decision.transform.transform_name,
+            )
 
 
 # --------------------------------------------------------------------------- #
@@ -307,13 +405,19 @@ def generate_ledger(profile: dict[str, Any]) -> list[LedgerEntry]:
     if not profile.get("columns"):
         raise ValueError("Profilde kolon yok; temizleme kararı üretilemez.")
 
+    sanitized_profile = sanitize_profile(profile)
+    l7_scan = prompt_guard_scan(sanitized_profile)
+
     agent = build_agent(
         ModelRole.JUDGE,
         system_prompt=_SYSTEM_PROMPT,
         output_type=CleaningProposal,
     )
-    proposal = agent.run_sync(_build_judge_prompt(profile)).output
-    _validate_referenced_columns(proposal.decisions, profile)
+    proposal = agent.run_sync(_build_judge_prompt(sanitized_profile, already_sanitized=True)).output
+    # Ambalaj sökme, HAM profile karşı koşan her kontrolden önce gelmeli.
+    decisions = _unmark_decisions(proposal.decisions)
+    _validate_referenced_columns(decisions, profile)
+    _log_gate_reasons(decisions, l7_scan)
 
     return [
         LedgerEntry(
@@ -321,7 +425,9 @@ def generate_ledger(profile: dict[str, Any]) -> list[LedgerEntry]:
             transform_name=decision.transform.transform_name,
             params=decision.transform.params(),
             gerekce=decision.gerekce,
-            belirsizlik_bayragi=_uncertainty_flag(decision, profile),
+            belirsizlik_bayragi=_uncertainty_flag(decision, profile, l7_scan=l7_scan),
+            l7_prompt_guard_status=str(l7_scan.get("status", "unknown")),
+            l7_prompt_guard_suspicious=bool(l7_scan.get("status") == "suspicious"),
         ).stamped()
-        for decision in proposal.decisions
+        for decision in decisions
     ]

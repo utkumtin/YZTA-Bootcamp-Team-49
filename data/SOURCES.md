@@ -6,6 +6,16 @@ LICENSE **kodu** kapsar; veri kendi şartlarında. Kullanıcı **kendi ürettiğ
 Edinim iki yolla: `python data/fetch_data.py --fetch` (programatik kaynaklar) ve
 manuel export (CDC WONDER, BLS LAUS — `--check` eksikleri ve yönergeleri listeler).
 
+## Son kontrol (2026-07-27)
+
+- Repo içi fetch/extract artefaktları mevcut: `data/medicaid/raw/sahie_uninsured_2009_2019.csv`,
+  `data/medicaid/raw/saipe_income_poverty_2009_2019.csv`, `data/divorce/raw/divorce.csv`,
+  `data/castle/raw/castle.csv`, `data/card_krueger/raw/card_krueger.csv`,
+  `data/card_krueger/raw/card_krueger_long.csv`.
+- LAUS dosyaları (`data/medicaid/raw/laus/laucnty09..19.xlsx`) mevcut.
+- CDC WONDER ham export dosyası (`data/medicaid/raw/cdc_wonder_mortality_2009_2019.tsv`) manual
+  kaynak olduğu için repoda zorunlu tutulmuyor; yerel çalıştırmada ayrıca konmalıdır.
+
 ## Dizin düzeni (SCOPE §12)
 ```
 data/
@@ -27,7 +37,7 @@ data/
     raw/{castle.dta†, castle.csv}
   card_krueger/              # minik 2×2 fixture (CI smoke matrisi)
     config.yaml
-    raw/{njmin.zip, codebook, read.me, card_krueger.csv}
+    raw/{njmin.zip, codebook, read.me, card_krueger.csv, card_krueger_long.csv}
 ```
 † `.dta` git-ignore'lu; CSV export'lar (türev/temiz extract) repo'da tutulur.
 
@@ -102,10 +112,17 @@ data/
 
 ### 8. Card-Krueger NJ-PA (minik 2×2 fixture, CI smoke)
 - **Rol:** hızlı test + genelleme garantisi (SCOPE §11 smoke matrisi). 410 restoran ×
-  2 dalga, GENİŞ format (reshape temizleme egzersizi).
+  2 dalga; ham dosya GENİŞ formatta (iki dalga aynı satırda, `2` sonekli kolonlar).
 - **Lisans:** yazarın sitesinden kamuya açık; atıfla.
 - **Edinim:** `fetch_data.py --fetch` — davidcard.berkeley.edu/data_sets/njmin.zip;
   `public.dat` codebook'taki 46 kolonla CSV'ye çevrilir ('.' → NA).
+- **Uzun panel türevi (`card_krueger_long.csv`):** panel-merge spine'ında unit×time ister,
+  keyfi reshape ise vetted transform kataloğunun kapsamı dışı — bu yüzden wide-to-long
+  dönüşüm `fetch_data.py`'de deterministik türev extract olarak yapılır. Birim kimliği
+  arşiv satır sırasıdır, anket sayfa numarası (`SHEET`) değil: 410 mağazaya karşılık 409
+  tekil `SHEET` var, sayfa numarası birim anahtarı olamaz. Sonuç değişkeni makaledeki
+  tanımla türetilir (`EMPFT + NMGRS + 0.5*EMPPT`); kalıcı kapanan mağaza (`STATUS2=3`)
+  ikinci dalgada eksik değil sıfır istihdam sayılır. Eksik gözlem düşürülmez.
 - **Atıf:** Card & Krueger (1994), "Minimum Wages and Employment: A Case Study of the
   Fast-Food Industry in New Jersey and Pennsylvania," AER.
 

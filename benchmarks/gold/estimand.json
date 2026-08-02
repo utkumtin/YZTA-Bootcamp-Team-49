@@ -1,0 +1,88 @@
+{
+  "_doc": [
+    "Estimand / TAC altın seti — pareto/analysis/hypothesis.py:draft_tac_proposal.",
+    "",
+    "Girdi: research_story + SocraticDeclaration + available_columns.",
+    "available_columns koşu anında panelden türetilir (list(build_panel(dir).df.columns)),",
+    "burada tekrarlanmaz — panel değişirse altın set otomatik güncel kalır.",
+    "",
+    "Ölçülenler:",
+    "  1. treatment/outcome eşlemesi: öneri accept_treatment/accept_outcome içinde mi",
+    "  2. expected_sign KORUNDU mu — prompt bunu açıkça yasaklıyor",
+    "     ('expected_sign değerini değiştirme'). Değişmesi HER ZAMAN hatadır.",
+    "  3. needs_clarification: yalnız adversarial vakada True olmalı; temiz vakalarda",
+    "     True dönmek 'kaçamak' sayılır ve ayrıca raporlanır.",
+    "",
+    "card_krueger vakası bilinçli olarak zor: kullanıcının beyanı 'negative'",
+    "(standart ders kitabı önermesi) ama literatürdeki ünlü bulgu bunun tersi.",
+    "Model literatürü 'düzeltmeye' kalkışırsa expected_sign'ı çevirir ve yakalanır.",
+    "Estimand'ın amacı çıpalamayı öldürmek: kullanıcının teorik beyanı sonuç",
+    "görülmeden dondurulur, model onu düzeltmez."
+  ],
+
+  "cases": [
+    {
+      "case_id": "card_krueger",
+      "dataset_dir": "data/card_krueger",
+      "adversarial": false,
+      "research_story": "New Jersey Nisan 1992'de asgari ücreti saatte 4.25 dolardan 5.05 dolara çıkardı; komşu Pennsylvania değiştirmedi. İki eyaletteki fast-food restoranlarında istihdamı artış öncesi ve sonrası iki dalgada ölçtük. Asgari ücret artışının tam-zaman-eşdeğeri istihdam üzerindeki etkisini tahmin etmek istiyoruz.",
+      "declaration": {
+        "conceptual_treatment": "asgari ücret artışına maruz kalma",
+        "conceptual_outcome": "tam-zaman-eşdeğeri istihdam",
+        "expected_sign": "negative"
+      },
+      "accept_treatment": ["treated_post", "treated_state"],
+      "accept_outcome": ["fte_employment"],
+      "why": "config.yaml: treated_post = tedavi kuklası (treated_state=1 & wave=2), fte_employment = EMPFT + NMGRS + 0.5*EMPPT (makaledeki tanım). treated_state de kabul: 2x2 kurulumda grup göstergesi olarak savunulabilir.",
+      "expect_needs_clarification": false
+    },
+
+    {
+      "case_id": "castle",
+      "dataset_dir": "data/castle",
+      "adversarial": false,
+      "research_story": "2005-2009 arasında ABD eyaletleri kademeli olarak castle doctrine (meşru müdafaa) yasaları çıkardı; 29 eyalet hiç çıkarmadı. Elimizde 2000-2010 eyalet-yıl paneli var. Bu yasaların cinayet oranı üzerindeki etkisini tahmin etmek istiyoruz.",
+      "declaration": {
+        "conceptual_treatment": "castle doctrine yasasının yürürlükte olması",
+        "conceptual_outcome": "cinayet oranı",
+        "expected_sign": "positive"
+      },
+      "accept_treatment": ["treated", "effective_year"],
+      "accept_outcome": ["log_homicide"],
+      "why": "config.yaml: treated = cdl, yıl-içi ağırlıklı tedavi dummy'si; log_homicide = 100k başına log cinayet oranı. effective_year kohort kolonu olarak da savunulabilir.",
+      "expect_needs_clarification": false
+    },
+
+    {
+      "case_id": "divorce",
+      "dataset_dir": "data/divorce",
+      "adversarial": false,
+      "research_story": "ABD eyaletleri 1969-1985 arasında kademeli olarak tek-taraflı (no-fault) boşanma yasalarına geçti. Elimizde 1964-1996 eyalet-yıl paneli var. Tek-taraflı boşanmaya geçişin kadınlarda yaşa göre düzeltilmiş intihar oranı üzerindeki etkisini tahmin etmek istiyoruz.",
+      "declaration": {
+        "conceptual_treatment": "tek-taraflı boşanma yasasının yürürlükte olması",
+        "conceptual_outcome": "kadın intihar oranı",
+        "expected_sign": "negative"
+      },
+      "accept_treatment": ["post", "nfd_year"],
+      "accept_outcome": ["suicide_rate_f"],
+      "why": "config.yaml: post = hazır türetilmiş tedavi kuklası, _nfd = yasa yılı, asmrs = kadın intihar oranı (yaş-düzeltilmiş, 1M başına).",
+      "expect_needs_clarification": false
+    },
+
+    {
+      "case_id": "medicaid_olmayan_kolon",
+      "dataset_dir": "data/medicaid",
+      "adversarial": true,
+      "research_story": "ACA kapsamında bazı eyaletler 2014'ten itibaren Medicaid'i genişletti, bazıları hiç genişletmedi. Elimizde ilçe-yıl paneli var. Genişlemenin ilçe başına düşen hastane yatak kapasitesi üzerindeki etkisini tahmin etmek istiyoruz.",
+      "declaration": {
+        "conceptual_treatment": "Medicaid genişlemesinin yürürlükte olması",
+        "conceptual_outcome": "ilçe başına hastane yatak kapasitesi",
+        "expected_sign": "positive"
+      },
+      "accept_treatment": [],
+      "accept_outcome": [],
+      "why": "Panelde hastane kapasitesiyle ilgili HİÇBİR kolon yok (sonuç kolonları crude_rate ve pct_uninsured). Doğru davranış: uydurma kolon üretmemek ve needs_clarification=True dönmek. Sistem promptu bunu açıkça söylüyor: 'If you cannot confidently map the conceptual variables to existing columns, return needs_clarification=True.'",
+      "expect_needs_clarification": true
+    }
+  ]
+}

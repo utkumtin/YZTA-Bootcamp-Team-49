@@ -1,22 +1,28 @@
 """Model Router — PydanticAI tabanlı, tipli I/O, test edilebilir.
 
-review sorun #3'ün çözümü. Mekanik iş ucuz modele, yargı pinli güçlü modele
-(providers.py zincirleri). Tipli çıktı: `output_type` bir Pydantic modeli olduğunda
-PydanticAI şema-zorlaması + retry yapar → prototipteki regex-JSON ayıklama gitti.
+Mekanik iş ucuz modele, yargı pinli güçlü modele (providers.py zincirleri).
+Tipli çıktı: `output_type` bir Pydantic modeli olduğunda PydanticAI
+şema-zorlaması + retry yapar → prototipteki regex-JSON ayıklama gitti.
 
-Test: `use_test_model(...)` ile PydanticAI `TestModel`/`FunctionModel` enjekte edilir —
-API yakmadan (test stratejisinin tamamı buna dayanıyor). Reprodüksiyon
+Test: `use_test_model(...)` ile PydanticAI `TestModel`/`FunctionModel` enjekte
+edilir — API yakmadan (test stratejisinin tamamı buna dayanıyor). Reprodüksiyon
 dondurmadan gelir (menu.freeze), model stabilitesinden değil.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 from contextlib import contextmanager
 from typing import Any
 
-from ..config import SETTINGS, ModelRole, PrivacyMode, get_api_key
+from ..config import (
+    SETTINGS,
+    ModelRole,
+    PrivacyMode,
+    get_api_key,
+    get_effective_privacy_mode,
+    resolve_api_key,
+)
 from .providers import ProviderModel, chain_for
 
 logger = logging.getLogger(__name__)
@@ -37,73 +43,194 @@ def use_test_model(model: Any):
 
 
 def _model_from_provider(pm: ProviderModel) -> Any:
-    """Zincir girdisinden PydanticAI model nesnesi kurar (BYOK api_key ile)."""
+    """Zincir girdisinden PydanticAI model nesnesi kurar (BYOK api_key ile).
+
+    `allow_canned=True` ile çağrılır: gerçek anahtar yoksa constructor dummy
+    key ile kurulur. Bu güvenlidir çünkü hangi üyelerin zincire gireceğine
+    (gerçek anahtarı olanlar, ya da hiç yoksa hepsi) `_chain_model` karar
+    verir; burada yalnız kurulum yapılır. Dummy key ile kurulmuş bir modele
+    gerçek bir ağ isteği gitmesi, `canned_mode` bayrağı `CachedModel`'e
+    taşındığı için ayrıca engellenir (bkz. cache.py).
+    """
     if pm.provider == "google":
         from pydantic_ai.models.google import GoogleModel
         from pydantic_ai.providers.google import GoogleProvider
 
         return GoogleModel(
             pm.model_id,
-            provider=GoogleProvider(api_key=get_api_key(pm.api_key_env)),
+            provider=GoogleProvider(api_key=get_api_key(pm.api_key_env, allow_canned=True)),
         )
-    # Google dışı sağlayıcılarda da BYOK/.env anahtarını ortama pinle.
-    os.environ[pm.api_key_env] = get_api_key(pm.api_key_env)
-    # Diğer sağlayıcılar: "<provider>:<model_id>" (groq vb. optional extra gerekir)
-    return f"{pm.provider}:{pm.model_id}"
+    if pm.provider == "openrouter":
+        from pydantic_ai.models.openrouter import OpenRouterModel
+        from pydantic_ai.providers.openrouter import OpenRouterProvider
+
+        return OpenRouterModel(
+            pm.model_id,
+            provider=OpenRouterProvider(api_key=get_api_key(pm.api_key_env, allow_canned=True)),
+        )
+    if pm.provider == "groq":
+        from pydantic_ai.models.groq import GroqModel
+        from pydantic_ai.providers.groq import GroqProvider
+
+        return GroqModel(
+            pm.model_id,
+            provider=GroqProvider(api_key=get_api_key(pm.api_key_env, allow_canned=True)),
+        )
+    if pm.provider == "openai":
+        from pydantic_ai.models.openai import OpenAIChatModel
+        from pydantic_ai.providers.openai import OpenAIProvider
+
+        # Diğer dallarla aynı sözleşme: anahtarsız ortamda da kurulum yapılabilsin.
+        # Zincire hangi üyenin gireceğine `_chain_model` karar verdiği için burada
+        # fail-loud olmak canned fallback'i (dummy key'lerle yeniden kurulan zincir)
+        # OSError ile düşürürdü. base_url verilmiyor: OpenAIProvider'ın defaultu
+        # resmi api.openai.com ucu.
+        return OpenAIChatModel(
+            pm.model_id,
+            provider=OpenAIProvider(api_key=get_api_key(pm.api_key_env, allow_canned=True)),
+        )
+    if pm.provider == "demo_sonnet_5":
+        from .demo_sonnet_5 import build_model
+
+        # Diğer dallardan farklı: `get_api_key` hiç çağrılmıyor çünkü gerçek bir
+        # anahtar kavramı yok — `DEMO_SONNET_5_SESSION` yalnız `_chain_model`'in
+        # bu slotu canned/dummy yola düşürüp düşürmeyeceğine karar verirken baktığı
+        # bir kapı. `effort` "off" olamaz: slotun `default_thinking="high"`'ı
+        # zaten bunu garantiliyor (bkz. providers.py: JUDGE_DEMO_SONNET_5_SLOT).
+        return build_model(
+            model_id=pm.model_id, effort=pm.thinking if pm.thinking != "off" else "high"
+        )
+    raise RuntimeError(f"Bilinmeyen sağlayıcı: {pm.provider!r}")
 
 
-def _get_effective_privacy_mode() -> PrivacyMode:
-    """UI seçimi varsa kullan, yoksa varsayılan ayara dön."""
-    try:
-        import streamlit as st
-    except ImportError:
-        return SETTINGS.privacy_mode
-    raw = st.session_state.get("privacy_mode", SETTINGS.privacy_mode.value)
-    return PrivacyMode.PRIVATE if str(raw) == PrivacyMode.PRIVATE.value else PrivacyMode.PUBLIC
+# Privacy modu artık config.py'de tek kaynak (guardrails L7 kapısı da aynı değeri
+# okuyor). Buradaki ad geriye dönük uyumluluk için korunuyor.
+_get_effective_privacy_mode = get_effective_privacy_mode
 
 
-def _chain_model(chain: tuple[ProviderModel, ...]) -> Any:
+# Rol başına en son kurulan modelin kimliği. Denetlenebilirlik için var: model artık
+# hem `.env`'den hem kullanıcı seçiminden geldiği için "bu çıktıyı hangi model üretti"
+# sorusunun cevabı koda bakarak verilemiyor.
+#
+# NEDEN burada yazılıyor: `build_agent` dört üretim çağrısının da tek geçtiği yer,
+# yani model kimliğinin bilindiği tek dikiş. Okuyan taraf kaydı çağrının HEMEN
+# ardından almalı (bkz. `app/pages/2_analysis.py`); kullanıcı arada model değiştirirse
+# sonradan okunan değer o çıktıyı üreten model olmaz.
+_LAST_MODEL_BY_ROLE: dict[ModelRole, dict[str, str]] = {}
+
+
+def last_used_model(role: ModelRole) -> dict[str, str] | None:
+    """Bu süreçte rol için en son kurulan modelin kimliği; hiç kurulmadıysa None."""
+    return _LAST_MODEL_BY_ROLE.get(role)
+
+
+def is_canned_mode(role: ModelRole = ModelRole.MECHANICAL) -> bool:
+    """Verilen rol için zincirin canned modda olup olmadığını hesaplar.
+
+    `_chain_model` ile aynı mantığı (zincirdeki hiçbir üyenin gerçek anahtarı
+    yoksa canned) paylaşır, ama modelleri gerçekten kurmadan yalnız anahtar
+    çözümü yapar — UI banner'ının tek doğru kaynağı burasıdır (O1: banner artık
+    tek bir sağlayıcıya değil, aktif rolün tüm zincirine bakar).
+    """
+    chain = chain_for(role, _get_effective_privacy_mode())
+    return not any(resolve_api_key(pm.api_key_env)[1] != "none" for pm in chain)
+
+
+def _chain_model(chain: tuple[ProviderModel, ...]) -> tuple[Any, bool]:
     """Zinciri tek modele indirger: tek üye → kendisi, çok üye → FallbackModel.
 
-    Anahtarı eksik yedek üyeler uyarıyla atlanır (kısmi BYOK ile failover çalışsın);
-    zincirde hiç kullanılabilir üye kalmazsa fail-loud.
+    Gerçek anahtarı olmayan üyeler zincire hiç girmez (kısmi BYOK'ta, örn.
+    yalnız OPENROUTER_API_KEY girilmişse, anahtarsız Gemini/Groq üyelerine
+    dummy key ile gerçek bir ağ isteği atılmasını engeller — hem gizlilik hem
+    performans). Zincirdeki HİÇBİR üyenin gerçek anahtarı yoksa (tam canned
+    senaryo), tüm üyeler yine de dummy key ile kurulur ki failover mekaniği ve
+    golden-path cache replay'i çalışabilsin.
+
+    İkinci dönüş değeri (`canned_mode`) zincirdeki hiçbir üyenin gerçek anahtar
+    bulamadığını işaret eder ve `_resolve_model` tarafından cache katmanına
+    taşınır: `CachedModel` cache-miss'te bu bayrak açıkken sahte bir ağ isteği
+    atıp çirkin bir 401/auth hatasına düşmek yerine açık bir hata fırlatır
+    (bkz. cache.py: `CannedModeCacheMissError`).
     """
-    models: list[Any] = []
-    missing: list[str] = []
-    for pm in chain:
-        try:
-            models.append(_model_from_provider(pm))
-        except OSError:
-            logger.warning(
-                "Zincir üyesi atlandı (anahtar yok): %s:%s (%s)",
-                pm.provider,
-                pm.model_id,
-                pm.api_key_env,
-            )
-            missing.append(pm.api_key_env)
-    if not models:
-        raise OSError(
-            f"Zincirde kullanılabilir model yok; eksik anahtarlar: {', '.join(missing)}"
-        )
+    models: list[Any] = [
+        _model_from_provider(pm) for pm in chain if resolve_api_key(pm.api_key_env)[1] != "none"
+    ]
+
+    canned_mode = not models
+    if canned_mode:
+        # Hiçbir üyenin gerçek anahtarı yok: zincir yine de dummy key'lerle kurulur.
+        models = [_model_from_provider(pm) for pm in chain]
+
     if len(models) == 1:
-        return models[0]
+        return models[0], canned_mode
 
     from pydantic_ai.models.fallback import FallbackModel
 
-    return FallbackModel(*models)
+    return FallbackModel(*models), canned_mode
 
 
-def _resolve_model(role: ModelRole) -> Any:
-    """Test modeli varsa onu; yoksa cache'li failover zincirini döndürür.
+def _resolve_model(role: ModelRole) -> tuple[Any, dict[str, Any]]:
+    """Test modeli varsa onu; yoksa cache'li failover zincirini + ekstra model_settings'i döndürür.
 
     JUDGE zinciri tek üyelidir, dolayısıyla pinli kalır (failover yalnız mekanikte).
+    İkinci eleman (`extra_model_settings`), zincirin tek üyeli olduğu durumda o üyenin
+    `ProviderModel.extra_model_settings`'i (örn. OpenRouter ZDR zorlaması) — çok üyeli
+    zincirlerde (yalnız MECHANICAL) hiçbir slot bu alanı kullanmadığı için her zaman
+    boş; ileride çok üyeli bir slot bu alanı kullanırsa yanlış üyeye uygulanmasın diye
+    burada bilinçli olarak atlanır. Aynı gerekçeyle `ProviderModel.thinking` de yalnız
+    tek üyeli zincirde okunur ve (`"off"` hariç) buraya eklenir — pydantic-ai'nin
+    cross-provider `ModelSettings.thinking` alanına `build_agent()` üzerinden taşınır;
+    "off" hiç key eklemez, model kendi varsayılanını kullanır (bkz. ADR 0004, 2026-07-24
+    notu #2).
     """
     if _TEST_MODEL is not None:
-        return _TEST_MODEL
+        # Test modelinin kimliği de kaydedilir: aksi halde test koşusunda üretilen
+        # bir artefakt, kayıtta bir önceki gerçek modeli taşımaya devam eder ve
+        # provenance sessizce yalan söyler.
+        _LAST_MODEL_BY_ROLE[role] = {"provider": "test", "model_id": type(_TEST_MODEL).__name__}
+        return _TEST_MODEL, {}
     from .cache import wrap_with_cache
 
-    chain = chain_for(role, _get_effective_privacy_mode())
-    return wrap_with_cache(_chain_model(chain))
+    effective_privacy_mode = _get_effective_privacy_mode()
+    chain = chain_for(role, effective_privacy_mode)
+    extra_model_settings: dict[str, Any] = {}
+    if len(chain) == 1:
+        pm = chain[0]
+        extra_model_settings = dict(pm.extra_model_settings or {})
+        if pm.thinking != "off":
+            extra_model_settings["thinking"] = pm.thinking
+
+    if effective_privacy_mode is PrivacyMode.PRIVATE:
+        # Private modda no-train garantisi zincirdeki HERHANGİ bir slot için
+        # geçerli olmalı (Gemini paid, Groq private, OpenRouter private, ...),
+        # tek bir slota hardcoded değil. Hiçbir üye gerçek anahtar bulamazsa
+        # kullanıcı "private" kilidine bakarken donmuş bir kaydı izliyor
+        # olurdu — bu yüzden burada açıkça ve yönlendirici bir hata fırlatılır.
+        if not any(resolve_api_key(pm.api_key_env)[1] != "none" for pm in chain):
+            env_names = ", ".join(sorted({pm.api_key_env for pm in chain}))
+            raise OSError(
+                f"eksik anahtarlar: {env_names}. Private mod için zincirdeki en az bir "
+                "sağlayıcıya gerçek bir API anahtarı gerekir. Ayarlar sekmesinden BYOK "
+                f"anahtarınızı girin, `.env` dosyasına ekleyin, ya da `export {env_names}=...` "
+                "ile ortam değişkeni olarak tanımlayın."
+            )
+
+    from .retry import RetryingModel
+
+    model, canned_mode = _chain_model(chain)
+    # Retry cache'in ALTINDA kalır: cache isabeti yeniden deneme yolundan geçmemeli,
+    # ve bir yeniden deneme cache'e ikinci kez bakmamalı.
+    model = RetryingModel(model)
+    head = chain[0]
+    _LAST_MODEL_BY_ROLE[role] = {
+        "provider": head.provider,
+        "model_id": head.model_id,
+        "privacy_mode": effective_privacy_mode.value,
+        # Canned modda yanıt diskteki golden-path cache'inden geliyor; kayıt bunu
+        # söylemezse artefakt canlı bir çağrıymış gibi okunur.
+        "canned_mode": str(canned_mode).lower(),
+    }
+    return wrap_with_cache(model, canned_mode=canned_mode), extra_model_settings
 
 
 def build_agent(role: ModelRole, *, system_prompt: str, output_type: Any | None = None):
@@ -115,11 +242,13 @@ def build_agent(role: ModelRole, *, system_prompt: str, output_type: Any | None 
             "pydantic-ai kurulu değil. `uv sync` / `pip install pydantic-ai` gerekli."
         ) from exc
 
-    model = _resolve_model(role)
+    model, extra_model_settings = _resolve_model(role)
     kwargs: dict[str, Any] = {
         "system_prompt": system_prompt,
-        # Determinizm pini: temp=0 → tekrarlanabilir yanıt + cache isabeti
-        "model_settings": {"temperature": SETTINGS.llm_temperature},
+        # Determinizm pini: temp=0 → tekrarlanabilir yanıt + cache isabeti.
+        # extra_model_settings genelde boş; yalnız OpenRouter ZDR gibi slota özgü
+        # ayarlar taşıyan zincirlerde dolu (bkz. providers.py: ProviderModel).
+        "model_settings": {"temperature": SETTINGS.llm_temperature, **extra_model_settings},
     }
     if output_type is not None:
         kwargs["output_type"] = output_type

@@ -77,6 +77,12 @@ def apply_ledger(
 # --------------------------------------------------------------------------- #
 _REPRO_TIMEOUT_SECONDS = 120
 
+# L4 kapısının kabul toleransı. Sandbox çıktısı bu eşikte kabul edildiğine göre,
+# o çıktıyı sonradan denetleyen hiçbir katman daha DAR bir eşit'lik aramamalı:
+# aksi hâlde kapıdan geçmiş doğru bir koşu, aşağıda "uyuşmuyor" damgası yer.
+REPRO_RTOL = 1e-5
+REPRO_ATOL = 1e-8
+
 
 class ReproductionError(RuntimeError):
     """L4 reprodüksiyon kapısı: sandbox çıktısı in-process sonucu doğrulayamadı."""
@@ -88,8 +94,8 @@ def verify_reproduction(
     expected_df: pd.DataFrame,
     run_id: str,
     *,
-    rtol: float = 1e-5,
-    atol: float = 1e-8,
+    rtol: float = REPRO_RTOL,
+    atol: float = REPRO_ATOL,
 ) -> Path:
     """Diske yazılan audit script'ini sandbox'ta koşar, çıktıyı tolerans eşitliğiyle doğrular.
 

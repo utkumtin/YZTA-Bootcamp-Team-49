@@ -20,14 +20,21 @@ from pareto.cleaning.codegen import (
     render_audit_script,
     verify_reproduction,
 )
-from pareto.cleaning.ledger import persist_ledger
+from pareto.cleaning.ledger import LedgerEntry, persist_ledger
+from pareto.cleaning.uploads import uploaded_file_identity
+from pareto.llm.cache import CannedModeCacheMissError
 from pareto.profiling import load_raw_file, profile_dataframe
-from pareto.streamlit_ui import render_clean_panel, render_compact_sidebar
+from pareto.streamlit_ui import (
+    llm_call_status,
+    render_clean_panel,
+    render_compact_sidebar,
+    render_page_title,
+)
 
 with st.sidebar:
     render_compact_sidebar()
 
-st.title("1 - Temizleme")
+render_page_title("broom", "Temizleme")
 
 # --------------------------------------------------------------------------- #
 # Veri yükleme (mevcut davranış)
@@ -48,6 +55,13 @@ if st.session_state.get("clean_df") is not None:
             "resolutions",
             "run_id",
             "last_script",
+            "last_repro_dir",
+            "last_audit_path",
+            "last_ledger_path",
+            "cleaning_uploaded_file_id",
+            "cleaning_file_uploader",
+            "cleaning_failed_file_id",
+            "cleaning_failed_file_error",
         ):
             st.session_state.pop(key, None)
         st.rerun()
@@ -58,19 +72,58 @@ uploaded = st.file_uploader(
     key="cleaning_file_uploader",
 )
 if uploaded is not None:
-    try:
-        df = load_raw_file(uploaded)
-    except ValueError as exc:
-        st.error(str(exc))
-    else:
-        st.session_state["clean_df"] = df
-        st.session_state["clean_profile"] = profile_dataframe(df)
-        # Yeni dosya yüklendiyse önceki ledger/karar geçmişi geçersiz.
-        for key in ("clean_df_raw", "ledger", "resolutions", "run_id", "last_script"):
-            st.session_state.pop(key, None)
-        st.success(f"Yüklendi: {len(df)} satır × {df.shape[1]} kolon")
-        st.subheader("Deterministik profil")
-        st.json(st.session_state["clean_profile"])
+    # Streamlit her widget etkileşiminde script'i yeniden çalıştırır. Aynı
+    # UploadedFile için ledger'ı sıfırlamak yerine, sadece gerçekten yeni bir
+    # dosya geldiğinde oturumdaki karar akışını baştan başlat.
+    # Streamlit 1.32+'da UploadedFile.file_id her zaman doludur (#53/2:
+    # eski ad+boyut+hash fallback'i kaldırıldı, artık gerekmiyor).
+    uploaded_file_id = uploaded_file_identity(uploaded)
+    is_new_file = st.session_state.get("cleaning_uploaded_file_id") != uploaded_file_id
+    # #53/1: bu dosya için daha önce bir deneme yapılıp başarısız olduysa,
+    # `is_new_file` hâlâ True olur (çünkü başarılı bir yükleme hiç kaydedilmedi)
+    # ve her otomatik rerun'da `load_raw_file` yeniden çağrılıp aynı hata banner'ı
+    # tekrar tekrar basılırdı. `cleaning_failed_file_id` ile bu dosya için zaten
+    # denendiğini ayrıca izliyoruz; retry artık yalnızca kullanıcının açıkça
+    # bastığı "Tekrar dene" ile tetiklenir, otomatik rerun'larla değil.
+    already_failed_this_file = st.session_state.get("cleaning_failed_file_id") == uploaded_file_id
+
+    if is_new_file and not already_failed_this_file:
+        try:
+            df = load_raw_file(uploaded)
+        except ValueError as exc:
+            st.session_state["cleaning_failed_file_id"] = uploaded_file_id
+            st.session_state["cleaning_failed_file_error"] = str(exc)
+            st.error(str(exc))
+        else:
+            st.session_state.pop("cleaning_failed_file_id", None)
+            st.session_state.pop("cleaning_failed_file_error", None)
+            st.session_state["clean_df"] = df
+            st.session_state["clean_profile"] = profile_dataframe(df)
+            st.session_state["cleaning_uploaded_file_id"] = uploaded_file_id
+            # Sadece yeni dosya yüklendiyse önceki ledger/karar geçmişi geçersiz.
+            for key in (
+                "clean_df_raw",
+                "ledger",
+                "resolutions",
+                "run_id",
+                "last_script",
+                "last_repro_dir",
+                "last_audit_path",
+                "last_ledger_path",
+            ):
+                st.session_state.pop(key, None)
+            st.success(f"Yüklendi: {len(df)} satır × {df.shape[1]} kolon")
+            st.subheader("Deterministik profil")
+            st.json(st.session_state["clean_profile"])
+    elif already_failed_this_file:
+        st.error(st.session_state.get("cleaning_failed_file_error", "Dosya yüklenemedi."))
+        if st.button("Bu dosyayı Tekrar dene"):
+            st.session_state.pop("cleaning_failed_file_id", None)
+            st.session_state.pop("cleaning_failed_file_error", None)
+            st.rerun()
+
+# Uploader'dan dosyayı kaldırmak mevcut temizleme oturumunu korur; kullanıcı
+# bunun yerine "Veriyi oturumdan sil" eylemini kullanarak açıkça sıfırlayabilir.
 
 # --------------------------------------------------------------------------- #
 # Decision ledger + gatekeeper (Sprint-2)
@@ -79,6 +132,12 @@ if st.session_state.get("clean_df") is not None:
     st.divider()
     st.header("Karar defteri (decision ledger)")
 
+    # mypy Error 2 (satır 161): bu değişken hem `generate_ledger(...)`
+    # (list[LedgerEntry]) hem de `st.session_state.get("ledger")` (Any | None)
+    # tarafından atanıyordu; açık anotasyon iki atamayı da tek bir tutarlı
+    # tipe bağlıyor.
+    entries: list[LedgerEntry] | None
+
     if st.button("Temizlik kararlarını üret (JUDGE)", type="primary"):
         # Ham veriyi burada sabitle: her üretim-uygulama turu (ilk ya da tekrar)
         # aynı ham dataframe'den başlasın; JUDGE'ın gördüğü profil ile
@@ -86,7 +145,17 @@ if st.session_state.get("clean_df") is not None:
         raw_df = st.session_state.setdefault("clean_df_raw", st.session_state["clean_df"].copy())
         raw_profile = profile_dataframe(raw_df)
         try:
-            entries = generate_ledger(raw_profile)
+            with llm_call_status("JUDGE temizlik kararlarını üretiyor…"):
+                entries = generate_ledger(raw_profile)
+        except CannedModeCacheMissError as exc:
+            # O5: canned mod + cache miss ayrı bir vaka — router/cache.py zaten
+            # kullanıcıya dönük, yönlendirici bir mesaj üretiyor (BYOK gerektiği,
+            # golden-path cache'in senkron olmadığı gibi). Burada `(ValueError,
+            # OSError)` dalına düşürüp "JUDGE karar üretemedi: ..." ile
+            # sarmalamak yerine mesajı olduğu gibi gösteriyoruz; aksi halde bu
+            # istisna hiçbir except'e uymadığı için ham traceback olarak
+            # ekrana düşerdi (RuntimeError alt sınıfı, ValueError/OSError değil).
+            st.error(str(exc))
         except (ValueError, OSError) as exc:
             st.error(
                 f"JUDGE karar üretemedi: {exc} (API anahtarı eksikse ana sayfada BYOK kaydedin.)"
@@ -105,12 +174,17 @@ if st.session_state.get("clean_df") is not None:
             st.rerun()
 
     entries = st.session_state.get("ledger")
-    if entries is not None and len(entries) == 0:
+    if entries is None:
+        st.info(
+            "Karar defteri henüz boş. Yukarıdaki "
+            '"Temizlik kararlarını üret (JUDGE)" butonuna basın.'
+        )
+    elif len(entries) == 0:
         st.info("JUDGE 0 karar üretti — veri temiz görünüyor.")
 
     if entries is not None and len(entries) > 0:
         resolutions = st.session_state.setdefault("resolutions", {})
-        run_id = st.session_state["run_id"]
+        run_id = str(st.session_state["run_id"])
 
         auto = [(i, e) for i, e in enumerate(entries) if not e.belirsizlik_bayragi]
         flagged = [(i, e) for i, e in enumerate(entries) if e.belirsizlik_bayragi]
@@ -119,6 +193,13 @@ if st.session_state.get("clean_df") is not None:
             st.subheader(f"Otomatik onaylanan kararlar ({len(auto)})")
             for _, e in auto:
                 st.success(f"**{e.transform_name}** — {e.bulgu}")
+                # Otomatik onaylanan kararı kimse incelemiyor; veriyi sessizce
+                # bozabilecek tek şey params (örn. yanlış `width`) olduğu için
+                # bayraklı kararlardaki gibi params + gerekçe burada da görünür.
+                params_txt = ", ".join(f"{k}={v!r}" for k, v in e.params.items())
+                st.caption(f"Parametreler: {params_txt} · Gerekçe: {e.gerekce}")
+        else:
+            st.caption("Otomatik onaylanan karar yok; JUDGE her kararı onayınıza bıraktı.")
 
         if flagged:
             st.subheader(f"Belirsiz kararlar — onayınız gerekli ({len(flagged)})")
@@ -166,17 +247,25 @@ if st.session_state.get("clean_df") is not None:
                         modified_params = None
                         parse_ok = True
                         if choice == Resolution.MODIFIED.value:
-                            try:
-                                modified_params = json.loads(params_raw)
-                            except json.JSONDecodeError as exc:
-                                st.error(f"Geçersiz JSON: {exc}")
+                            # mypy Error 3 (satır 224): `params_raw` yalnızca bu
+                            # daldayken set edilir ve `str | None` tipindedir;
+                            # `json.loads` `None` kabul etmez.
+                            if params_raw is None:
+                                st.error("Beklenmeyen durum: parametre alanı boş.")
                                 parse_ok = False
                             else:
-                                if not isinstance(modified_params, dict):
-                                    st.error(
-                                        'params bir JSON objesi (dict) olmalı, ör. {"col": "..."}.'
-                                    )
+                                try:
+                                    modified_params = json.loads(params_raw)
+                                except json.JSONDecodeError as exc:
+                                    st.error(f"Geçersiz JSON: {exc}")
                                     parse_ok = False
+                                else:
+                                    if not isinstance(modified_params, dict):
+                                        st.error(
+                                            "params bir JSON objesi (dict) olmalı, "
+                                            ' ör. {"col": "..."}.'
+                                        )
+                                        parse_ok = False
                         if parse_ok:
                             try:
                                 resolutions[i] = resolve(
@@ -193,6 +282,8 @@ if st.session_state.get("clean_df") is not None:
         all_resolved = len(pending) == 0
         if pending:
             st.warning(f"{len(pending)} belirsiz karar çözülmeden ilerlenemez.")
+        else:
+            st.success("Tüm kararlar çözüldü. Aşağıdan uygulayabilirsiniz.")
 
         if st.button(
             "Kararları uygula (codegen + apply)", type="primary", disabled=not all_resolved

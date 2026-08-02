@@ -28,6 +28,59 @@ logger = logging.getLogger(__name__)
 
 HARD_CAP = SETTINGS.max_specifications  # sert tavan 24
 
+# JUDGE'a spesifikasyon bütçesini ANLATAN blok (generate_spec_menu promptu).
+#
+# NEDEN VAR: prompt eskiden HARD_CAP'ten hiç söz etmiyordu. Model 7 eksende
+# bolca aday seviye öneriyor, `expand_to_specs` bunların kartezyen çarpımını
+# alıyor ve tavanı aşınca fail-loud atıyor — yani kullanıcı JUDGE'ın menüsünü
+# onayladığında eğri yerine hata görüyordu. Benchmark'ta ölçüldü (2026-07-31,
+# runs/benchmark): 960-2160 spesifikasyonla reddedilen menüler; inkling 6/12,
+# llama-3.3-70b 6/12, nemotron-nano 6/12, gpt-oss-120b 8/12. Modelin kusuru
+# değil, söylenmemiş bir kısıt.
+#
+# NEDEN yalnız prompt, şema validator'ı DEĞİL: çarpımı kontrol eden bir pydantic
+# validator eklenirse pydantic-ai retry'a girer ve model geri bildirimle kendini
+# düzeltir. O zaman bu dikiş "açıkça bildirilmiş sert bir kısıta İLK denemede
+# uydu mu" ölçmeyi bırakır, "geri bildirimle düzelebiliyor mu" ölçmeye başlar.
+# Birincisi JUDGE seçiminde aradığımız talimat-uyumu ekseni. Kısıt burada
+# söylenir, `expand_to_specs` fail-loud kalır.
+#
+# Sayı HARD_CAP'ten gelir; literal yazılmamalı, yoksa SETTINGS.max_specifications
+# değişince prompt sessizce yalan söyler (tests/test_model_benchmark.py bunu bağlar).
+_SPEC_BUDGET_RULE = f"""SPECIFICATION BUDGET — HARD CONSTRAINT
+Your menu is not a list of options. It is expanded into a specification curve by
+taking the CARTESIAN PRODUCT across all 7 axes. Each axis contributes
+    n(axis) = number of DISTINCT levels = |{{baseline_level}} U candidate_levels|
+and the curve size is
+    n(control_set) x n(sample) x n(pre_period) x n(clustering)
+      x n(never_treated) x n(estimator) x n(weighting)
+This product MUST NOT exceed {HARD_CAP}. There is no silent truncation: a menu
+whose product exceeds {HARD_CAP} is rejected outright, and the user gets an error
+instead of a specification curve.
+
+Worked arithmetic:
+    every axis at 2 levels          = 2^7 = 128   -> far over budget, REJECTED
+    3 axes at 2 levels, 4 pinned    = 8           -> well inside budget
+    two axes at 2, one at 3, rest pinned = 12     -> inside budget
+An axis with an empty candidate_levels list is PINNED at its baseline and costs a
+factor of 1. Pinning is how you buy room for the axes that matter.
+
+How to spend the budget:
+1. PIN every axis you are not deliberately testing. Pinning is a positive claim,
+   not an omission: it says "this baseline is defensible and the alternatives are
+   not worth a fold of the curve". Name the alternative you rejected, and why, in
+   that axis's rationale.
+2. SPEND the budget on the 2-3 axes where THIS estimand is most fragile. Let the
+   estimand, its identification assumption and the available columns decide which
+   ones those are — do not go by habit, and do not treat any axis as contestable
+   when the design fixes it. An axis whose alternative level would violate the
+   identification assumption is not a robustness check; pin it and say so.
+3. COMPUTE the product before you answer. If it exceeds {HARD_CAP}, drop candidate
+   levels from the least decision-relevant axis and recompute. Repeat until the
+   product is at or below {HARD_CAP}.
+4. Every axis still needs a baseline_level and a rationale, pinned or not.
+"""
+
 AxisName = Literal[
     "control_set",
     "sample",
@@ -50,6 +103,35 @@ ALL_AXES: tuple[AxisName, ...] = (
 
 DEFAULT_WEIGHT_COL = SETTINGS.default_weight_col
 SupportedEstimator = Literal["OLS", "TWFE"]
+
+# OLS'in savunulabilir olduğu tanımlama varsayımları.
+#
+# NEDEN allowlist (fail-closed) ve blocklist DEĞİL: `identification_assumption`
+# serbest metin bir `str` (hypothesis.py), `Literal` değil — TAC ajanı dolduruyor.
+# "parallel_trends"i yasaklayan bir blocklist, model "parallel trends" ya da
+# Türkçe bir varyant döndüğü anda sessizce açılırdı. Tanımadığımız her varsayım
+# panel kabul edilir; yanlış tarafa hata yapmak pahalı.
+_CROSS_SECTIONAL_IDENTIFICATION = frozenset(
+    {"selection_on_observables", "rct", "randomization", "iv", "rdd"}
+)
+
+
+def defensible_estimators(identification_assumption: str) -> tuple[SupportedEstimator, ...]:
+    """Bu estimand için savunulabilir estimator seviyeleri.
+
+    Panel/DiD tasarımında `treatment` bir etkileşim terimidir (ör. `treated_post`
+    = genişleten eyalet x post-dönem). `OLSEstimator` ana etkileri eklemeyen
+    `y ~ treatment` formülünü kurar, dolayısıyla katsayısı DiD değil grup farkı
+    ile zaman trendinin karışımıdır — Medicaid demo panelinde ölçüldü: OLS
+    -10.97, doğru DiD -2.82 (3.9 kat).
+
+    OLS kesitsel tasarımlarda doğru çalışmaya devam eder; kusur estimator'da
+    değil, panel bir estimand'a sunulmasındaydı.
+    """
+    assumption = identification_assumption.strip().lower()
+    if assumption in _CROSS_SECTIONAL_IDENTIFICATION:
+        return SUPPORTED_ESTIMATORS
+    return ("TWFE",)
 
 
 # -----------------------------
@@ -111,7 +193,11 @@ def _axis_levels(proposal: SpecMenuProposal, name: str) -> list[str]:
     for axis in proposal.axes:
         if axis.axis_name == name:
             return [axis.baseline_level, *axis.candidate_levels]
-    raise ValueError(f"Missing axis: {name}")
+    # #50/13 (dil karışıklığı): önceden "Missing axis: {name}" İngilizceydi.
+    # Bu dal normal akışta _validate_menu_proposal_levels tarafından önceden
+    # yakalanır (axis eksikse orada "{name} ekseni eksik." raporlanır), ama
+    # savunma amaçlı burada da Türkçe olmalı.
+    raise ValueError(f"Eksen eksik: {name}")
 
 
 def _parse_control_set(level: str) -> list[str]:
@@ -168,14 +254,28 @@ def build_deterministic_menu(
     controls: list[str] | None,
     cluster_by: str | None,
     estimators: list[str],
+    identification_assumption: str,
     available_columns: list[str] | None = None,
     weight_col: str | None = None,
 ) -> SpecMenu:
-    """LLM'siz minimal spec menüsü; ağırlıklandırma default nüfus-ağırlıklı."""
+    """LLM'siz minimal spec menüsü; ağırlıklandırma default nüfus-ağırlıklı.
+
+    `estimators` istenen seviyeleri verir ama son sözü `defensible_estimators`
+    söyler: kapı burada, çağıran katmanda değil — yoksa yeni bir çağıran onu
+    sessizce atlar.
+    """
     control_sets: list[list[str]] = [[], controls] if controls else [[]]
+    allowed = defensible_estimators(identification_assumption)
+    kept = [e for e in estimators if e in allowed]
+    if estimators and not kept:
+        raise ValueError(
+            f"İstenen estimator'ların hiçbiri bu tanımlamada savunulabilir değil: "
+            f"{estimators} istendi, izin verilenler {list(allowed)} "
+            f"(identification_assumption={identification_assumption!r})."
+        )
     estimator_tuple = cast(
         tuple[SupportedEstimator, ...],
-        tuple(estimators) if estimators else ("OLS",),
+        tuple(kept) if kept else (allowed[0],),
     )
 
     return SpecMenu(
@@ -202,21 +302,40 @@ def generate_spec_menu(
     frozen: FrozenEstimand,
     available_columns: list[str],
 ) -> SpecMenuProposal:
-    """JUDGE: frozen estimand + kolonlar → her eksende savunulabilir seviyeler + baseline + gerekçe."""
+    """JUDGE: frozen estimand + kolonlar →
+    her eksende savunulabilir seviyeler + baseline + gerekçe.
+    """
     if not available_columns:
-        raise ValueError("Spec menu proposal needs at least one available column.")
+        # #50/13: önceden İngilizce ("Spec menu proposal needs at least one
+        # available column."). Bu istisna çağıran sayfa katmanında
+        # `except Exception as exc: st.error(f"Menü oluşturulamadı: {exc}")`
+        # ile doğrudan kullanıcıya basılabiliyor, o yüzden Türkçe olmalı.
+        raise ValueError("Spec menü önerisi için en az bir mevcut kolon gereklidir.")
 
     estimand = frozen.estimand
+    allowed_estimators = defensible_estimators(estimand.identification_assumption)
+    # Kısıt prompt'ta AÇIKÇA söylenir (aynı gerekçe _SPEC_BUDGET_RULE'da: model
+    # söylenmemiş bir kısıtı çiğnerse bu modelin kusuru değildir). Deterministik
+    # kapı `spec_menu_proposal_to_menu`'de fail-loud olarak duruyor.
+    estimator_rule = f"Supported estimators for THIS estimand: {', '.join(allowed_estimators)}."
+    if len(allowed_estimators) == 1:
+        estimator_rule += (
+            " OLS is not offered here: in a panel/DiD design the treatment column is an"
+            " interaction term, and an OLS fit without the group and period main effects"
+            " does not identify a DiD. Pin the estimator axis at its baseline and spend"
+            " the budget on axes that are genuinely contestable."
+        )
     prompt = (
         "Frozen estimand:\n"
         f"{prompt_json(estimand.model_dump())}\n\n"
         "Available columns:\n"
         f"<available_columns>{prompt_json(available_columns)}</available_columns>\n\n"
-        "Supported estimators: OLS, TWFE.\n\n"
+        f"{estimator_rule}\n\n"
         "Create a SpecMenuProposal with exactly these 7 axes:\n"
         "control_set, sample, pre_period, clustering, never_treated, estimator, weighting.\n\n"
         "For each axis provide baseline_level, candidate_levels, and rationale.\n"
-        "This is NOT a closed list — propose defensible levels grounded in the estimand and columns.\n"
+        "This is NOT a closed list — propose defensible levels grounded in the "
+        "estimand and columns.\n"
         "Be conservative: never invent columns or unsupported estimators.\n\n"
         "Encoding rules:\n"
         "- control_set: 'none' for no controls, or 'col1+col2' for control sets\n"
@@ -225,8 +344,10 @@ def generate_spec_menu(
         "- clustering: column name, or 'none' for no clustering (heteroskedasticity-robust SE); "
         "panel/DiD: cluster at treatment-assignment level; 'none' only if indefensible\n"
         "- never_treated: 'true' or 'false'\n"
-        "- estimator: 'OLS' or 'TWFE'\n"
-        f"- weighting: '{DEFAULT_WEIGHT_COL}' (population-weighted default) or 'none' for unweighted\n"
+        f"- weighting: '{DEFAULT_WEIGHT_COL}' (population-weighted default) or "
+        "'none' for unweighted\n"
+        f"- estimator: only {' or '.join(repr(e) for e in allowed_estimators)}\n"
+        f"\n{_SPEC_BUDGET_RULE}"
     )
 
     agent = build_agent(
@@ -235,7 +356,12 @@ def generate_spec_menu(
             "You design specification-curve robustness menus for causal inference. "
             "For each axis, recommend a defensible baseline and candidate levels with rationale — "
             "not a fixed closed list. Never invent columns or unsupported estimators. "
-            "If the estimand is unclear for menu design, set needs_clarification=true."
+            "If the estimand is unclear for menu design, set needs_clarification=true. "
+            # `rationale` ve `overall_rationale` doğrudan kullanıcıya basılıyor
+            # (app/pages/2_analysis.py). Bu dosyadaki diğer kullanıcıya dönük
+            # metinler #50/13'te Türkçeleştirildi ama LLM'in ürettiği alanlar
+            # literal olmadığı için taramadan kaçmıştı. Emsal: cleaning/agent.py.
+            "Write rationale and overall_rationale in Turkish."
         ),
         output_type=SpecMenuProposal,
     )
@@ -294,44 +420,120 @@ def _dedupe_preserving_order(values: list[T]) -> list[T]:
     return deduped
 
 
+def _validate_menu_proposal_levels(
+    proposal: SpecMenuProposal,
+    *,
+    available_columns: list[str],
+) -> list[str]:
+    cols = set(available_columns)
+    reasons: list[str] = []
+
+    axis_lookup = {axis.axis_name: axis for axis in proposal.axes}
+
+    for axis_name in ALL_AXES:
+        axis = axis_lookup.get(axis_name)
+        if axis is None:
+            reasons.append(f"{axis_name} ekseni eksik.")
+            continue
+
+        baseline = (axis.baseline_level or "").strip()
+        if not baseline:
+            reasons.append(f"{axis_name} baseline seviyesi boş olamaz.")
+            continue
+
+        try:
+            if axis_name == "control_set":
+                _parse_control_set(baseline)
+                for candidate in axis.candidate_levels:
+                    _parse_control_set(candidate)
+            elif axis_name == "sample":
+                _parse_sample_filter(baseline)
+                for candidate in axis.candidate_levels:
+                    _parse_sample_filter(candidate)
+            elif axis_name == "pre_period":
+                _parse_pre_period(baseline)
+                for candidate in axis.candidate_levels:
+                    _parse_pre_period(candidate)
+            elif axis_name == "clustering":
+                parsed = _parse_optional_column(baseline)
+                if parsed is not None and parsed not in cols:
+                    raise ValueError(f"Geçersiz clustering kolonu: {parsed}")
+                for candidate in axis.candidate_levels:
+                    parsed_candidate = _parse_optional_column(candidate)
+                    if parsed_candidate is not None and parsed_candidate not in cols:
+                        raise ValueError(f"Geçersiz clustering kolonu: {parsed_candidate}")
+            elif axis_name == "never_treated":
+                _parse_never_treated(baseline)
+                for candidate in axis.candidate_levels:
+                    _parse_never_treated(candidate)
+            elif axis_name == "estimator":
+                if baseline not in SUPPORTED_ESTIMATORS:
+                    raise ValueError(f"Desteklenmeyen kestirici: {baseline}")
+                for candidate in axis.candidate_levels:
+                    if candidate not in SUPPORTED_ESTIMATORS:
+                        raise ValueError(f"Desteklenmeyen kestirici: {candidate}")
+            elif axis_name == "weighting":
+                parsed = _parse_optional_column(baseline)
+                if parsed is not None and parsed not in cols:
+                    raise ValueError(f"Geçersiz ağırlık kolonu: {parsed}")
+                for candidate in axis.candidate_levels:
+                    parsed_candidate = _parse_optional_column(candidate)
+                    if parsed_candidate is not None and parsed_candidate not in cols:
+                        raise ValueError(f"Geçersiz ağırlık kolonu: {parsed_candidate}")
+        except ValueError as exc:
+            reasons.append(str(exc))
+
+    return reasons
+
+
 def spec_menu_proposal_to_menu(
     proposal: SpecMenuProposal,
     *,
     available_columns: list[str],
+    identification_assumption: str,
 ) -> SpecMenu:
-    cols = set(available_columns)
-
     def axis(name: str) -> list[str]:
         return _axis_levels(proposal, name)
 
+    reasons = _validate_menu_proposal_levels(proposal, available_columns=available_columns)
+    if reasons:
+        raise ValueError("; ".join(reasons))
+
     control_sets = _dedupe_preserving_order([_parse_control_set(v) for v in axis("control_set")])
-    sample_filters = tuple(_dedupe_preserving_order([_parse_sample_filter(v) for v in axis("sample")]))
-    pre_period_windows = tuple(_dedupe_preserving_order([_parse_pre_period(v) for v in axis("pre_period")]))
+    sample_filters = tuple(
+        _dedupe_preserving_order([_parse_sample_filter(v) for v in axis("sample")])
+    )
+    pre_period_windows = tuple(
+        _dedupe_preserving_order([_parse_pre_period(v) for v in axis("pre_period")])
+    )
     # weighting ile aynı normalizasyon: "none" savunulabilir bir seviye, hata değil
     clustering_levels = tuple(
         _dedupe_preserving_order([_parse_optional_column(v) for v in axis("clustering")])
     )
-    never_treated_levels = tuple(_dedupe_preserving_order([_parse_never_treated(v) for v in axis("never_treated")]))
-    weighting_levels = tuple(_dedupe_preserving_order([_parse_optional_column(v) for v in axis("weighting")]))
+    never_treated_levels = tuple(
+        _dedupe_preserving_order([_parse_never_treated(v) for v in axis("never_treated")])
+    )
+    weighting_levels = tuple(
+        _dedupe_preserving_order([_parse_optional_column(v) for v in axis("weighting")])
+    )
     estimator_levels_raw = _dedupe_preserving_order(axis("estimator"))
 
+    allowed_estimators = defensible_estimators(identification_assumption)
     for estimator in estimator_levels_raw:
         if estimator not in SUPPORTED_ESTIMATORS:
-            raise ValueError(f"Unsupported estimator: {estimator}")
+            raise ValueError(f"Desteklenmeyen kestirici: {estimator}")
+        # Sessizce elemek yerine fail-loud: prompt bu kısıtı JUDGE'a söylüyor,
+        # yine de gelmişse kullanıcı menünün istediğinden farklı olduğunu
+        # bilmeli. Desen cleaning/agent.py:_validate_referenced_columns ile aynı.
+        if estimator not in allowed_estimators:
+            raise ValueError(
+                f"Bu tanımlamada savunulamayan kestirici önerildi: {estimator}. "
+                f"İzin verilenler: {list(allowed_estimators)} "
+                f"(identification_assumption={identification_assumption!r}). "
+                "Panel/DiD'de treatment bir etkileşim terimidir; OLS ana etkileri "
+                "eklemediği için katsayısı DiD değildir."
+            )
     estimator_levels = cast(tuple[SupportedEstimator, ...], tuple(estimator_levels_raw))
-
-    for cluster in clustering_levels:
-        if cluster is not None and cluster not in cols:
-            raise ValueError(f"Invalid clustering column: {cluster}")
-
-    for control_set in control_sets:
-        for control in control_set:
-            if control not in cols:
-                raise ValueError(f"Invalid control column: {control}")
-
-    for w in weighting_levels:
-        if w is not None and w not in cols:
-            raise ValueError(f"Invalid weight column: {w}")
 
     return SpecMenu(
         control_sets=control_sets,
@@ -350,20 +552,180 @@ def spec_menu_proposal_to_menu(
 # -----------------------------
 
 
+def _collect_menu_proposal_reasons(
+    proposal: SpecMenuProposal,
+    *,
+    available_columns: list[str],
+    identification_assumption: str,
+    outcome: str | None = None,
+    treatment: str | None = None,
+    unit_col: str | None = None,
+    time_col: str | None = None,
+) -> list[str]:
+    reasons: list[str] = []
+
+    if proposal.needs_clarification:
+        reasons.append(proposal.clarification_question or "Menü için ek açıklama gerekiyor.")
+
+    if not available_columns:
+        reasons.append("En az bir mevcut kolon gereklidir.")
+
+    if outcome is not None and not (outcome or "").strip():
+        reasons.append("Outcome kolon adı zorunludur.")
+    if treatment is not None and not (treatment or "").strip():
+        reasons.append("Treatment kolon adı zorunludur.")
+    if unit_col is not None and not (unit_col or "").strip():
+        reasons.append("Unit kolonu zorunludur.")
+    if time_col is not None and not (time_col or "").strip():
+        reasons.append("Time kolonu zorunludur.")
+
+    reasons.extend(_validate_menu_proposal_levels(proposal, available_columns=available_columns))
+
+    if reasons:
+        return reasons
+
+    if outcome is not None or treatment is not None or unit_col is not None or time_col is not None:
+        try:
+            menu = spec_menu_proposal_to_menu(
+                proposal,
+                available_columns=available_columns,
+                identification_assumption=identification_assumption,
+            )
+            frozen = FrozenSpecMenu(menu=menu, menu_hash=_menu_hash(menu))
+            expand_to_specs(
+                frozen,
+                outcome=outcome or "",
+                treatment=treatment or "",
+                unit_col=unit_col or "",
+                time_col=time_col or "",
+                available_columns=available_columns,
+            )
+        except ValueError as exc:
+            reasons.append(str(exc))
+
+    return reasons
+
+
+def _collect_spec_binding_reasons(
+    *,
+    outcome: str | None = None,
+    treatment: str | None = None,
+    unit_col: str | None = None,
+    time_col: str | None = None,
+) -> list[str]:
+    reasons: list[str] = []
+
+    if outcome is None or not outcome.strip():
+        reasons.append("Outcome kolon adı zorunludur.")
+    if treatment is None or not treatment.strip():
+        reasons.append("Treatment kolon adı zorunludur.")
+    if unit_col is None or not unit_col.strip():
+        reasons.append("Unit kolonu zorunludur.")
+    if time_col is None or not time_col.strip():
+        reasons.append("Time kolonu zorunludur.")
+
+    return reasons
+
+
+def evaluate_menu_defensibility(
+    proposal: SpecMenuProposal,
+    *,
+    available_columns: list[str],
+    identification_assumption: str,
+    outcome: str | None = None,
+    treatment: str | None = None,
+    unit_col: str | None = None,
+    time_col: str | None = None,
+) -> tuple[bool, list[str], int]:
+    """Menünün savunulabilirlik kapısından geçip geçmediğini değerlendirir."""
+    reasons = _collect_menu_proposal_reasons(
+        proposal,
+        available_columns=available_columns,
+        identification_assumption=identification_assumption,
+    )
+    reasons.extend(
+        _collect_spec_binding_reasons(
+            outcome=outcome,
+            treatment=treatment,
+            unit_col=unit_col,
+            time_col=time_col,
+        )
+    )
+    if reasons:
+        return False, reasons, 0
+
+    try:
+        menu = spec_menu_proposal_to_menu(
+            proposal,
+            available_columns=available_columns,
+            identification_assumption=identification_assumption,
+        )
+    except ValueError as exc:
+        return False, [str(exc)], 0
+
+    frozen_menu = FrozenSpecMenu(menu=menu, menu_hash=_menu_hash(menu))
+    assert (
+        outcome is not None
+        and treatment is not None
+        and unit_col is not None
+        and time_col is not None
+    )
+    specs = expand_to_specs(
+        frozen_menu,
+        outcome=outcome.strip(),
+        treatment=treatment.strip(),
+        unit_col=unit_col.strip(),
+        time_col=time_col.strip(),
+        available_columns=available_columns,
+    )
+    return True, [], len(specs)
+
+
 def freeze_spec_menu(
     proposal: SpecMenuProposal,
     *,
     available_columns: list[str],
+    identification_assumption: str,
     approved: bool,
-    active_axes: tuple[AxisName, ...] = (),
+    active_axes: tuple[AxisName, ...] | None = None,
 ) -> FrozenSpecMenu:
     if proposal.needs_clarification:
-        raise ValueError(proposal.clarification_question or "Clarification required")
+        # NEDEN İngilizce kalabilir: bu mesaj sabit bir Claude/JUDGE string'i
+        # değil, `clarification_question` LLM'in (JUDGE) ürettiği dinamik
+        # içerik — proposal ne dilde geldiyse o dilde kalır. Yalnızca hiç
+        # soru üretilmemişse (None) devreye giren statik fallback Türkçe.
+        raise ValueError(proposal.clarification_question or "Açıklama gerekli.")
     if not approved:
-        raise ValueError("User approval required to freeze spec menu")
+        # #50/13: önceden "User approval required to freeze spec menu"
+        # İngilizceydi. Bu da sayfa katmanında `except ValueError as exc:
+        # st.error(str(exc))` ile kullanıcıya basılabilecek bir yol, o yüzden
+        # Türkçe olmalı (pratikte UI'da buton `disabled=` ile kapalı tutulur,
+        # ama fonksiyon tek başına da çağrılabildiği için sözleşme dil açısından
+        # tutarlı olmalı).
+        raise ValueError("Spec menüsünü dondurmak için kullanıcı onayı gereklidir.")
 
-    menu = spec_menu_proposal_to_menu(proposal, available_columns=available_columns)
-    if active_axes:
+    reasons = _collect_menu_proposal_reasons(
+        proposal,
+        available_columns=available_columns,
+        identification_assumption=identification_assumption,
+    )
+    if reasons:
+        raise ValueError("; ".join(reasons))
+
+    menu = spec_menu_proposal_to_menu(
+        proposal,
+        available_columns=available_columns,
+        identification_assumption=identification_assumption,
+    )
+    if active_axes == ():
+        # Z1: bu istisna 2_analysis.py'de yakalanıp doğrudan st.error(str(exc))
+        # ile kullanıcıya basılıyor; sayfanın deterministik yolundaki eşdeğer
+        # mesaj zaten Türkçe ("En az bir aktif eksen seçin; multiverse
+        # genişletmesi durduruldu."). İngilizce kalması #50/13'ün (dil
+        # karışıklığı) şikayet ettiği durumu bu PR'ın kendisi yeniden
+        # üretiyordu — artık Türkçe.
+        raise ValueError("En az bir aktif eksen seçilmelidir.")
+    if active_axes is not None:
         menu = menu.model_copy(update={"active_axes": active_axes})
     return FrozenSpecMenu(menu=menu, menu_hash=_menu_hash(menu))
 
@@ -382,22 +744,26 @@ def validate_spec_menu_to_specs(
 
     for spec in specs:
         if list(spec.controls) not in menu.control_sets:
-            errors.append(f"{spec.spec_id}: invalid controls {list(spec.controls)!r}")
+            errors.append(f"{spec.spec_id}: geçersiz controls {list(spec.controls)!r}")
         if spec.sample_filter not in menu.sample_filters:
-            errors.append(f"{spec.spec_id}: invalid sample_filter {spec.sample_filter!r}")
+            errors.append(f"{spec.spec_id}: geçersiz sample_filter {spec.sample_filter!r}")
         if spec.pre_period_window not in menu.pre_period_windows:
-            errors.append(f"{spec.spec_id}: invalid pre_period {spec.pre_period_window!r}")
+            errors.append(f"{spec.spec_id}: geçersiz pre_period {spec.pre_period_window!r}")
         if spec.cluster_by not in menu.clustering_levels:
-            errors.append(f"{spec.spec_id}: invalid cluster_by {spec.cluster_by!r}")
+            errors.append(f"{spec.spec_id}: geçersiz cluster_by {spec.cluster_by!r}")
         if spec.include_never_treated not in menu.never_treated_levels:
-            errors.append(f"{spec.spec_id}: invalid never_treated {spec.include_never_treated!r}")
+            errors.append(f"{spec.spec_id}: geçersiz never_treated {spec.include_never_treated!r}")
         if spec.estimator not in menu.estimators:
-            errors.append(f"{spec.spec_id}: invalid estimator {spec.estimator!r}")
+            errors.append(f"{spec.spec_id}: geçersiz estimator {spec.estimator!r}")
         if spec.weight_col not in menu.weighting_levels:
-            errors.append(f"{spec.spec_id}: invalid weight_col {spec.weight_col!r}")
+            errors.append(f"{spec.spec_id}: geçersiz weight_col {spec.weight_col!r}")
 
     if errors:
-        raise ValueError("Spec validation failed: " + "; ".join(errors))
+        # NEDEN Türkçe: #50/13 — menü tarafındaki parser mesajları (örn. "Geçersiz
+        # clustering kolonu") Türkçeleşmişti ama bu fonksiyon İngilizce kalmıştı;
+        # freeze/expand akışında "; " ile birleşen hata metinlerinde dil karışımı
+        # oluşabiliyordu. Artık bu fonksiyon da Türkçe.
+        raise ValueError("Spec doğrulaması başarısız: " + "; ".join(errors))
 
 
 # -----------------------------
@@ -412,8 +778,23 @@ def expand_to_specs(
     treatment: str,
     unit_col: str,
     time_col: str,
+    available_columns: list[str],
 ) -> list[Specification]:
     """Aktif eksenlerin faktöriyel çarpımı. Sessiz eksenler baseline'a pinli. Sert tavan 24."""
+    # `available_columns` ZORUNLU: `outcome`/`treatment` doğrudan
+    # `Specification`'a yazılıyor ve oradan tahminciye `df[...]` olarak gidiyor.
+    # Bağlayan çağrı yerinin kolon listesi hep elinde; opsiyonel yapmak kontrolü
+    # tam da en az bağlamı olan çağrıda atlatırdı.
+    known = set(map(str, available_columns))
+    bound = [("outcome", outcome), ("treatment", treatment)]
+    unknown = [f"{field}='{value}'" for field, value in bound if value not in known]
+    if unknown:
+        raise ValueError(
+            "Spesifikasyona bağlanan kolon veri setinde yok: "
+            + ", ".join(unknown)
+            + ". Kolon adı bekleniyor, açıklama metni değil."
+        )
+
     menu = frozen_menu.menu
     active = set(menu.active_axes) if menu.active_axes else _default_active(menu)
 

@@ -1,6 +1,7 @@
 """pyfixest OLS/TWFE estimates against the committed R/fixest reference."""
 
 from pathlib import Path
+from typing import Any, TypedDict
 
 import pandas as pd
 import pytest
@@ -14,10 +15,18 @@ MEDICAID_DIR = REPO_ROOT / "data" / "medicaid"
 CDC_RAW = MEDICAID_DIR / "raw" / "cdc_wonder_mortality_2009_2019.tsv"
 REFERENCE_CSV = REPO_ROOT / "tests" / "fixtures" / "r_reference_medicaid.csv"
 
+
+class _Tolerance(TypedDict):
+    """`pytest.approx` keyword'lerine birebir açılır; anahtar adları imzayla eşleşmeli."""
+
+    rel: float
+    abs: float
+
+
 # Estimates and confidence intervals should agree closely across fixest implementations.
-ESTIMATE_TOLERANCE = {"rel": 1e-5, "abs": 1e-6}
+ESTIMATE_TOLERANCE: _Tolerance = {"rel": 1e-5, "abs": 1e-6}
 # Tail probabilities amplify small numerical differences, so p-values get a modestly looser bound.
-P_VALUE_TOLERANCE = {"rel": 1e-4, "abs": 1e-8}
+P_VALUE_TOLERANCE: _Tolerance = {"rel": 1e-4, "abs": 1e-8}
 
 REFERENCE_ROWS = pd.read_csv(REFERENCE_CSV).to_dict(orient="records")
 
@@ -49,7 +58,7 @@ def medicaid_committed_sample() -> pd.DataFrame:
 
 @pytest.mark.parametrize("reference", REFERENCE_ROWS, ids=lambda row: row["spec_id"])
 def test_ols_twfe_match_r_fixest_reference(
-    medicaid_committed_sample: pd.DataFrame, reference: dict[str, object]
+    medicaid_committed_sample: pd.DataFrame, reference: dict[str, Any]
 ) -> None:
     controls_text = _optional_text(reference["controls"])
     controls = tuple(controls_text.split(";")) if controls_text else ()
@@ -74,6 +83,4 @@ def test_ols_twfe_match_r_fixest_reference(
         assert getattr(result, field) == pytest.approx(
             float(reference[field]), **ESTIMATE_TOLERANCE
         )
-    assert result.p_value == pytest.approx(
-        float(reference["p_value"]), **P_VALUE_TOLERANCE
-    )
+    assert result.p_value == pytest.approx(float(reference["p_value"]), **P_VALUE_TOLERANCE)

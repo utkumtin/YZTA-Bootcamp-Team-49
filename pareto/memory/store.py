@@ -18,11 +18,17 @@ from ..config import SETTINGS
 
 
 class ProjectStore:
-    """Bir proje/koşu durumunu diske yaz/oku. Anahtar-değer + JSON."""
+    """Bir kapsamın durumunu diske yaz/oku. Anahtar-değer + JSON.
 
-    def __init__(self, project_id: str, base_dir: str | Path | None = None) -> None:
-        self.project_id = project_id
-        self.root = Path(base_dir or SETTINGS.store_dir) / project_id
+    `scope_id` bir projeyi ya da tek bir koşuyu adlandırabilir; çağıran taraf
+    hangi granülerlikte izole olmak istediğine karar verir. Provenance kayıtları
+    koşu başına izole olmak zorunda olduğu için koşu kimliğiyle çağrılır ve alan
+    adı bunu artık dürüstçe yansıtıyor.
+    """
+
+    def __init__(self, scope_id: str, base_dir: str | Path | None = None) -> None:
+        self.scope_id = scope_id
+        self.root = Path(base_dir or SETTINGS.store_dir) / scope_id
         self.root.mkdir(parents=True, exist_ok=True)
 
     def _path(self, key: str) -> Path:

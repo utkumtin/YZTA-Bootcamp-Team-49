@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 50" role="img" aria-label="Pareto">
+  <!-- NEDEN sabit koyu renk, media query yok: bu dosya st.logo'ya dosya yolu olarak
+       veriliyor, yani <img> kaynağı oluyor ve içindeki media query uygulamanın temasını
+       değil, işletim sisteminin tercihini görür. Uygulama koyu temaya sabitlendiği için
+       (bkz. .streamlit/config.toml) açık OS tercihinde koyu metin koyu sidebar üzerine
+       düşüyordu. -->
+  <style>
+    text {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 36px;
+      font-weight: 600;
+      fill: #FAFAFA;
+    }
+    .mark { stroke: #818cf8; }
+  </style>
+  <!-- Marka işareti kendi 24'lük koordinat uzayında kalsın diye iç içe svg: dışarıdaki
+       ölçek stroke-width'i sürüklemesin, çizgi kalınlığı 36px/600 ağırlıklı yazıya göre
+       ayarlanabilsin. Aynı geometri app/assets/pareto_mark.svg içinde tek başına duruyor. -->
+  <svg x="0" y="9" width="32" height="32" viewBox="0 0 24 24" fill="none"
+       stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round">
+    <path class="mark" d="M3 3.5 V20.5" />
+    <path class="mark" d="M8 3.5 V20.5" />
+    <path class="mark" d="M13 3.5 V20.5" />
+    <path class="mark" d="M18.5 3.5 L18.5 11.5 L16 20.5" />
+    <path class="mark" d="M18.5 11.5 L21.5 20.5" />
+  </svg>
+  <text x="42" y="38">Pareto</text>
+</svg>

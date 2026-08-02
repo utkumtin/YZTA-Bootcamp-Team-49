@@ -1,0 +1,204 @@
+{
+  "_doc": [
+    "Spec menüsü altın seti — pareto/analysis/menu.py:generate_spec_menu.",
+    "",
+    "Girdi: FrozenEstimand + available_columns. Estimand aşağıdaki alanlardan",
+    "DETERMİNİSTİK kurulur (TACProposal -> freeze_estimand(approved=True)), yani bu",
+    "görev estimand görevinin LLM çıktısına bağımlı değil — her model aynı menüyü",
+    "aynı girdiden üretir.",
+    "",
+    "estimand.treatment KOLON ADI, estimand.treatment_coding kodlamanın serbest",
+    "metin tarifidir. Bu dosya 2026-08-01'e kadar ikisini TERS tutuyordu; puanlayıcı",
+    "da (score_spec_menu) kolonu treatment_coding'den okuduğu için kapı geçiyordu.",
+    "İkisi birlikte düzeltildi. Estimand sözlüğünün TAMAMI modele prompt olarak",
+    "dökülüyor (menu.py:generate_spec_menu), yani buradaki ters kayıt modele",
+    "üretimin asla üretemeyeceği bir sözleşme örneği gösteriyordu; düzeltme öncesi",
+    "spec_menu koşuları bu yüzden sonrakilerle aynı tabloda toplanamaz.",
+    "",
+    "Üç puanlama kuralı, hepsi tek biçimli:",
+    "  baseline_must_be_in : eksende baseline_level bu kümede olmalı. Eksen yoksa serbest.",
+    "  indefensible_levels : seviye -> gerekçe. baseline VEYA candidate olarak görünmesi ihlal.",
+    "  bad_control_columns : kolon -> gerekçe. control_set seviyesinde geçmesi ihlal.",
+    "",
+    "Bunların üstüne mevcut deterministik doğrulayıcı da koşar",
+    "(_validate_menu_proposal_levels): 7 eksenin tamamı var mı, seviyeler",
+    "ayrıştırılabiliyor mu, anılan kolonlar gerçekten panelde mi.",
+    "",
+    "clustering='none' neden savunulamaz: eyalet-yıl (veya ilçe-yıl) panelinde hata",
+    "terimi birim içinde seri korelasyonludur; kümelemeden hesaplanan standart hatalar",
+    "DiD'de ciddi biçimde küçük çıkar (Bertrand, Duflo & Mullainathan 2004, 'How Much",
+    "Should We Trust Differences-in-Differences Estimates?'). Kümeleme tedavinin",
+    "atandığı seviyede olmalı. Sistem promptu da bunu söylüyor:",
+    "'panel/DiD: cluster at treatment-assignment level; none only if indefensible'.",
+    "",
+    "bad_control_columns neden ihlal: tedavi sonrası belirlenen (veya tedaviden",
+    "etkilenen) bir değişkeni kontrol olarak koymak yolu tıkar ve katsayıyı",
+    "yanlılaştırır — Angrist & Pischke'nin 'bad controls' problemi.",
+    "",
+    "ÖNEMLİ SINIR: bu liste, veri setinin kendi config.yaml'ındaki `panel.covariates`",
+    "ile ASLA çakışmaz (test_spec_menu_gold_bad_controls_do_not_contradict_config).",
+    "İlk taslakta castle'da prisoner/police, divorce'ta homicide_rate/afdc_cases",
+    "bad control olarak etiketlenmişti; oysa ikisi de o veri setlerinin config'inde",
+    "covariate olarak listeli ve kaynak makaleler (Cheng & Hoekstra 2013;",
+    "Stevenson & Wolfers 2006) bunları kontrol olarak KULLANIYOR. Repo'nun kendi",
+    "artefaktıyla çelişen bir etiket, benchmark'ı doğru modeli cezalandırır hale",
+    "getirirdi. O yüzden yalnız tartışmasız olanlar kaldı: sonucun kendisi, sonucun",
+    "pay/paydası ve ölçülmek istenen mekanizmanın ta kendisi (medicaid'de",
+    "pct_uninsured — genişlemenin birincil sonucu).",
+    "",
+    "never_treated ekseni bilerek ETİKETSİZ: castle ve divorce panellerinde",
+    "never_treated kolonu tümüyle False geliyor (ölçüldü, 2026-07-27), yani bu eksende",
+    "'doğru' seviye veriden okunamıyor. Etiketlemek yanlış ölçüm olurdu."
+  ],
+
+  "cases": [
+    {
+      "case_id": "castle",
+      "dataset_dir": "data/castle",
+      "estimand": {
+        "estimand_type": "ATT",
+        "treatment": "treated",
+        "treatment_coding": "1 = castle doctrine yasası o eyalet-yılda yürürlükte (yıl içi ağırlıklı pay), 0 = yürürlükte değil",
+        "outcome": "log_homicide",
+        "outcome_unit": "log(100.000 kişi başına cinayet)",
+        "population": "ABD eyaletleri, 2000-2010",
+        "time_scope": "2000-2010 yıllık",
+        "expected_sign": "positive",
+        "identification_assumption": "parallel_trends",
+        "h0": "Castle doctrine yasalarının cinayet oranı üzerinde etkisi yoktur.",
+        "h1": "Castle doctrine yasaları cinayet oranını artırır.",
+        "implied_result_translation": "Pozitif katsayı, yasanın yürürlüğe girmesiyle cinayet oranının arttığı anlamına gelir.",
+        "confirmation_question": "Tedavi 'treated', sonuç 'log_homicide' olarak doğru mu?"
+      },
+      "baseline_must_be_in": {
+        "estimator": ["TWFE"],
+        "clustering": ["state", "state_id"]
+      },
+      "indefensible_levels": {
+        "clustering": {
+          "none": "Eyalet-yıl paneli; tedavi eyalet seviyesinde atanıyor. Kümelemesiz SE seri korelasyonu yok sayar."
+        }
+      },
+      "bad_control_columns": {
+        "log_homicide": "Sonucun kendisi kontrol olamaz."
+      },
+      "why_baseline": "TWFE, kademeli yasalaşmanın kanonik başlangıç noktası (Cheng & Hoekstra 2013 bu şekilde kurar); kümeleme eyalet seviyesinde çünkü tedavi orada atanıyor."
+    },
+
+    {
+      "case_id": "divorce",
+      "dataset_dir": "data/divorce",
+      "estimand": {
+        "estimand_type": "ATT",
+        "treatment": "post",
+        "treatment_coding": "1 = tek-taraflı boşanma yasası o eyalet-yılda yürürlükte, 0 = yürürlükte değil",
+        "outcome": "suicide_rate_f",
+        "outcome_unit": "1.000.000 kadın başına yaşa göre düzeltilmiş intihar",
+        "population": "ABD eyaletleri, 1964-1996",
+        "time_scope": "1964-1996 yıllık",
+        "expected_sign": "negative",
+        "identification_assumption": "parallel_trends",
+        "h0": "Tek-taraflı boşanma yasalarının kadın intihar oranı üzerinde etkisi yoktur.",
+        "h1": "Tek-taraflı boşanma yasaları kadın intihar oranını düşürür.",
+        "implied_result_translation": "Negatif katsayı, yasanın yürürlüğe girmesiyle kadın intihar oranının düştüğü anlamına gelir.",
+        "confirmation_question": "Tedavi 'post', sonuç 'suicide_rate_f' olarak doğru mu?"
+      },
+      "baseline_must_be_in": {
+        "estimator": ["TWFE"],
+        "clustering": ["state_fips"],
+        "weighting": ["weight", "pop_f", "none"]
+      },
+      "indefensible_levels": {
+        "clustering": {
+          "none": "Eyalet-yıl paneli, 33 yıl; kümelemesiz SE seri korelasyonu yok sayar."
+        },
+        "weighting": {
+          "population": "Bu panelde 'population' diye bir kolon YOK (ağırlık kolonu 'weight'). Deterministik doğrulayıcı da yakalar; burada ayrıca sayılıyor çünkü SETTINGS.default_weight_col varsayılanının körlemesine kopyalandığını gösterir."
+        }
+      },
+      "bad_control_columns": {
+        "suicide_rate_f": "Sonucun kendisi kontrol olamaz."
+      },
+      "why_baseline": "Goodman-Bacon (2021) bu veriyle TWFE'yi çalışma örneği olarak kullanır; kümeleme eyalet (stfips) seviyesinde."
+    },
+
+    {
+      "case_id": "card_krueger",
+      "dataset_dir": "data/card_krueger",
+      "estimand": {
+        "estimand_type": "ATT",
+        "treatment": "treated_post",
+        "treatment_coding": "1 = New Jersey mağazası x dalga 2 (artış sonrası), 0 = diğer",
+        "outcome": "fte_employment",
+        "outcome_unit": "tam-zaman-eşdeğeri çalışan sayısı",
+        "population": "NJ ve doğu PA fast-food restoranları, 1992",
+        "time_scope": "Şubat 1992 (dalga 1) ve Kasım 1992 (dalga 2)",
+        "expected_sign": "negative",
+        "identification_assumption": "parallel_trends",
+        "h0": "Asgari ücret artışının istihdam üzerinde etkisi yoktur.",
+        "h1": "Asgari ücret artışı istihdamı düşürür.",
+        "implied_result_translation": "Negatif katsayı, asgari ücret artışının istihdamı düşürdüğü anlamına gelir.",
+        "confirmation_question": "Tedavi 'treated_post', sonuç 'fte_employment' olarak doğru mu?"
+      },
+      "baseline_must_be_in": {
+        "estimator": ["TWFE"],
+        "clustering": ["treated_state", "store_id", "chain"]
+      },
+      "indefensible_levels": {
+        "clustering": {
+          "none": "Tedavi eyalet seviyesinde atanıyor (NJ vs PA); mağaza seviyesinde bağımsızlık varsaymak SE'leri küçültür."
+        },
+        "weighting": {
+          "population": "Bu panelde 'population' kolonu YOK. SETTINGS.default_weight_col'un körlemesine kopyalandığını gösterir."
+        },
+        "pre_period": {
+          "3": "Panelde yalnız 2 dalga var; 3 dönemlik pre-period tanımsız.",
+          "5": "Aynı gerekçe."
+        }
+      },
+      "bad_control_columns": {
+        "wage_start": "Başlangıç ücreti tedavinin ta kendisi tarafından belirlenir (asgari ücret artışı onu yukarı iter) — klasik bad control.",
+        "fte_employment": "Sonucun kendisi kontrol olamaz."
+      },
+      "why_baseline": "Card & Krueger (1994) 2x2 DiD kurar; yalnız iki dönem olduğu için OLS (etkileşimli) ve TWFE burada denktir, ikisi de savunulabilir."
+    },
+
+    {
+      "case_id": "medicaid",
+      "dataset_dir": "data/medicaid",
+      "estimand": {
+        "estimand_type": "ATT",
+        "treatment": "treatment_cohort",
+        "treatment_coding": "genişleme kohortu yılı (2014 = 2014'te genişleyen ilçeler), boş = hiç genişlemeyen (never-treated)",
+        "outcome": "crude_rate",
+        "outcome_unit": "100.000 kişi başına ölüm",
+        "population": "ABD ilçeleri, 2009-2019",
+        "time_scope": "2009-2019 yıllık",
+        "expected_sign": "negative",
+        "identification_assumption": "parallel_trends",
+        "h0": "Medicaid genişlemesinin ilçe mortalite oranı üzerinde etkisi yoktur.",
+        "h1": "Medicaid genişlemesi ilçe mortalite oranını düşürür.",
+        "implied_result_translation": "Negatif katsayı, genişlemenin mortaliteyi düşürdüğü anlamına gelir.",
+        "confirmation_question": "Tedavi 'treatment_cohort', sonuç 'crude_rate' olarak doğru mu?"
+      },
+      "baseline_must_be_in": {
+        "estimator": ["TWFE"],
+        "clustering": ["state_fips", "state"],
+        "weighting": ["population", "none"]
+      },
+      "indefensible_levels": {
+        "clustering": {
+          "none": "İlçe-yıl paneli, 11 yıl; kümelemesiz SE seri korelasyonu yok sayar.",
+          "county_fips": "Tedavi EYALET seviyesinde atanıyor (genişleme kararı eyaletin). İlçede kümelemek atama seviyesinin altında kalır ve SE'leri küçültür."
+        }
+      },
+      "bad_control_columns": {
+        "pct_uninsured": "Genişlemenin birincil sonucu (kapsam etkisi). Mortalite regresyonunda kontrol olarak koymak tam da ölçülmek istenen mekanizmayı kapatır.",
+        "crude_rate": "Sonucun kendisi kontrol olamaz.",
+        "deaths": "Sonucun payı; mekanik olarak sonuca bağlı.",
+        "population": "Sonucun paydası; ağırlık olarak savunulabilir ama kontrol olarak mekanik bağ kurar."
+      },
+      "why_baseline": "config.yaml committed_baseline: 2014 kohortu vs never-treated, TWFE-geçerli 2 gruplu kurulum. Ağırlık nüfus (config.yaml panel.weight: population). Kümeleme eyalet seviyesinde çünkü genişleme kararı eyaletindir."
+    }
+  ]
+}

@@ -16,8 +16,12 @@ from pareto.spec import Specification
 def _proposal_args() -> dict[str, object]:
     return {
         "estimand_type": "ATT",
-        "treatment": "Medicaid expansion adoption",
-        "treatment_coding": "expanded",
+        # `treatment` is the column name; `treatment_coding` is the free-text
+        # description of how that column encodes treatment. Keeping a realistic
+        # description here is what makes the mismatch gate in
+        # `validate_estimand_spec_mapping` test the real contract.
+        "treatment": "expanded",
+        "treatment_coding": "1 = expanded state x post-expansion year, 0 = otherwise",
         "outcome": "uninsured_rate",
         "outcome_unit": "percentage points",
         "population": "US states in the clean panel",
@@ -48,8 +52,11 @@ def test_testmodel_dialogue_freezes_expected_estimand_fields():
         )
         frozen = freeze_estimand(proposal, approved=True)
 
-    assert frozen.estimand.treatment == "Medicaid expansion adoption"
-    assert frozen.estimand.treatment_coding == "expanded"
+    assert frozen.estimand.treatment == "expanded"
+    assert (
+        frozen.estimand.treatment_coding
+        == "1 = expanded state x post-expansion year, 0 = otherwise"
+    )
     assert frozen.estimand.outcome == "uninsured_rate"
     assert frozen.estimand.expected_sign == "negative"
     assert frozen.freeze_hash == frozen.estimand.freeze_hash()
