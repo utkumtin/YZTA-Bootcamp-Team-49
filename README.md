@@ -12,7 +12,6 @@
 | [Utku Metin](https://github.com/utkumtin) | Product Owner | [LinkedIn](https://www.linkedin.com/in/utkumtn/) |
 | [Ozan Çelik](https://github.com/Ozan7146) | Scrum Master | [LinkedIn](https://www.linkedin.com/in/ozan-%C3%A7elik-7b8062221/) |
 | [Betül Bostan](https://github.com/betul-bostan) | Developer | [LinkedIn](https://www.linkedin.com/in/bet%C3%BCl-bostan-2105942b2/) |
-| [Utku Uzunhüseyin](https://github.com/utkuzuunhuseyin) | Developer | [LinkedIn](https://www.linkedin.com/in/utku-uzunh%C3%BCseyin/) |
 
 ---
 
@@ -211,7 +210,7 @@ numeric `Estimate` field per card (Fibonacci story points):
   * 5 ADRs were accepted and the prototype was migrated into a clean, typed core with green CI.
   * Decided that the empirical estimator-flip spike (`divorce` / `castle` + Medicaid core axis)
     moves to **Sprint 2** as an early go/no-go.
-- **Sprint Review Participants:** Utku Metin, Ozan Çelik, Betül Bostan, Utku Uzunhüseyin
+- **Sprint Review Participants:** Utku Metin, Ozan Çelik, Betül Bostan
 - **Sprint Retrospective:**
   * Estimate **story points at the start** of the sprint (the scheme was set up only at this
     sprint's end) → Sprint 2 begins with a fully-pointed board.
@@ -251,7 +250,7 @@ numeric `Estimate` field per card (Fibonacci story points):
   * 5 ADR kabul edildi, prototip temiz tipli çekirdeğe migre edildi, CI yeşil.
   * Ampirik estimator-flip spike'ının (`divorce` / `castle` + Medicaid çekirdek ekseni) erken go/no-go
     olarak **Sprint 2'ye** taşınmasına karar verildi.
-- **Sprint Gözden Geçirme Katılımcıları:** Utku Metin, Ozan Çelik, Betül Bostan, Utku Uzunhüseyin
+- **Sprint Gözden Geçirme Katılımcıları:** Utku Metin, Ozan Çelik, Betül Bostan
 - **Sprint Retrospektifi:**
   * Story-point tahmini sprint **başında** yapılmalı (şema bu sprint sonunda kuruldu) → Sprint 2 baştan puanlı board ile başlar.
   * Daily-scrum kadansı + kanalı netleştir, screenshot'ları düzenli arşivle.
@@ -344,12 +343,12 @@ Board state at the end of Sprint 2 (WIP limits and Fibonacci `Estimate` field un
     estimator sign-flip spike on `divorce` / `castle` (the early go/no-go).
   * Utku Metin committed the datasets, the cleaning-agent core, codegen asserts, the LLM
     variance narrative, and connected the router to live providers.
-  * Utku Uzunhüseyin could not be active this sprint (work / relocation); tasks were
+  * One team member could not be active this sprint (work / relocation); tasks were
     redistributed by availability, as planned in the Sprint 1 retrospective.
   * 72 of 84 points were completed; the 4 remaining issues (12 points) roll into Sprint 3.
   * PR review turnaround became the bottleneck near the sprint's end (a review deadlock on
-    the last open PR) — addressed in the retrospective.
-- **Sprint Review Participants:** Utku Metin, Ozan Çelik, Betül Bostan, Utku Uzunhüseyin
+    the last open PR), addressed in the retrospective.
+- **Sprint Review Participants:** Utku Metin, Ozan Çelik, Betül Bostan
 - **Sprint Retrospective:**
   * **Fix the PR review bottleneck:** reviews within ~24h or a fallback reviewer steps in;
     never end a sprint with an unreviewed PR blocking a dependent task.
@@ -397,12 +396,12 @@ Board state at the end of Sprint 2 (WIP limits and Fibonacci `Estimate` field un
     üzerindeki işaret-değişimi spike'ını (erken go/no-go) koştu.
   * Utku Metin veri setlerini, temizleme ajanı çekirdeğini, codegen assert'lerini, LLM varyans
     narrative'ini indirdi ve router'ı canlı sağlayıcılara bağladı.
-  * Utku Uzunhüseyin bu sprint aktif olamadı (iş / taşınma); görevler Sprint 1 retrosunda
+  * Bir ekip üyesi bu sprint aktif olamadı (iş / taşınma); görevler Sprint 1 retrosunda
     kararlaştırıldığı gibi müsaitliğe göre yeniden dağıtıldı.
   * 84 puanın 72'si tamamlandı; kalan 4 issue (12 puan) Sprint 3'e devrediyor.
-  * Sprint sonunda PR review süresi darboğaz oldu (son açık PR'da review kilitlenmesi) —
+  * Sprint sonunda PR review süresi darboğaz oldu (son açık PR'da review kilitlenmesi),
     retrospektifte ele alındı.
-- **Sprint Gözden Geçirme Katılımcıları:** Utku Metin, Ozan Çelik, Betül Bostan, Utku Uzunhüseyin
+- **Sprint Gözden Geçirme Katılımcıları:** Utku Metin, Ozan Çelik, Betül Bostan
 - **Sprint Retrospektifi:**
   * **PR review darboğazı çözülmeli:** review'lar ~24 saat içinde; olmuyorsa yedek reviewer
     devreye girer. Bağımlı task'ı bloklayan review'lanmamış PR ile sprint bitirilmez.
@@ -448,6 +447,149 @@ primary kontroller marka indigosuna alındı. Görseller: açılış (oturum öz
 (diagnostik + narrative).
 
 </details>
+</details>
+
+<details>
+<summary><h2>Project Management / Board</h2></summary>
+
+Board state at the end of Sprint 3, the last sprint of the project (all Sprint 3 cards moved to Done):
+
+![GitHub Projects board (end of Sprint 3)](docs/img/kanban-board-0208.png)
+
+</details>
+
+- **Sprint Notes:**
+  * **Carry-over closed first:** the four Sprint 2 issues rolled into this sprint (analysis-page
+    UI, variance-panel v1 display, end-to-end integration validation, OLS/TWFE R-reference
+    tolerance check) were all closed before new scope started, as the Sprint 2 retrospective asked.
+  * **Two blocking bugs fixed:** the cleaning page silently hid an empty JUDGE decision list
+    instead of saying so, and the file uploader reset the decision ledger on every rerun instead
+    of only on a genuinely new upload; both broke the upload-to-panel walkthrough and are fixed.
+  * **`cluster_by` made optional:** the JUDGE spec menu could not be frozen in most flows because
+    a "none" clustering choice failed validation; the Specification atom now accepts `None` and
+    routes to the robust standard-error path, unblocking the LLM menu flow end to end.
+  * **One-click reproduction package:** the variance panel can now export a zip with the run
+    script, the frozen estimand/menu hashes, the decision ledger, the generated cleaning code,
+    results, and figures, plus an auto-drafted, deterministic methods-section outline.
+  * **Public deploy:** the app is live on Streamlit Community Cloud in canned-default mode, so a
+    visitor with no key gets a deterministic cached walkthrough; pasting a key switches to a live
+    run, with the pasted key taking precedence.
+  * **Privacy hardened:** private mode is now tested to refuse routing to a free-tier,
+    training-eligible provider, and `PRIVACY.md` separates code-enforced guarantees from
+    provider-level assumptions.
+  * **Guardrails L5 and L7 added:** row-dropping cleaning decisions now require explicit approval,
+    and a detective prompt-injection scan runs over profiling payloads (fail-open, logged to the ledger).
+  * **CI smoke matrix:** the upload-to-summary walkthrough now runs headlessly in CI against all
+    three committed datasets, guarding against the core silently depending on one dataset's shape.
+  * **Model routing rebuilt on a benchmark, not a guess:** a scoring script measured latency,
+    token cost, and answer consistency across free-tier model candidates; the JUDGE and MECHANICAL
+    slots were repinned to the winners, and a demo mode was added that replays a full run on a
+    stronger pinned model end to end.
+  * **Architecture and ADR docs finalized:** `ARCHITECTURE.md` and the ADR index were brought in
+    line with the shipped code, closing the documentation gap flagged at the end of Sprint 2.
+  * The `dev` branch was merged into `main` and tagged `v1.0`; public deploy now tracks `main`.
+  * The 3-minute product walkthrough video was recorded and submitted with the delivery form.
+- **Expected point completion within Sprint:** `52` Points, all `52` completed.
+- **Point Completion Logic:** Same Fibonacci scheme as Sprints 1 and 2. Sprint 3 committed
+  `52` points (`12` carried over from Sprint 2, `40` new: bug fixes, reproduction package,
+  deploy, privacy, guardrails, CI matrix, UI polish, docs, and delivery), deliberately below
+  Sprint 2's `84`/`72` velocity given reduced availability in the closing week; all `52` were
+  completed by the sprint boundary.
+- **Daily Scrum:** No calls this sprint either; the team kept the same async **WhatsApp**
+  cadence agreed in the Sprint 1 retrospective and confirmed working in Sprint 2. The full
+  Sprint 3 chat log is exported and committed:
+  [Sprint 3 WhatsApp log](docs/sprint-comms/sprint-3-chat.txt).
+- **Product Backlog URL:** [GitHub Projects Kanban](https://github.com/users/utkumtin/projects/3)
+- **Sprint Review:**
+  * Ozan Çelik closed the analysis-page UI carry-over, the uploader ledger bug, the Community
+    Cloud deploy, and the guardrails and architecture-docs cards.
+  * Betül Bostan closed the OLS/TWFE R-reference tolerance check and the empty-JUDGE-list bug.
+  * Utku Metin closed the `cluster_by` fix, the reproduction package, privacy hardening, the CI
+    smoke matrix, the benchmark-driven model routing rebuild and demo mode, the UI polish pass,
+    the `main` release, and produced the product video with the rest of the team.
+  * All 52 committed points were completed; no open issues carry past Sprint 3.
+- **Sprint Review Participants:** Utku Metin, Ozan Çelik, Betül Bostan
+- **Sprint Retrospective:**
+  * **Async WhatsApp cadence held for the whole project:** confirmed again as the right call for
+    this team's availability pattern across all three sprints.
+  * **Benchmark before pinning a model, not after:** the Sprint 3 routing rebuild showed the
+    value of measuring free-tier candidates instead of picking one on reputation; worth doing
+    at the start of any future model-routing decision, not mid-project.
+  * **Fail-loud paid off:** most of Sprint 3's bug list was exactly the silent-failure paths
+    Sprint 1 committed to avoiding; catching them before the demo, not during it, validated
+    that discipline.
+  * **Ship earlier next time:** deploy and the reproduction package landed in the sprint's
+    second half; doing the "ship" epic first, polish second, would leave more buffer for the
+    final week.
+
+<details>
+<summary><h4>Türkçe açıklama</h4></summary>
+
+- **Sprint Notları:**
+  * **Önce devirler kapatıldı:** Sprint 2'den gelen dört issue (analiz sayfası UI, varyans
+    paneli v1 gösterimi, uçtan uca entegrasyon doğrulaması, OLS/TWFE R-referans tolerans kontrolü)
+    yeni kapsam başlamadan önce kapatıldı; Sprint 2 retrosunun istediği tam olarak buydu.
+  * **İki bloklayıcı bug düzeltildi:** temizleme sayfası boş bir JUDGE karar listesini sessizce
+    gizliyordu, dosya yükleyici ise her rerun'da karar defterini gerçekten yeni bir yükleme
+    olmasa da sıfırlıyordu; ikisi de yükleme-panel akışını kırıyordu, ikisi de düzeltildi.
+  * **`cluster_by` opsiyonel yapıldı:** JUDGE spec menüsü çoğu akışta dondurulamıyordu çünkü
+    "none" kümeleme seçimi validasyondan geçmiyordu; Specification atomu artık `None` kabul
+    ediyor ve robust standart-hata yoluna yönlendiriyor, LLM menü akışının kilidi tamamen açıldı.
+  * **Tek tık reprodüksiyon paketi:** varyans panelinden artık çalıştırma script'i, donmuş
+    estimand/menü hash'leri, karar defteri, üretilen temizleme kodu, sonuçlar ve figürleri
+    içeren bir zip indirilebiliyor; otomatik, deterministik bir metot-bölümü taslağı da pakete dahil.
+  * **Canlıya alındı:** uygulama Streamlit Community Cloud üzerinde canned-default modda yayında;
+    anahtarsız ziyaretçi deterministik, cache'lenmiş bir akış görüyor, anahtar yapıştırılınca
+    canlı koşuya geçiliyor (yapıştırılan anahtar önceliklidir).
+  * **Gizlilik sertleştirildi:** private mod artık ücretsiz, eğitime-açık bir sağlayıcıya
+    yönlendirmeyi reddettiği test edilerek doğrulanıyor; `PRIVACY.md` kod ile zorlanan
+    garantileri sağlayıcı-seviyesi varsayımlardan ayırıyor.
+  * **L5 ve L7 guardrail'leri eklendi:** satır düşüren temizleme kararları artık açık onay
+    gerektiriyor, profilleme payload'ları üzerinde dedektif tipi bir prompt-injection taraması
+    çalışıyor (fail-open, karar defterine loglanıyor).
+  * **CI smoke matrisi:** yükleme-özet akışı artık üç committed veri setinin tamamına karşı
+    CI'da headless koşuyor; çekirdeğin tek bir veri setinin şekline sessizce bağımlı kalmasını engelliyor.
+  * **Model routing tahminle değil benchmark ile yeniden kuruldu:** bir skorlama script'i
+    ücretsiz-katman model adaylarında gecikme, token maliyeti ve cevap tutarlılığını ölçtü;
+    JUDGE ve MECHANICAL slotları kazananlara sabitlendi, ayrıca uçtan uca bir koşuyu daha
+    güçlü, sabit bir modelle tekrar oynatan bir demo modu eklendi.
+  * **Mimari ve ADR dokümanları finalize edildi:** `ARCHITECTURE.md` ve ADR indeksi, Sprint 2
+    sonunda işaretlenen doküman açığını kapatarak koşan koda hizalandı.
+  * `dev` dalı `main`'e alındı ve `v1.0` olarak etiketlendi; canlı deploy artık `main`'i izliyor.
+  * 3 dakikalık ürün tanıtım videosu kaydedildi ve teslim formuyla birlikte gönderildi.
+- **Sprint İçinde Tamamlanması Beklenen Puan:** `52` Puan, `52`'si de tamamlandı.
+- **Puan Tamamlama Mantığı:** Sprint 1 ve 2 ile aynı Fibonacci şeması. Sprint 3 `52` puan
+  taahhüt etti (Sprint 2'den devreden `12` + yeni `40`: bug fix'ler, reprodüksiyon paketi,
+  deploy, gizlilik, guardrail'ler, CI matrisi, UI cilası, dokümantasyon, teslim); son haftada
+  azalan müsaitlik nedeniyle Sprint 2'nin `84`/`72` velocity'sinin bilinçli olarak altında
+  kaldı; sprint sonunda `52` puanın tamamı bitti.
+- **Daily Scrum:** Bu sprintte de sesli/görüntülü görüşme yapılmadı; ekip Sprint 1 retrosunda
+  kararlaştırılan ve Sprint 2'de işlediği doğrulanan asenkron **WhatsApp** kadansını sürdürdü.
+  Sprint 3 sohbet dökümünün tamamı export edilip commit'lendi:
+  [Sprint 3 WhatsApp dökümü](docs/sprint-comms/sprint-3-chat.txt).
+- **Sprint Gözden Geçirilmesi (Review):**
+  * Ozan Çelik analiz sayfası UI devrini, uploader ledger bug'ını, Community Cloud deploy'unu
+    ve guardrail + mimari-doküman kartlarını kapattı.
+  * Betül Bostan OLS/TWFE R-referans tolerans kontrolünü ve boş-JUDGE-listesi bug'ını kapattı.
+  * Utku Metin `cluster_by` düzeltmesini, reprodüksiyon paketini, gizlilik sertleştirmesini,
+    CI smoke matrisini, benchmark ile yeniden kurulan model routing'i ve demo modunu, UI cila
+    passını, `main` sürümünü kapattı; ürün videosunu ekibin geri kalanıyla birlikte üretti.
+  * Taahhüt edilen 52 puanın tamamı tamamlandı; Sprint 3'ten sonraya devreden açık issue yok.
+- **Sprint Gözden Geçirme Katılımcıları:** Utku Metin, Ozan Çelik, Betül Bostan
+- **Sprint Retrospektifi:**
+  * **Asenkron WhatsApp kadansı projenin tamamında tuttu:** bu ekibin müsaitlik desenine üç
+    sprint boyunca da doğru tercih olduğu doğrulandı.
+  * **Modeli sabitlemeden önce benchmark, sabitledikten sonra değil:** Sprint 3'teki routing
+    yeniden kurulumu, ücretsiz-katman adaylarını itibar yerine ölçmenin değerini gösterdi; bu,
+    gelecekte herhangi bir model-routing kararının proje ortasında değil başında yapılması
+    gereken bir şey.
+  * **Fail-loud karşılığını verdi:** Sprint 3 bug listesinin çoğu, Sprint 1'in kaçınmayı
+    taahhüt ettiği tam da o sessiz-hata yollarıydı; bunların demo sırasında değil önce
+    yakalanması bu disiplini doğruladı.
+  * **Bir dahaki sefere ship'i öne al:** deploy ve reprodüksiyon paketi sprintin ikinci
+    yarısında geldi; "ship" epic'ini önce, cilayı sonra yapmak son hafta için daha fazla
+    tampon bırakırdı.
+
 </details>
 
 ---
