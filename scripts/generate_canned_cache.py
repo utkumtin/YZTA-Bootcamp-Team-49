@@ -35,6 +35,7 @@ from app.demo import (  # noqa: E402
 from pareto.analysis.hypothesis import draft_tac_proposal, freeze_estimand  # noqa: E402
 from pareto.analysis.menu import (  # noqa: E402
     ALL_AXES,
+    build_deterministic_menu,
     evaluate_menu_defensibility,
     expand_to_specs,
     freeze_spec_menu,
@@ -54,6 +55,29 @@ from pareto.llm.narrative import generate_narrative  # noqa: E402
 from pareto.profiling import load_raw_file, profile_dataframe  # noqa: E402
 
 RUN_ID = "generate-canned-cache"
+
+
+def _narrate(results: list, specs: list) -> bool:
+    """Bir spec kümesi için varyans anlatısını üretir; başarılıysa True.
+
+    Narrative promptu `summarize` + `diagnose_axes` çıktısından kuruluyor, yani spec
+    kümesi değişince cache anahtarı da değişiyor. Bu yüzden demo akışının ürettiği her
+    spec kümesi için ayrı ayrı çağrılmalı.
+    """
+    summary = dict(summarize(results))
+    diagnosis = diagnose_axes(results, specs)
+    if not summary.get("n_ok"):
+        print("      atlandı: başarılı sonuç yok.")
+        for r in results:
+            if r.status != "ok":
+                print(f"        {r.spec_id}: {r.error}")
+        return False
+    try:
+        narrative = generate_narrative(summary, diagnosis)
+        print(f"      ozet: {narrative.ozet[:120]}")
+    except Exception as exc:  # narrative opsiyonel — cache.py/3_variance_panel.py ile tutarlı
+        print(f"      atlandı (opsiyonel, hata): {exc}")
+    return True
 
 
 def main() -> int:
@@ -114,7 +138,7 @@ def main() -> int:
         active_axes=tuple(ALL_AXES),
     ).menu.freeze()
 
-    print("[5/6] Multiverse (deterministik OLS/TWFE, LLM yok)…")
+    print("[5/7] Multiverse (deterministik OLS/TWFE, LLM yok)…")
     specs = expand_to_specs(
         frozen_menu,
         outcome=frozen_estimand.estimand.outcome,
@@ -129,20 +153,36 @@ def main() -> int:
     n_ok = sum(1 for r in results if r.status == "ok")
     print(f"      {n_ok}/{len(results)} başarılı")
 
-    print("[6/6] JUDGE: varyans anlatısı (opsiyonel) — claude -p --effort high…")
-    summary = dict(summarize(results))
-    diagnosis = diagnose_axes(results, specs)
-    if not summary.get("n_ok"):
-        print("      atlandı: başarılı sonuç yok.")
-        for r in results:
-            if r.status != "ok":
-                print(f"        {r.spec_id}: {r.error}")
+    print("[6/7] JUDGE: varyans anlatısı (LLM menü yolu) — claude -p --effort high…")
+    if not _narrate(results, specs):
         return 0
-    try:
-        narrative = generate_narrative(summary, diagnosis)
-        print(f"      ozet: {narrative.ozet[:120]}")
-    except Exception as exc:  # narrative opsiyonel — cache.py/3_variance_panel.py ile tutarlı
-        print(f"      atlandı (opsiyonel, hata): {exc}")
+
+    # Analiz sayfasındaki "Menü kaynağı" radyosunun İKİ ucu da demo akışında tıklanabilir
+    # (app/pages/2_analysis.py:538). Deterministik menü LLM çağırmıyor ama farklı bir spec
+    # kümesi üretiyor, dolayısıyla varyans özeti ve narrative promptu da farklı — yani
+    # ayrı bir cache anahtarı. Yalnız LLM yolu üretilirse deterministik yolu seçen
+    # ziyaretçi panelde `CannedModeCacheMissError` görüyordu.
+    print("[7/7] JUDGE: varyans anlatısı (deterministik menü yolu) — claude -p --effort high…")
+    deterministic_menu = build_deterministic_menu(
+        controls=list(DEMO_ANALYSIS_STATE["controls"]),
+        cluster_by=DEMO_ANALYSIS_STATE["cluster_by"],
+        # app/pages/2_analysis.py:523-527 ile aynı: unit ve time kolonu dolu olduğu için
+        # aday listesi iki seviyeyle gelir; OLS'i eleyen kapı `build_deterministic_menu`
+        # içinde (bkz. pareto/analysis/menu.py `defensible_estimators`).
+        estimators=["OLS", "TWFE"],
+        identification_assumption=frozen_estimand.estimand.identification_assumption,
+        available_columns=columns,
+    ).freeze()
+    deterministic_specs = expand_to_specs(
+        deterministic_menu,
+        outcome=frozen_estimand.estimand.outcome,
+        treatment=frozen_estimand.estimand.treatment,
+        unit_col=DEMO_ANALYSIS_STATE["unit_col"],
+        time_col=DEMO_ANALYSIS_STATE["time_col"],
+        available_columns=columns,
+    )
+    print(f"      {len(deterministic_specs)} spesifikasyon")
+    _narrate(run_specs(cleaned_df, deterministic_specs), deterministic_specs)
 
     print("\nTamamlandı. runs/llm_cache/ içindeki yeni dosyaları commit'lemeyi unutmayın.")
     return 0

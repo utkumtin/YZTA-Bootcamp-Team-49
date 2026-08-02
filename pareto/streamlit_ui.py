@@ -463,6 +463,12 @@ def render_compact_sidebar() -> str:
     """Her sayfada: marka (logo, sayfa navigasyonunun üstünde) + gizlilik modu + oturum özeti."""
     st.logo(str(_LOGO_PATH), size="medium")
     st.header("Oturum")
+    # Demo modunda kontrol kilitlenir: private moda geçmek cache dizinini oturuma özel
+    # `llm_cache_private_dir`e çeviriyor (bkz. llm/cache.py `wrap_with_cache`), commit'li
+    # golden-path yanıtları orada olmadığı için demo bir sonraki JUDGE çağrısında
+    # `CannedModeCacheMissError` ile duruyordu. Demo anahtarsız bir tanıtım turu, yani
+    # private modun koruduğu "özel veri" kavramı orada zaten yok.
+    demo_mode = bool(st.session_state.get("demo_mode"))
     mode = st.segmented_control(
         "Gizlilik modu",
         options=["public", "private"],
@@ -470,8 +476,14 @@ def render_compact_sidebar() -> str:
         required=True,
         key="privacy_mode_control",
         format_func=lambda v: _MODE_LABELS.get(v, v),
-        help="public = free model + canned demo. private = yalnız no-train uçlar.",
+        help=(
+            "Demo modunda public'e sabit: hazır cevaplar public cache'ten okunuyor. "
+            "Kendi verinizle çalışmak için demo modundan çıkın."
+            if demo_mode
+            else "public = free model + canned demo. private = yalnız no-train uçlar."
+        ),
         on_change=_sync_privacy_mode,
+        disabled=demo_mode,
     )
     st.html(_MODE_HIGHLIGHT_HTML, unsafe_allow_javascript=True)
 

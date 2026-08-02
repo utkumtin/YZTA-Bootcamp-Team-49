@@ -73,6 +73,27 @@ def test_privacy_mode_survives_page_navigation() -> None:
     assert controls_after[0].value == "private"
 
 
+def test_demo_mode_locks_the_privacy_control() -> None:
+    """Demo modunda gizlilik kontrolü kilitli olmalı.
+
+    Özel moda geçmek cache dizinini oturuma özel `llm_cache_private_dir`e çeviriyor
+    (llm/cache.py `wrap_with_cache`); commit'li golden-path yanıtları orada olmadığı
+    için demo, bir sonraki JUDGE çağrısında `CannedModeCacheMissError` ile duruyordu.
+    Kontrol demoya giriş sayfasında, iki tık uzakta: anahtarsız bir ziyaretçinin
+    tanıtım turunu yanlışlıkla kırabilmesi ürünün vitrinini riske atıyordu.
+    """
+    app = _home()
+    privacy = next(c for c in app.segmented_control if c.label == "Gizlilik modu")
+    assert not privacy.disabled, "demo dışında kontrol açık kalmalı"
+
+    next(b for b in app.button if "Demo moduna gir" in b.label).click().run()
+
+    assert app.session_state["demo_mode"] is True
+    privacy_in_demo = next(c for c in app.segmented_control if c.label == "Gizlilik modu")
+    assert privacy_in_demo.disabled, "demo modunda gizlilik kontrolü kilitli olmalı"
+    assert app.session_state["privacy_mode"] == "public"
+
+
 def test_thinking_choice_survives_page_navigation() -> None:
     """planned-issues.md madde 13b: düşünme derinliği seçimi Ayarlar dışına çıkınca
     sıfırlanmamalı.
