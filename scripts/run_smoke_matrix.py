@@ -140,7 +140,12 @@ def _menu_axes(
     weighting_candidates: list[str],
     rationale: str,
 ) -> dict[str, Any]:
-    """Yedi eksenli JUDGE menü çıktısı; oynayan eksenler kontrol seti + kestirici.
+    """Yedi eksenli JUDGE menü çıktısı; oynayan eksenler kontrol seti + kümeleme.
+
+    Kestirici ekseni artık oynamıyor: bu profillerin hepsi parallel-trends
+    tanımlaması taşıyor ve havuzlanmış OLS panel bir estimand için savunulabilir
+    değil (bkz. menu.defensible_estimators). Yerine kümeleme açıldı — örneklemi
+    değiştirmediği için her veri şeklinde güvenli.
 
     Matrisin işi menü kalitesini ölçmek değil, faktöriyel açılımın her veri şeklinde
     aynı biçimde çalıştığını görmek: bu yüzden eksen deseni datasetler arasında sabit,
@@ -169,8 +174,11 @@ def _menu_axes(
             {
                 "axis_name": "clustering",
                 "baseline_level": clustering,
-                "candidate_levels": [],
-                "rationale": "Kümeleme tedavinin atandığı düzeyde sabitlenir.",
+                "candidate_levels": ["none"],
+                "rationale": (
+                    "Baseline tedavinin atandığı düzeyde kümeler; ikinci seviye "
+                    "kümelemesiz (heteroskedastisiteye dayanıklı) standart hatadır."
+                ),
             },
             {
                 "axis_name": "never_treated",
@@ -180,9 +188,12 @@ def _menu_axes(
             },
             {
                 "axis_name": "estimator",
-                "baseline_level": "OLS",
-                "candidate_levels": ["TWFE"],
-                "rationale": "Havuzlanmış OLS ile iki yönlü sabit etki karşılaştırılır.",
+                "baseline_level": "TWFE",
+                "candidate_levels": [],
+                "rationale": (
+                    "Parallel-trends tanımlamasında estimator ekseni pinlidir; havuzlanmış "
+                    "OLS panel bir estimand için savunulabilir değil."
+                ),
             },
             {
                 "axis_name": "weighting",
@@ -573,7 +584,12 @@ def _step_menu(state: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     with use_test_model(TestModel(custom_output_args=profile.judge_menu)):
         proposal = generate_spec_menu(frozen=frozen_estimand, available_columns=columns)
 
-    frozen_menu = freeze_spec_menu(proposal, available_columns=columns, approved=True)
+    frozen_menu = freeze_spec_menu(
+        proposal,
+        available_columns=columns,
+        identification_assumption=frozen_estimand.estimand.identification_assumption,
+        approved=True,
+    )
     specs = expand_to_specs(
         frozen_menu,
         outcome=frozen_estimand.estimand.outcome,

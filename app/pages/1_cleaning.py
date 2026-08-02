@@ -193,6 +193,11 @@ if st.session_state.get("clean_df") is not None:
             st.subheader(f"Otomatik onaylanan kararlar ({len(auto)})")
             for _, e in auto:
                 st.success(f"**{e.transform_name}** — {e.bulgu}")
+                # Otomatik onaylanan kararı kimse incelemiyor; veriyi sessizce
+                # bozabilecek tek şey params (örn. yanlış `width`) olduğu için
+                # bayraklı kararlardaki gibi params + gerekçe burada da görünür.
+                params_txt = ", ".join(f"{k}={v!r}" for k, v in e.params.items())
+                st.caption(f"Parametreler: {params_txt} · Gerekçe: {e.gerekce}")
         else:
             st.caption("Otomatik onaylanan karar yok; JUDGE her kararı onayınıza bıraktı.")
 

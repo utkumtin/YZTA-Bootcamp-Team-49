@@ -490,6 +490,33 @@ controls = state.get(
 
 
 # -------------------------------------------------
+# KONTROL KOLONLARINDA EKSİK DEĞER
+# -------------------------------------------------
+# Estimator `dropna(subset=_fit_columns(spec))` uyguluyor (pareto/analysis/estimators.py),
+# yani eksik değeri olan bir kontrol kolonu seçmek örneklemi sessizce daraltıyor —
+# üstelik yalnız o kontrolü içeren spec'lerde, yani AYNI eğrinin katları farklı
+# örneklemlerde koşuyor. Demo panelinde ölçüldü: `unemployment_rate` 88 satır
+# düşürüyor ve bunlar tek bir eyaletin tüm ilçeleri, hepsi tedavi grubunda.
+if df is not None and controls:
+    missing_controls = [(c, int(df[c].isna().sum())) for c in controls if c in df.columns]
+    missing_controls = [(c, n) for c, n in missing_controls if n > 0]
+
+    if missing_controls:
+        lines = []
+        for col, n_missing in missing_controls:
+            note = f"`{col}`: {n_missing} satır"
+            if unit_col and unit_col in df.columns:
+                n_units = int(df.loc[df[col].isna(), unit_col].nunique())
+                note += f", {n_units} birim"
+            lines.append(note)
+        st.warning(
+            "Seçili kontrol kolonlarında eksik değer var; bu kontrolü içeren "
+            "spesifikasyonlar daraltılmış örneklemde koşacak:\n\n"
+            + "\n".join(f"- {line}" for line in lines)
+        )
+
+
+# -------------------------------------------------
 # ESTIMATOR OPTIONS
 # -------------------------------------------------
 
@@ -531,6 +558,7 @@ if menu_source == "deterministic":
         controls=controls,
         cluster_by=cluster_by,
         estimators=estimators,
+        identification_assumption=frozen_estimand.estimand.identification_assumption,
         available_columns=columns,
     )
 
@@ -604,6 +632,7 @@ else:
     defensibility_ok, reasons, spec_count = evaluate_menu_defensibility(
         menu_proposal,
         available_columns=columns,
+        identification_assumption=frozen_estimand.estimand.identification_assumption,
         outcome=frozen_estimand.estimand.outcome,
         treatment=frozen_estimand.estimand.treatment,
         unit_col=unit_col or cluster_by,
@@ -733,6 +762,7 @@ else:
             frozen_menu_obj = freeze_spec_menu(
                 menu_proposal,
                 available_columns=columns,
+                identification_assumption=frozen_estimand.estimand.identification_assumption,
                 approved=True,
                 active_axes=tuple(proposed_active_axes),
             )

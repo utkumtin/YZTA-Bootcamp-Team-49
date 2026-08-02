@@ -36,6 +36,57 @@ def _apply_sample(df: pd.DataFrame, spec: Specification) -> pd.DataFrame:
         raise ValueError(f"Geçersiz sample_filter '{spec.sample_filter}': {exc}") from exc
 
 
+def _apply_pre_period(df: pd.DataFrame, spec: Specification) -> pd.DataFrame:
+    """Ön-dönem ekseni: ilk tedavi döneminden `pre_period_window` dönem öncesine kırpar.
+
+    Eksenin amacı parallel-trends varsayımını pencere uzunluğuna karşı sınamak:
+    dar bir pencere, tedaviye uzak yılların trendi sürüklemesini engeller.
+
+    İlk tedavi dönemi veriden türetilir (`treatment == 1` olan en erken dönem),
+    domain varsayımı ya da ek kolon gerektirmez.
+    """
+    if spec.pre_period_window is None:
+        return df
+    if spec.time_fe is None:
+        raise ValueError(
+            f"{spec.spec_id}: pre_period_window bir zaman kolonu gerektirir (time_fe yok)."
+        )
+    treated_times = df.loc[df[spec.treatment] == 1, spec.time_fe]
+    if treated_times.empty:
+        raise ValueError(
+            f"{spec.spec_id}: pre_period_window uygulanamıyor — "
+            f"'{spec.treatment}' hiçbir satırda 1 değil, ilk tedavi dönemi bulunamıyor."
+        )
+    return df[df[spec.time_fe] >= treated_times.min() - spec.pre_period_window]
+
+
+def _apply_never_treated(df: pd.DataFrame, spec: Specification) -> pd.DataFrame:
+    """Never-treated ekseni: `include_never_treated=False` → hiç tedavi görmemiş birimleri düşürür.
+
+    Karşılaştırma grubunu "hiç tedavi görmeyenler"den "henüz tedavi
+    görmeyenler"e çevirir; hangi karşılaştırma grubunun seçildiği kimlik
+    varsayımını değiştirdiği için bu bir dayanıklılık ekseni.
+    """
+    if spec.include_never_treated:
+        return df
+    if spec.unit_fe is None:
+        raise ValueError(
+            f"{spec.spec_id}: never_treated ekseni bir birim kolonu gerektirir (unit_fe yok)."
+        )
+    treated_units = df.loc[df[spec.treatment] == 1, spec.unit_fe].unique()
+    return df[df[spec.unit_fe].isin(treated_units)]
+
+
+def _prepare(df: pd.DataFrame, spec: Specification) -> pd.DataFrame:
+    """Tüm örneklem eksenlerini sırayla uygular.
+
+    Her estimator bunu çağırmalı: bir eksen burada bağlanmazsa spec'ler
+    birbirinin birebir kopyası olur ve dayanıklılık eğrisi sahte katlar
+    gösterir (ölçüldü: pre_period bağlı değilken 24 spec'in 12'si kopyaydı).
+    """
+    return _apply_never_treated(_apply_pre_period(_apply_sample(df, spec), spec), spec)
+
+
 def _fit_columns(spec: Specification) -> list[str]:
     cols = [spec.outcome, spec.treatment, *spec.controls]
     if spec.cluster_by is not None:
@@ -81,7 +132,7 @@ class OLSEstimator:
     def estimate(self, spec: Specification, df: pd.DataFrame) -> EstimationResult:
         import pyfixest as pf
 
-        sub = _apply_sample(df, spec).dropna(subset=_fit_columns(spec))
+        sub = _prepare(df, spec).dropna(subset=_fit_columns(spec))
         fit = pf.feols(f"{spec.outcome} ~ {_rhs(spec)}", data=sub, **_feols_kwargs(spec))
         return _extract(fit, spec, int(len(sub)))
 
@@ -93,7 +144,7 @@ class TWFEEstimator:
         import pyfixest as pf
 
         assert spec.unit_fe and spec.time_fe  # spec validator garanti eder
-        sub = _apply_sample(df, spec).dropna(subset=_fit_columns(spec))
+        sub = _prepare(df, spec).dropna(subset=_fit_columns(spec))
         fml = f"{spec.outcome} ~ {_rhs(spec)} | {spec.unit_fe} + {spec.time_fe}"
         fit = pf.feols(fml, data=sub, **_feols_kwargs(spec))
         return _extract(fit, spec, int(len(sub)))

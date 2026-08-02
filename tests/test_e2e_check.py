@@ -384,7 +384,10 @@ def test_menu_seam_expands_the_frozen_menu_and_runs_both_validators(isolated_art
     state = _analysis_state(isolated_artifacts)
 
     specs = state["specs"]
-    assert len(specs) == 8, "iki kontrol seti x iki kestirici x iki ağırlık bekleniyor"
+    # Kestirici ekseni artık oynamıyor: estimand parallel_trends taşıyor ve
+    # havuzlanmış OLS panel bir tasarımda savunulabilir değil (menu.defensible_estimators).
+    assert len(specs) == 4, "iki kontrol seti x iki ağırlık bekleniyor (kestirici pinli)"
+    assert {s.estimator for s in specs} == {"TWFE"}
     assert len(specs) <= e2e.SETTINGS.max_specifications
     assert state["frozen_menu"].menu_hash
 

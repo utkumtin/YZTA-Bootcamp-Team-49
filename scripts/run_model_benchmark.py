@@ -727,6 +727,7 @@ def score_spec_menu(
     defensible, reasons, n_specs = evaluate_menu_defensibility(
         proposal,
         available_columns=available_columns,
+        identification_assumption=str(estimand.get("identification_assumption", "parallel_trends")),
         outcome=estimand["outcome"],
         # `treatment` = kolon adı. Bu satır önceden `treatment_coding` okuyordu ve
         # yalnız altın kayıt iki alanı ters doldurduğu için çalışıyordu; ikisi

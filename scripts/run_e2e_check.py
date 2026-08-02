@@ -177,9 +177,12 @@ JUDGE_MENU_OUTPUT: dict[str, Any] = {
         },
         {
             "axis_name": "estimator",
-            "baseline_level": "OLS",
-            "candidate_levels": ["TWFE"],
-            "rationale": "Havuzlanmış OLS ile iki yönlü sabit etki karşılaştırması savunulabilir.",
+            "baseline_level": "TWFE",
+            "candidate_levels": [],
+            "rationale": (
+                "Parallel-trends tanımlamasında estimator ekseni pinlidir: havuzlanmış OLS "
+                "etkileşim terimini ana etkiler olmadan tahmin ettiği için DiD vermez."
+            ),
         },
         {
             "axis_name": "weighting",
@@ -391,7 +394,12 @@ def _seam_menu(state: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     with use_test_model(TestModel(custom_output_args=JUDGE_MENU_OUTPUT)):
         proposal = generate_spec_menu(frozen=frozen_estimand, available_columns=columns)
 
-    frozen_menu = freeze_spec_menu(proposal, available_columns=columns, approved=True)
+    frozen_menu = freeze_spec_menu(
+        proposal,
+        available_columns=columns,
+        identification_assumption=frozen_estimand.estimand.identification_assumption,
+        approved=True,
+    )
     specs = expand_to_specs(
         frozen_menu,
         outcome=frozen_estimand.estimand.outcome,

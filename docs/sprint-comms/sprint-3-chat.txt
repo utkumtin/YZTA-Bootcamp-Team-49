@@ -1,0 +1,186 @@
+[7/20/26, 5:30:14 PM] You: Board’u güncelledim arkadaşlar
+[7/20/26, 5:30:58 PM] You: Bu hafta bile bitirebiliriz ve stretch’e bıraktığımız taraflara bakabiliriz ya da genel UI/UX tarafını iyileştirebiliriz
+[7/20/26, 9:51:37 PM] Ozan Celik: Eline sağlık çok emek verdin cidden :)
+[7/23/26, 10:09:42 PM] Ozan Celik: Selamlarr, https://github.com/utkumtin/YZTA-Bootcamp-Team-49/pull/50
+[7/23/26, 10:09:57 PM] Ozan Celik: Pr'a bakar mısınız müsait olunca
+[7/23/26, 11:24:25 PM] Ozan Celik: Ben şimdilik merge ediyorum ilerde sıkınıtı çıkarsa bakarız yine duruma göre
+[7/24/26, 7:36:37 PM] You: Arkadaslar uygulamada iki ufak degisiklik yaptim:
+1. Model routing islerini artik .env kismina tasidim. Model degisikligi yapmak ve yeni model ciktiginda ona kolayca gecebilmek icin (3.6 Flash gibi).
+2. JUDGE rolune Groq ve OpenRouter seceneklerini ekledim. Artik hem public hem de private modda arayuzden saglayici ve model secimi yapilabiliyor.
+[7/24/26, 9:02:05 PM] Betul Bostan: Eline sağlıkk teşekkürler 🙏
+[7/25/26, 4:22:03 PM] Ozan Celik: Selamlar
+[7/25/26, 4:22:21 PM] Ozan Celik: Ben pr review a göre gerekli güncellemeleri yapıp kodu merge ettim
+[7/28/26, 6:29:56 PM] You: Arkadaşlar hepinizin eline sağlık backlog’umuz neredeyse bitti
+[7/28/26, 6:30:41 PM] You: @Utku Uzunhuseyin tek bir issue kaldı sende olan. UI tarafı ile alakalı iyileştirmeler. Perşembeye kadar bitirebilir misin? Müsaitlik durumun nedir?
+[7/28/26, 8:57:29 PM] Betul Bostan: Ellerimize sağlık herkese teşekkürler
+[7/29/26, 12:03:56 AM] Ozan Celik: Arkadaşlar hepimizin eline emeğine sağlık
+[7/29/26, 4:49:52 PM] Ozan Celik: 🎬 Bootcamp Finali – Video Hazırlama Rehberi
+
+Merhaba! @channel 👋
+
+Bootcamp boyunca geliştirdiğiniz ürünü jüriye tanıtabilmeniz için en fazla 3 dakikalık bir tanıtım videosu hazırlamanız gerekiyor.
+Bu video, jürimizin ürününüzü değerlendireceği en önemli çıktılardan biri olacak. Amacınız; ürününüzün hangi problemi çözdüğünü, nasıl çalıştığını, hangi teknolojileri kullandığınızı ve neden değerli olduğunu mümkün olduğunca net bir şekilde göstermek olmalı.
+
+Unutmayın; bu bir pazarlama videosu değil, ürün demo sunumu. Videonuzu hazırlarken jüriye canlı bir ürün sunumu yapıyormuş gibi düşünmenizi öneriyoruz.
+
+---
+
+ 🎯 Videonun Amacı
+
+Videonuzu izleyen jüri aşağıdaki soruların cevaplarını rahatlıkla anlayabilmelidir:
+•⁠  ⁠Hangi problemi çözüyorsunuz?
+•⁠  ⁠Hedef kullanıcı kitleniz kim?
+•⁠  ⁠Ürününüz nasıl çalışıyor?
+•⁠  ⁠Sizi benzer çözümlerden ayıran özellikler neler?
+•⁠  ⁠Ürünü geliştirirken hangi teknolojileri veya platformları kullandınız?
+•⁠  ⁠Bootcamp sürecinde yapay zekâ, no-code veya yazılım geliştirme araçlarından nasıl faydalandınız?
+
+---
+
+📋 Teknik Gereksinimler
+
+Videonuz aşağıdaki kriterlere uygun olmalıdır:
+•⁠  ⁠⏱️ En fazla 3 dakika
+•⁠  ⁠🖥️ Yatay (16:9) format
+•⁠  ⁠🎙️ Ses net ve anlaşılır olmalıdır.
+•⁠  ⁠🔇 Arka planda müzik veya dikkat dağıtıcı ses efektleri kullanılmamalıdır.
+•⁠  ⁠💡 Kameraya konuşuyorsanız  (yüzünüz görünüyorsa) iyi aydınlatılmış bir ortam tercih edin.
+•⁠  ⁠📺 Ekran kaydı kullanıyorsanız görüntülerin okunabilir çözünürlükte olduğundan emin olun.
+•⁠  ⁠✂️ Gereksiz geçiş efektleri ve uzun animasyonlardan kaçının.
+
+---
+
+ 🚀 Videoda Neleri Göstermelisiniz?
+
+1. Problemi Tanımlayın
+Sunuma çözmek istediğiniz problemi anlatarak başlayın.
+Aşağıdaki sorulara kısa ve net cevap vermeniz yeterlidir:
+•⁠  ⁠Hangi problemi çözüyorsunuz?
+•⁠  ⁠Bu problem neden önemli?
+•⁠  ⁠Hedef kullanıcı kitleniz kim?
+
+2. Çözümünüzü Tanıtın
+Ürününüzün problemi nasıl çözdüğünü anlatın.
+Örneğin;
+•⁠  ⁠Ürün ne yapıyor?
+•⁠  ⁠Kullanıcı neden bu ürünü tercih etmeli?
+•⁠  ⁠Sağladığı temel faydalar neler?
+
+3. Kullanıcı Deneyimini Gösterin
+Videonuzun büyük bölümünü ürün demosuna ayırın.
+Bir kullanıcının;
+•⁠  ⁠Sistemi nasıl kullandığını,
+•⁠  ⁠İş akışının nasıl ilerlediğini,
+•⁠  ⁠Ürünün hangi adımlarla çalıştığını,
+•⁠  ⁠Sonuçta hangi çıktıyı elde ettiğini
+ekran üzerinden gösterin.
+Jüri ürününüzü çalışırken görmek isteyecektir.
+
+4. Ürünün Temel Özelliklerini Anlatın
+Öne çıkan fonksiyonları mutlaka gösterin.
+Örneğin;
+•⁠  ⁠Temel özellikler
+•⁠  ⁠Özgün yetenekler
+•⁠  ⁠Otomasyonlar
+•⁠  ⁠Entegrasyonlar
+•⁠  ⁠Raporlama veya analiz ekranları
+•⁠  ⁠Yapay zekâ destekli özellikler (varsa)
+Tüm özellikleri anlatmaya çalışmak yerine ürününüzü farklılaştıran özelliklere odaklanmanız daha etkili olacaktır.
+
+5. Kullandığınız Teknolojileri Açıklayın
+5.1 YZ + VB Takımları
+Eğer ürününüzü kod yazarak geliştirdiyseniz aşağıdaki başlıklara değinebilirsiniz:
+•⁠  ⁠Hangi AI model veya servislerini kullandınız?
+•⁠  ⁠Yapay zekâ ürün içerisinde hangi görevi üstleniyor?
+•⁠  ⁠Agent, workflow veya prompt yapınız nasıl çalışıyor?
+•⁠  ⁠Bilgi tabanı, RAG veya vektör veritabanı kullanıyor musunuz?
+•⁠  ⁠Yapay zekâ kullanıcıya hangi değeri sağlıyor?
+•⁠  ⁠Kullandığınız servisler ve entegrasyonlar
+•⁠  ⁠Teknik mimariniz hakkında kısa bir özet
+Kodunuzu göstermenize gerek yoktur. Amacımız ürününüzün teknik altyapısını anlamaktır.
+
+5.2 No-Code / Low-Code Takımları
+Eğer ürününüzü No-Code veya Low-Code platformları kullanarak geliştirdiyseniz geliştirme sürecinizi anlatın.
+Örneğin;
+•⁠  ⁠Hangi platformları kullandınız?
+•⁠  ⁠Hangi ekran veya süreç hangi platform ile geliştirildi?
+•⁠  ⁠İş akışları (workflow) nasıl çalışıyor?
+•⁠  ⁠Otomasyonlar nasıl kurgulandı?
+•⁠  ⁠Platformlar birbirleriyle nasıl haberleşiyor?
+•⁠  ⁠Veriler sistemler arasında nasıl aktarılıyor?
+•⁠  ⁠Hangi AI model veya servislerini kullandınız?
+•⁠  ⁠Yapay zekâ kullanıcıya hangi değeri sağlıyor?
+Bu bölümde yalnızca kullandığınız araçları değil, geliştirme yaklaşımınızı da göstermeniz beklenmektedir.
+
+---
+
+❌ Bu Bölümlere Fazla Zaman Ayırmayın
+Aşağıdaki içerikler değerlendirme açısından öncelikli değildir:
+•⁠  ⁠Login veya kayıt ekranı
+•⁠  ⁠Splash screen (açılış ekranı)
+•⁠  ⁠Uzun logo animasyonları
+•⁠  ⁠Gereksiz geçiş efektleri ve video efektleri
+•⁠  ⁠Teknik kurulum veya geliştirme ortamının kurulumu
+•⁠  ⁠Kod gösterimi veya satır satır kod anlatımı
+•⁠  ⁠Uzun sunum slaytları
+•⁠  ⁠Gereksiz uzun ekip tanıtımları
+•⁠  ⁠Sorun yaşamayan standart akışların tamamını adım adım göstermek
+•⁠  ⁠Değerlendirmeye katkı sağlamayan ayarlar (Settings), profil sayfaları vb.
+•⁠  ⁠Uzun yükleme (loading) ekranları veya bekleme süreleri
+•⁠  ⁠Tekrarlayan ekranlar ve aynı özelliğin birden fazla kez gösterilmesi
+•⁠  ⁠Teknik jargonun yoğun olduğu, ürünü anlamaya katkı sağlamayan açıklamalar
+
+Mümkün olduğunca ürününüzün çalışmasını ve sunduğu değeri göstermeye odaklanın.
+
+---
+
+ 📤 Video Teslimi
+
+Videonuzu teslim etmeden önce aşağıdaki adımları tamamlayın:
+1.⁠ ⁠Videonuzu YouTube'a "Liste Dışı (Unlisted)" olarak yükleyin.
+2.⁠ ⁠Videonun herkese açık olmadığından, ancak bağlantıya sahip kişilerin izleyebildiğinden emin olun.
+3.⁠ ⁠Oluşan YouTube bağlantısını başvuru veya teslim formunda belirtilen alana ekleyin.
+4.⁠ ⁠Teslim etmeden önce bağlantının farklı bir tarayıcı veya gizli sekmede açıldığını kontrol edin.
+
+---
+
+ ✅ Kontrol Listesi
+Göndermeden önce aşağıdaki maddeleri kontrol edin:
+•⁠  ⁠☐ Video en fazla 3 dakika.
+•⁠  ⁠☐ Yatay (16:9) formatta hazırlandı.
+•⁠  ⁠☐ Ses net ve anlaşılır.
+•⁠  ⁠☐ Ürün canlı olarak gösteriliyor.
+•⁠  ⁠☐ Çözülen problem açıklandı.
+•⁠  ⁠☐ Kullanıcı deneyimi gösterildi.
+•⁠  ⁠☐ Temel özellikler tanıtıldı.
+•⁠  ⁠☐ Kullanılan teknolojiler veya platformlar açıklandı.
+•⁠  ⁠☐ No-Code / Low-Code iş akışı anlatıldı (varsa).
+•⁠  ⁠☐ Yapay zekâ kullanımı açıklandı (varsa).
+•⁠  ⁠☐ Ürünün özgün değeri vurgulandı.
+•⁠  ⁠☐ Video YouTube'a Liste Dışı (Unlisted) olarak yüklendi.
+•⁠  ⁠☐ Paylaşılan bağlantının çalıştığı kontrol edildi.
+
+---
+
+ 🎉 Son Bir Öneri
+
+Videonuzu göndermeden önce kendinize şu soruyu sorun:
+⁠"Bu videoyu ilk kez izleyen biri, ürünümüzün ne yaptığını, nasıl çalıştığını ve neden değerli olduğunu 3 dakika içinde anlayabiliyor mu?"
+Cevabınız evet ise videonuz büyük olasılıkla değerlendirme için hazırdır.
+
+Tüm ekiplere başarılar! 🚀
+[7/29/26, 9:57:00 PM] You: @Utku Uzunhuseyin
+[7/31/26, 7:12:05 PM] You: Arkadaslar rate limitleri temiz Gemini API key'i olaniniz var mi? Modellerin performanslarini gormek icin hazirladigim benchmark'i kosamadim. Birkac saat daha bekleyecegim benim rate limitlerin resetlenmesi icin ancak resetlenmezse diye yedek bir api key lazim.
+[7/31/26, 7:12:43 PM] You: *free tier
+[7/31/26, 7:23:24 PM] Ozan Celik: Atıyorum özelden
+[8/1/26, 6:03:27 PM] You: @Betul Bostan @Ozan Celik Arkadaşlar ürün teslim koşullarından biri olarak aşağıdaki formu tüm ekibin doldurması gerekiyormuş
+
+https://forms.gle/7mc7Zu5jQGovofX96
+[8/1/26, 7:03:01 PM] Betul Bostan: Yaptım teşekkür ederim
+[8/1/26, 7:21:17 PM] You: Arkadaslar projeyi benchmark sonuclari ile stabil duruma getirmeye calisiyorum. Bugun bu is ile ugrasiyorum. Yarin video cekimi yapabilecek musait olaniniz var mi?
+[8/1/26, 7:47:39 PM] Ozan Celik: Tamamdır ben de akşam doldururum
+[8/1/26, 7:48:32 PM] Ozan Celik: Yarın yola çıkıyorum İstanbula maalesef müsait olmayacağım
+[8/1/26, 8:27:54 PM] Betul Bostan: Bende müsait değilim maalesef
+[8/2/26, 4:05:24 PM] Ozan Celik: Arkadaşlar selamm, ürün teslim formunu doldurduk mu ne durumdayız aramızdan bir kişinin doldurması gerekiyormuş bu akşam 23.59 da son doldurma zamanıymış
+[8/2/26, 5:19:01 PM] You: Henuz teslim yapmadik. Uygulamada bugfix, UI/UX iyilestirmeleri yaptim. Uctan uca Sonnet 5 ile kosulmus bir demo modunu ekledim. Yavastan README guncellemesi ve video icin script cikaracagim.
+[8/2/26, 5:19:35 PM] You: Video cekimi ve editlenmesi icin musaitligi olusan varsa script'i one cekebilirim

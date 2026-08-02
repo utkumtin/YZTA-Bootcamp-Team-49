@@ -141,7 +141,7 @@
         "confirmation_question": "Tedavi 'treated_post', sonuç 'fte_employment' olarak doğru mu?"
       },
       "baseline_must_be_in": {
-        "estimator": ["TWFE", "OLS"],
+        "estimator": ["TWFE"],
         "clustering": ["treated_state", "store_id", "chain"]
       },
       "indefensible_levels": {

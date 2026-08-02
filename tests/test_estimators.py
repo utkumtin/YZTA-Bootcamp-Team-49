@@ -134,3 +134,132 @@ def test_bad_spec_fails_soft_not_crash():
     res = estimate_one(spec, df)
     assert res.status == "failed"
     assert res.error
+
+
+# ---------------------------------------------------------------------------
+# Örneklem eksenleri: pre_period ve never_treated
+#
+# NEDEN bu testler var: her iki alan da `Specification`'da tanımlıydı, menüde
+# üretiliyordu ve varyans panelinde eksen olarak etiketleniyordu ama hiçbir
+# estimator okumuyordu. Sonuç: aynı eğrinin katları birbirinin birebir kopyası
+# oluyordu (ölçüldü: demo koşusunda 24 spec'in 12'si kopya). Bu testler eksenin
+# veriyi gerçekten değiştirdiğini bağlar; sessiz no-op'a geri dönüş fark edilir.
+# ---------------------------------------------------------------------------
+
+
+def _twfe_spec(**overrides) -> Specification:
+    base = {
+        "spec_id": "s",
+        "outcome": "y",
+        "treatment": "d",
+        "unit_fe": "unit",
+        "time_fe": "year",
+        "cluster_by": "unit",
+        "estimator": "TWFE",
+    }
+    return Specification(**{**base, **overrides})
+
+
+def test_pre_period_window_trims_sample_and_moves_estimate():
+    """Dar pencere = tedaviye uzak yılları dışarıda bırakmak.
+
+    Panelde tedavi year=3'te başlıyor; pencere 1 ise year>=2 kalmalı, yani 6
+    dönemden 4'ü düşer. Katsayının kendisi de değişmeli — aksi halde eksen
+    kullanıcıya dayanıklılık kontrolü gibi görünüp hiçbir şey sınamıyor olur.
+    """
+    df = _panel()
+
+    full = estimate_one(_twfe_spec(spec_id="full"), df)
+    trimmed = estimate_one(_twfe_spec(spec_id="win1", pre_period_window=1), df)
+
+    assert full.status == "ok" and trimmed.status == "ok"
+    # year >= 3 - 1 = 2 → 6 dönemden 4'ü kalır
+    assert trimmed.n_obs == int((df["year"] >= 2).sum())
+    assert trimmed.n_obs < full.n_obs
+    assert trimmed.coefficient != full.coefficient
+
+
+def test_pre_period_window_none_leaves_sample_untouched():
+    """Varsayılan yol değişmedi: pencere yoksa tek satır bile düşmez."""
+    df = _panel()
+    result = estimate_one(_twfe_spec(pre_period_window=None), df)
+
+    assert result.status == "ok"
+    assert result.n_obs == len(df)
+
+
+def test_pre_period_window_without_time_column_fails_loud():
+    """Zaman kolonu yoksa sessizce no-op'a düşmek yasak.
+
+    Sessiz dönüş tam olarak düzeltilen hatanın kendisiydi: eksen menüde
+    görünürken veriye hiç dokunmuyordu.
+    """
+    df = _panel()
+    spec = Specification(
+        spec_id="ols_win",
+        outcome="y",
+        treatment="d",
+        cluster_by="unit",
+        estimator="OLS",
+        pre_period_window=1,
+    )
+    result = estimate_one(spec, df)
+
+    assert result.status == "failed"
+    assert "pre_period_window" in (result.error or "")
+
+
+def _staggered(seed: int = 0) -> pd.DataFrame:
+    """Kademeli benimseme + hiç tedavi görmeyen birimler.
+
+    never_treated ekseninin ucunda tanımlama hâlâ mümkün olmalı; eşzamanlı
+    benimsemede never-treated'ı atmak tedaviyi yıl FE'siyle eşdoğrusal yapar.
+    """
+    rng = np.random.default_rng(seed)
+    rows = []
+    for unit in range(45):
+        adopt = {0: None, 1: 2, 2: 4}[unit % 3]  # üçte biri hiç tedavi görmez
+        u_fe = rng.normal()
+        for year in range(6):
+            d = 1 if adopt is not None and year >= adopt else 0
+            rows.append(
+                {
+                    "y": 0.8 * d + u_fe + 0.1 * year + rng.normal(0, 0.3),
+                    "d": d,
+                    "unit": unit,
+                    "year": year,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def test_excluding_never_treated_drops_units_that_are_never_treated():
+    """Karşılaştırma grubunu 'hiç tedavi görmeyen'den 'henüz görmeyen'e çevirir.
+
+    Panelde birimlerin üçte biri hiç tedavi görmüyor; eksen kapatıldığında tam
+    olarak onlar düşmeli ve tahmin yine de koşabilmeli.
+    """
+    df = _staggered()
+    treated_units = set(df.loc[df["d"] == 1, "unit"].unique())
+
+    kept = estimate_one(_twfe_spec(spec_id="with", include_never_treated=True), df)
+    dropped = estimate_one(_twfe_spec(spec_id="without", include_never_treated=False), df)
+
+    assert kept.status == "ok" and dropped.status == "ok"
+    assert kept.n_obs == len(df)
+    assert dropped.n_obs == int(df["unit"].isin(treated_units).sum())
+    assert dropped.n_obs < kept.n_obs
+
+
+def test_excluding_never_treated_fails_loud_when_it_removes_the_comparison_group():
+    """Eşzamanlı benimsemede karşılaştırma grubu kalmaz.
+
+    Doğru davranış sessizce tam örneklem sonucunu döndürmek değil, spec'i
+    `status='failed'` ile düşürmek: kullanıcı eksenin bu ucunun tanımlanamaz
+    olduğunu görmeli.
+    """
+    df = _panel()  # birimlerin yarısı tedavi, hepsi aynı yıl
+
+    result = estimate_one(_twfe_spec(spec_id="no_control", include_never_treated=False), df)
+
+    assert result.status == "failed"

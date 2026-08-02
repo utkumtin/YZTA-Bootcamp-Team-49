@@ -457,6 +457,44 @@ def test_verdict_reports_zero_significance_rate_as_zero_not_as_missing(tmp_path:
     assert "<b>%0</b>" in _verdict_html(app)
 
 
+def test_verdict_states_how_many_specs_carry_the_significance_rate(tmp_path: Path) -> None:
+    """Bant eğri düzeyinde bir ifade; SAĞLAM etiketi "etki anlamlı" demek değil.
+
+    Demo koşusunda anlamlılık 17/24 = %70.8 ile eşiğin (%70) 0.008 üstünde kaldı, yani
+    manşetteki bant tek bir spesifikasyona bağlıydı. Ekranda yalnız yüzde varken bunu
+    görmenin yolu yok: %71 hem "17/24" hem "170/240" olabilir ve ikisi aynı güveni
+    taşımaz. Sayım, etiketin neyi saydığını kullanıcıya gösteren tek satır.
+    """
+    results = [
+        EstimationResult(
+            spec_id=f"anlamli_{i}",
+            estimator="TWFE",
+            coefficient=0.4,
+            ci_low=0.2,
+            ci_high=0.6,
+            p_value=0.01,
+            n_obs=10,
+        )
+        for i in range(2)
+    ]
+    results.append(
+        EstimationResult(
+            spec_id="anlamsiz",
+            estimator="TWFE",
+            coefficient=0.2,
+            ci_low=-0.1,
+            ci_high=0.5,
+            p_value=0.4,
+            n_obs=10,
+        )
+    )
+
+    app = AppTest.from_file(PAGE_PATH, default_timeout=10)
+    _load_variance_panel(app, _write_results(tmp_path, results))
+
+    assert "<b>2</b>/3 anlamlı" in _verdict_html(app)
+
+
 def test_spec_curve_legend_names_only_the_colors_actually_plotted(tmp_path: Path) -> None:
     """Lejant grafikteki renkleri açıklar, olası tüm renkleri değil.
 

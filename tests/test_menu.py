@@ -1,3 +1,5 @@
+from unittest import mock
+
 import pytest
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
@@ -7,6 +9,8 @@ from pareto.analysis.hypothesis import FrozenEstimand, TACProposal, freeze_estim
 from pareto.analysis.menu import (
     SpecMenu,
     SpecMenuProposal,
+    build_deterministic_menu,
+    defensible_estimators,
     evaluate_menu_defensibility,
     expand_to_specs,
     freeze_spec_menu,
@@ -233,7 +237,12 @@ def test_testmodel_proposes_expected_axes_and_levels():
     assert weighting.baseline_level == "population"
     assert "none" in weighting.candidate_levels
 
-    frozen_menu = freeze_spec_menu(proposal, available_columns=columns, approved=True)
+    frozen_menu = freeze_spec_menu(
+        proposal,
+        available_columns=columns,
+        identification_assumption="parallel_trends",
+        approved=True,
+    )
     assert frozen_menu.menu.weighting_levels[0] == "population"
     assert frozen_menu.menu.estimators[0] == "TWFE"
 
@@ -255,6 +264,7 @@ def test_clustering_none_level_freezes_instead_of_failing():
     frozen_menu = freeze_spec_menu(
         proposal,
         available_columns=_MENU_COLUMNS,
+        identification_assumption="parallel_trends",
         approved=True,
     )
     assert frozen_menu.menu.clustering_levels == (None,)
@@ -271,6 +281,7 @@ def test_freeze_spec_menu_rejects_explicit_empty_active_axes() -> None:
         freeze_spec_menu(
             proposal,
             available_columns=_MENU_COLUMNS,
+            identification_assumption="parallel_trends",
             approved=True,
             active_axes=(),
         )
@@ -290,6 +301,7 @@ def test_clustering_axis_expands_none_and_column_as_two_specs():
     frozen_menu = freeze_spec_menu(
         SpecMenuProposal(**args),
         available_columns=_MENU_COLUMNS,
+        identification_assumption="parallel_trends",
         approved=True,
         active_axes=("clustering",),
     )
@@ -315,6 +327,7 @@ def test_unknown_clustering_column_still_fails_loud():
         freeze_spec_menu(
             SpecMenuProposal(**args),
             available_columns=_MENU_COLUMNS,
+            identification_assumption="parallel_trends",
             approved=True,
         )
 
@@ -334,6 +347,7 @@ def _gate(args: dict[str, object], **binding_overrides: object):
     return evaluate_menu_defensibility(
         SpecMenuProposal(**args),
         available_columns=_MENU_COLUMNS,
+        identification_assumption="parallel_trends",
         **{**_VALID_BINDINGS, **binding_overrides},  # type: ignore[arg-type]
     )
 
@@ -412,13 +426,19 @@ def test_defensibility_gate_happy_path_matches_real_expansion_count():
     ok, reasons, spec_count = evaluate_menu_defensibility(
         proposal,
         available_columns=_MENU_COLUMNS,
+        identification_assumption="parallel_trends",
         outcome="uninsured_rate",
         treatment="expanded",
         unit_col="state",
         time_col="year",
     )
 
-    frozen = freeze_spec_menu(proposal, available_columns=_MENU_COLUMNS, approved=True)
+    frozen = freeze_spec_menu(
+        proposal,
+        available_columns=_MENU_COLUMNS,
+        identification_assumption="parallel_trends",
+        approved=True,
+    )
     expanded = expand_to_specs(
         frozen,
         outcome="uninsured_rate",
@@ -444,6 +464,7 @@ def test_freeze_spec_menu_rejects_unapproved():
         freeze_spec_menu(
             proposal,
             available_columns=["state", "year", "expanded", "uninsured_rate", "population"],
+            identification_assumption="parallel_trends",
             approved=False,
         )
 
@@ -461,6 +482,7 @@ def test_freeze_spec_menu_rejects_clarification_needed():
         freeze_spec_menu(
             proposal,
             available_columns=["state"],
+            identification_assumption="parallel_trends",
             approved=True,
         )
 
@@ -496,3 +518,84 @@ def test_spec_menu_prompt_states_the_real_hard_cap():
     assert "SPECIFICATION BUDGET" in prompt
     assert str(SETTINGS.max_specifications) in prompt
     assert "CARTESIAN PRODUCT" in prompt
+
+
+# ---------------------------------------------------------------------------
+# OLS kapısı
+#
+# NEDEN: `OLSEstimator` `y ~ treatment` formülünü kurar (ana etki eklemez). Panel
+# bir estimand'da `treatment` etkileşim terimidir (ör. genişleten eyalet x post
+# dönem), dolayısıyla o katsayı DiD değildir. Demo panelinde ölçüldü: OLS -10.97,
+# doğru DiD -2.82. Kapı menüde durur; OLS kesitsel tasarımlarda geçerli kalır.
+# ---------------------------------------------------------------------------
+
+
+def test_did_estimand_removes_ols_from_estimator_axis():
+    assert defensible_estimators("parallel_trends") == ("TWFE",)
+
+
+def test_cross_sectional_estimand_still_offers_ols():
+    """Kapı DiD'e özgü; OLS genel olarak öldürülmedi."""
+    assert "OLS" in defensible_estimators("selection_on_observables")
+
+
+def test_unrecognized_identification_assumption_still_forbids_ols():
+    """Kapı fail-closed.
+
+    `identification_assumption` serbest metin bir `str`; TAC ajanı dolduruyor.
+    "parallel_trends"i yasaklayan bir blocklist, model boşluklu ya da Türkçe bir
+    varyant döndüğünde sessizce açılır ve demo yine hatalı katsayı basardı.
+    """
+    for assumption in ("parallel trends", "paralel trendler", "", "did"):
+        assert defensible_estimators(assumption) == ("TWFE",)
+
+
+def test_menu_proposal_offering_ols_for_did_fails_loud():
+    """Prompt kısıtı söylüyor; model yine de çiğnerse sessizce elenmez.
+
+    Sessiz eleme, kullanıcının onayladığı menü ile koşulan menünün ayrışması
+    demek olurdu.
+    """
+    args = _menu_proposal_args()
+    estimator_axis = next(a for a in args["axes"] if a["axis_name"] == "estimator")  # type: ignore[index,union-attr]
+    estimator_axis["candidate_levels"] = ["OLS"]
+
+    with pytest.raises(ValueError, match="savunulamayan kestirici"):
+        freeze_spec_menu(
+            SpecMenuProposal(**args),
+            available_columns=_MENU_COLUMNS,
+            identification_assumption="parallel_trends",
+            approved=True,
+        )
+
+
+def test_deterministic_menu_drops_ols_for_a_did_estimand():
+    menu = build_deterministic_menu(
+        controls=["unemployment_rate"],
+        cluster_by="state",
+        estimators=["OLS", "TWFE"],
+        identification_assumption="parallel_trends",
+        available_columns=_MENU_COLUMNS,
+    )
+
+    assert menu.estimators == ("TWFE",)
+
+
+def test_spec_menu_prompt_requests_turkish_rationale():
+    """`rationale`/`overall_rationale` doğrudan kullanıcıya basılıyor.
+
+    Bu dosyadaki sabit kullanıcı metinleri Türkçeleştirilmişti ama LLM'in
+    ürettiği alanlar literal olmadıkları için taramadan kaçmıştı; koşuda
+    gerekçeler İngilizce geliyordu. Emsal: pareto/cleaning/agent.py.
+    """
+    captured: dict[str, str] = {}
+
+    def _capture(role, *, system_prompt, output_type):  # noqa: ANN001, ANN202
+        captured["system"] = system_prompt
+        raise RuntimeError("stop")
+
+    with mock.patch("pareto.analysis.menu.build_agent", _capture):
+        with pytest.raises(RuntimeError):
+            generate_spec_menu(frozen=_fake_frozen_estimand(), available_columns=_MENU_COLUMNS)
+
+    assert "Turkish" in captured["system"]

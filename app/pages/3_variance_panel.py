@@ -382,7 +382,12 @@ def _for_dark_ui(figure: go.Figure) -> go.Figure:
         template="plotly_dark",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        title=None,
+        # NEDEN `None` değil boş metin: plotly `title=None`'ı silmiyor, boş bir
+        # bileşik nesneye (`{}`) çeviriyor. Streamlit'in tema katmanı layout'ta
+        # `'title' in layout` görüp `String(title.text)` basıyor ve `text`
+        # tanımsız olduğu için ekrana `undefined` yazıyordu. Boş metin hem anahtarı
+        # doldurur hem görsel olarak başlıksız kalır.
+        title={"text": ""},
         # Plotly varsayılan boşlukları başlıklı bir figüre göre (t=100, l=80): başlık
         # düşünce üstte ölü boşluk, ızgara düzeninde yarım genişlikteki grafikte ise solda
         # çizim alanının ~%15'i kadar boş gutter kalıyordu. Daraltılıyor, `automargin` ise
@@ -508,6 +513,14 @@ def _verdict_html(summary: dict[str, Any]) -> str:
     significance = summary.get("significance_rate")
 
     facts = [f"<b>{summary['n_total']}</b> spesifikasyon", f"<b>{summary['n_ok']}</b> sonuç"]
+    # NEDEN sayı da yazılıyor: bant eğri düzeyinde bir ifade, ama SAĞLAM etiketi tek
+    # başına "etki anlamlı" diye okunuyor. Anlamlılığı kaç spesifikasyonun taşıdığını
+    # yazmak etiketin neyi saydığını ekranda görünür kılıyor.
+    # NEDEN `summarize` yerine burada türetiliyor: oran zaten n_ok'a bölünerek
+    # hesaplandı, geri çarpmak aynı sayıyı verir; özet sözleşmesine alan eklemek
+    # narrative ve makbuz tüketicilerini de etkilerdi.
+    if significance is not None:
+        facts.append(f"<b>{round(significance * summary['n_ok'])}</b>/{summary['n_ok']} anlamlı")
     if summary.get("point_min") is not None:
         facts.append(f"etki aralığı <b>{summary['point_min']:.3g} … {summary['point_max']:.3g}</b>")
 

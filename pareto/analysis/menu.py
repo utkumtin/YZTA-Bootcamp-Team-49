@@ -70,9 +70,11 @@ How to spend the budget:
    not an omission: it says "this baseline is defensible and the alternatives are
    not worth a fold of the curve". Name the alternative you rejected, and why, in
    that axis's rationale.
-2. SPEND the budget on the 2-3 axes where THIS estimand is most fragile. For
-   panel/DiD designs that is usually control_set, estimator and clustering — but
-   let the estimand and the available columns decide, not habit.
+2. SPEND the budget on the 2-3 axes where THIS estimand is most fragile. Let the
+   estimand, its identification assumption and the available columns decide which
+   ones those are — do not go by habit, and do not treat any axis as contestable
+   when the design fixes it. An axis whose alternative level would violate the
+   identification assumption is not a robustness check; pin it and say so.
 3. COMPUTE the product before you answer. If it exceeds {HARD_CAP}, drop candidate
    levels from the least decision-relevant axis and recompute. Repeat until the
    product is at or below {HARD_CAP}.
@@ -101,6 +103,35 @@ ALL_AXES: tuple[AxisName, ...] = (
 
 DEFAULT_WEIGHT_COL = SETTINGS.default_weight_col
 SupportedEstimator = Literal["OLS", "TWFE"]
+
+# OLS'in savunulabilir olduğu tanımlama varsayımları.
+#
+# NEDEN allowlist (fail-closed) ve blocklist DEĞİL: `identification_assumption`
+# serbest metin bir `str` (hypothesis.py), `Literal` değil — TAC ajanı dolduruyor.
+# "parallel_trends"i yasaklayan bir blocklist, model "parallel trends" ya da
+# Türkçe bir varyant döndüğü anda sessizce açılırdı. Tanımadığımız her varsayım
+# panel kabul edilir; yanlış tarafa hata yapmak pahalı.
+_CROSS_SECTIONAL_IDENTIFICATION = frozenset(
+    {"selection_on_observables", "rct", "randomization", "iv", "rdd"}
+)
+
+
+def defensible_estimators(identification_assumption: str) -> tuple[SupportedEstimator, ...]:
+    """Bu estimand için savunulabilir estimator seviyeleri.
+
+    Panel/DiD tasarımında `treatment` bir etkileşim terimidir (ör. `treated_post`
+    = genişleten eyalet x post-dönem). `OLSEstimator` ana etkileri eklemeyen
+    `y ~ treatment` formülünü kurar, dolayısıyla katsayısı DiD değil grup farkı
+    ile zaman trendinin karışımıdır — Medicaid demo panelinde ölçüldü: OLS
+    -10.97, doğru DiD -2.82 (3.9 kat).
+
+    OLS kesitsel tasarımlarda doğru çalışmaya devam eder; kusur estimator'da
+    değil, panel bir estimand'a sunulmasındaydı.
+    """
+    assumption = identification_assumption.strip().lower()
+    if assumption in _CROSS_SECTIONAL_IDENTIFICATION:
+        return SUPPORTED_ESTIMATORS
+    return ("TWFE",)
 
 
 # -----------------------------
@@ -223,14 +254,28 @@ def build_deterministic_menu(
     controls: list[str] | None,
     cluster_by: str | None,
     estimators: list[str],
+    identification_assumption: str,
     available_columns: list[str] | None = None,
     weight_col: str | None = None,
 ) -> SpecMenu:
-    """LLM'siz minimal spec menüsü; ağırlıklandırma default nüfus-ağırlıklı."""
+    """LLM'siz minimal spec menüsü; ağırlıklandırma default nüfus-ağırlıklı.
+
+    `estimators` istenen seviyeleri verir ama son sözü `defensible_estimators`
+    söyler: kapı burada, çağıran katmanda değil — yoksa yeni bir çağıran onu
+    sessizce atlar.
+    """
     control_sets: list[list[str]] = [[], controls] if controls else [[]]
+    allowed = defensible_estimators(identification_assumption)
+    kept = [e for e in estimators if e in allowed]
+    if estimators and not kept:
+        raise ValueError(
+            f"İstenen estimator'ların hiçbiri bu tanımlamada savunulabilir değil: "
+            f"{estimators} istendi, izin verilenler {list(allowed)} "
+            f"(identification_assumption={identification_assumption!r})."
+        )
     estimator_tuple = cast(
         tuple[SupportedEstimator, ...],
-        tuple(estimators) if estimators else ("OLS",),
+        tuple(kept) if kept else (allowed[0],),
     )
 
     return SpecMenu(
@@ -268,12 +313,24 @@ def generate_spec_menu(
         raise ValueError("Spec menü önerisi için en az bir mevcut kolon gereklidir.")
 
     estimand = frozen.estimand
+    allowed_estimators = defensible_estimators(estimand.identification_assumption)
+    # Kısıt prompt'ta AÇIKÇA söylenir (aynı gerekçe _SPEC_BUDGET_RULE'da: model
+    # söylenmemiş bir kısıtı çiğnerse bu modelin kusuru değildir). Deterministik
+    # kapı `spec_menu_proposal_to_menu`'de fail-loud olarak duruyor.
+    estimator_rule = f"Supported estimators for THIS estimand: {', '.join(allowed_estimators)}."
+    if len(allowed_estimators) == 1:
+        estimator_rule += (
+            " OLS is not offered here: in a panel/DiD design the treatment column is an"
+            " interaction term, and an OLS fit without the group and period main effects"
+            " does not identify a DiD. Pin the estimator axis at its baseline and spend"
+            " the budget on axes that are genuinely contestable."
+        )
     prompt = (
         "Frozen estimand:\n"
         f"{prompt_json(estimand.model_dump())}\n\n"
         "Available columns:\n"
         f"<available_columns>{prompt_json(available_columns)}</available_columns>\n\n"
-        "Supported estimators: OLS, TWFE.\n\n"
+        f"{estimator_rule}\n\n"
         "Create a SpecMenuProposal with exactly these 7 axes:\n"
         "control_set, sample, pre_period, clustering, never_treated, estimator, weighting.\n\n"
         "For each axis provide baseline_level, candidate_levels, and rationale.\n"
@@ -287,9 +344,9 @@ def generate_spec_menu(
         "- clustering: column name, or 'none' for no clustering (heteroskedasticity-robust SE); "
         "panel/DiD: cluster at treatment-assignment level; 'none' only if indefensible\n"
         "- never_treated: 'true' or 'false'\n"
-        "- estimator: 'OLS' or 'TWFE'\n"
         f"- weighting: '{DEFAULT_WEIGHT_COL}' (population-weighted default) or "
         "'none' for unweighted\n"
+        f"- estimator: only {' or '.join(repr(e) for e in allowed_estimators)}\n"
         f"\n{_SPEC_BUDGET_RULE}"
     )
 
@@ -299,7 +356,12 @@ def generate_spec_menu(
             "You design specification-curve robustness menus for causal inference. "
             "For each axis, recommend a defensible baseline and candidate levels with rationale — "
             "not a fixed closed list. Never invent columns or unsupported estimators. "
-            "If the estimand is unclear for menu design, set needs_clarification=true."
+            "If the estimand is unclear for menu design, set needs_clarification=true. "
+            # `rationale` ve `overall_rationale` doğrudan kullanıcıya basılıyor
+            # (app/pages/2_analysis.py). Bu dosyadaki diğer kullanıcıya dönük
+            # metinler #50/13'te Türkçeleştirildi ama LLM'in ürettiği alanlar
+            # literal olmadığı için taramadan kaçmıştı. Emsal: cleaning/agent.py.
+            "Write rationale and overall_rationale in Turkish."
         ),
         output_type=SpecMenuProposal,
     )
@@ -428,6 +490,7 @@ def spec_menu_proposal_to_menu(
     proposal: SpecMenuProposal,
     *,
     available_columns: list[str],
+    identification_assumption: str,
 ) -> SpecMenu:
     def axis(name: str) -> list[str]:
         return _axis_levels(proposal, name)
@@ -455,9 +518,21 @@ def spec_menu_proposal_to_menu(
     )
     estimator_levels_raw = _dedupe_preserving_order(axis("estimator"))
 
+    allowed_estimators = defensible_estimators(identification_assumption)
     for estimator in estimator_levels_raw:
         if estimator not in SUPPORTED_ESTIMATORS:
             raise ValueError(f"Desteklenmeyen kestirici: {estimator}")
+        # Sessizce elemek yerine fail-loud: prompt bu kısıtı JUDGE'a söylüyor,
+        # yine de gelmişse kullanıcı menünün istediğinden farklı olduğunu
+        # bilmeli. Desen cleaning/agent.py:_validate_referenced_columns ile aynı.
+        if estimator not in allowed_estimators:
+            raise ValueError(
+                f"Bu tanımlamada savunulamayan kestirici önerildi: {estimator}. "
+                f"İzin verilenler: {list(allowed_estimators)} "
+                f"(identification_assumption={identification_assumption!r}). "
+                "Panel/DiD'de treatment bir etkileşim terimidir; OLS ana etkileri "
+                "eklemediği için katsayısı DiD değildir."
+            )
     estimator_levels = cast(tuple[SupportedEstimator, ...], tuple(estimator_levels_raw))
 
     return SpecMenu(
@@ -481,6 +556,7 @@ def _collect_menu_proposal_reasons(
     proposal: SpecMenuProposal,
     *,
     available_columns: list[str],
+    identification_assumption: str,
     outcome: str | None = None,
     treatment: str | None = None,
     unit_col: str | None = None,
@@ -510,7 +586,11 @@ def _collect_menu_proposal_reasons(
 
     if outcome is not None or treatment is not None or unit_col is not None or time_col is not None:
         try:
-            menu = spec_menu_proposal_to_menu(proposal, available_columns=available_columns)
+            menu = spec_menu_proposal_to_menu(
+                proposal,
+                available_columns=available_columns,
+                identification_assumption=identification_assumption,
+            )
             frozen = FrozenSpecMenu(menu=menu, menu_hash=_menu_hash(menu))
             expand_to_specs(
                 frozen,
@@ -551,6 +631,7 @@ def evaluate_menu_defensibility(
     proposal: SpecMenuProposal,
     *,
     available_columns: list[str],
+    identification_assumption: str,
     outcome: str | None = None,
     treatment: str | None = None,
     unit_col: str | None = None,
@@ -560,6 +641,7 @@ def evaluate_menu_defensibility(
     reasons = _collect_menu_proposal_reasons(
         proposal,
         available_columns=available_columns,
+        identification_assumption=identification_assumption,
     )
     reasons.extend(
         _collect_spec_binding_reasons(
@@ -573,7 +655,11 @@ def evaluate_menu_defensibility(
         return False, reasons, 0
 
     try:
-        menu = spec_menu_proposal_to_menu(proposal, available_columns=available_columns)
+        menu = spec_menu_proposal_to_menu(
+            proposal,
+            available_columns=available_columns,
+            identification_assumption=identification_assumption,
+        )
     except ValueError as exc:
         return False, [str(exc)], 0
 
@@ -599,6 +685,7 @@ def freeze_spec_menu(
     proposal: SpecMenuProposal,
     *,
     available_columns: list[str],
+    identification_assumption: str,
     approved: bool,
     active_axes: tuple[AxisName, ...] | None = None,
 ) -> FrozenSpecMenu:
@@ -620,11 +707,16 @@ def freeze_spec_menu(
     reasons = _collect_menu_proposal_reasons(
         proposal,
         available_columns=available_columns,
+        identification_assumption=identification_assumption,
     )
     if reasons:
         raise ValueError("; ".join(reasons))
 
-    menu = spec_menu_proposal_to_menu(proposal, available_columns=available_columns)
+    menu = spec_menu_proposal_to_menu(
+        proposal,
+        available_columns=available_columns,
+        identification_assumption=identification_assumption,
+    )
     if active_axes == ():
         # Z1: bu istisna 2_analysis.py'de yakalanıp doğrudan st.error(str(exc))
         # ile kullanıcıya basılıyor; sayfanın deterministik yolundaki eşdeğer

@@ -97,6 +97,7 @@ def main() -> int:
     ok, reasons, spec_count = evaluate_menu_defensibility(
         menu_proposal,
         available_columns=columns,
+        identification_assumption=frozen_estimand.estimand.identification_assumption,
         outcome=frozen_estimand.estimand.outcome,
         treatment=frozen_estimand.estimand.treatment,
         unit_col=DEMO_ANALYSIS_STATE["unit_col"],
@@ -108,6 +109,7 @@ def main() -> int:
     frozen_menu = freeze_spec_menu(
         menu_proposal,
         available_columns=columns,
+        identification_assumption=frozen_estimand.estimand.identification_assumption,
         approved=True,
         active_axes=tuple(ALL_AXES),
     ).menu.freeze()
