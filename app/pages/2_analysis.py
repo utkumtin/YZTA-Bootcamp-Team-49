@@ -380,7 +380,9 @@ state = st.session_state.get("analysis_state")
 
 if state is None:
     demo_mode = bool(st.session_state.get("demo_mode"))
-    demo_state = DEMO_ANALYSIS_STATE if demo_mode else {}
+    demo_state: dict[str, str | list[str]] = (
+        cast("dict[str, str | list[str]]", DEMO_ANALYSIS_STATE) if demo_mode else {}
+    )
 
     guessed_unit = (
         demo_state["unit_col"]

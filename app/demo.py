@@ -19,6 +19,7 @@ içeriğine bağlı, bir karakterlik sapma cache-miss demektir).
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TypedDict
 
 from pareto.analysis.hypothesis import SocraticDeclaration
 
@@ -48,10 +49,18 @@ DEMO_DECLARATION = SocraticDeclaration(
     expected_sign="negative",
 )
 
+
 # Analiz sayfasındaki "Analiz Yapılandırması" formunun demo modundaki
 # varsayılanları — panel kimliği `build_panel("data/medicaid")` manifest'iyle
 # eşleşir (bkz. pareto/cleaning/merge.py, PanelManifest.unit_col/time_col).
-DEMO_ANALYSIS_STATE = {
+class _DemoAnalysisState(TypedDict):
+    unit_col: str
+    time_col: str
+    cluster_by: str
+    controls: list[str]
+
+
+DEMO_ANALYSIS_STATE: _DemoAnalysisState = {
     "unit_col": "county_fips",
     "time_col": "year",
     "cluster_by": "state_fips",
