@@ -1,7 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Pareto">
   <!-- NEDEN currentColor değil: bu dosya st.logo/page_icon'a dosya yolu olarak veriliyor,
        yani <img> kaynağı oluyor ve miras alacağı bir CSS ebeveyni yok; currentColor siyaha
-       düşer. Koyu tema pareto_logo.svg ile aynı yöntemle, media query ile çözülüyor.
+       düşer.
+       NEDEN media query burada KALIYOR (pareto_logo.svg'de kaldırıldığı halde): bu dosya
+       page_icon, yani favicon — uygulama alanında değil, tarayıcı sekmesinde çiziliyor.
+       Orada uygulamanın sabitlenmiş koyu teması değil, tarayıcının kendi açık/koyu
+       kromu geçerli.
        app/assets/icons/*.svg satır içine gömüldüğü için orada currentColor doğru. -->
   <style>
     path { stroke: #4f46e5; }

@@ -9,6 +9,7 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 from pareto.analysis.hypothesis import TACProposal, freeze_estimand
+from pareto.analysis.variance import SIG_ROBUST, SIGN_FRAGILE, SIGN_ROBUST
 from pareto.config import SETTINGS as _BASE_SETTINGS
 from pareto.contracts import EstimationResult
 from pareto.memory import store as _store_module
@@ -356,6 +357,198 @@ def test_variance_panel_provenance_follows_inspected_run_not_session(
     assert not any("estimand" in success.value for success in app.success)
 
 
+def _write_results(tmp_path: Path, results: list[EstimationResult]) -> Path:
+    path = tmp_path / "results.json"
+    path.write_text(
+        json.dumps([r.model_dump() for r in results], ensure_ascii=False), encoding="utf-8"
+    )
+    return path
+
+
+def _verdict_html(app: AppTest) -> str:
+    """Karar kartının gövdesi.
+
+    `st.html` gövdesi proto'da ham duruyor (sanitize tarayıcıda oluyor), bu yüzden
+    kartın ne söylediği testten okunabilir.
+    """
+    bodies = [element.proto.body for element in app.get("html")]
+    return next(body for body in bodies if "pa-vp-verdict" in body)
+
+
+def test_verdict_shows_both_band_conditions_against_their_own_thresholds(tmp_path: Path) -> None:
+    """Bant kuralı bir VE bağlacı: işaret-uyumu ≥%95 VE anlamlılık ≥%70.
+
+    Karar tek bir sayıya ya da tek bir çubuğa indirilirse, işaret-uyumu eşiği geçmişken
+    KARIŞIK yazan ekran kullanıcıya hata gibi görünür. Kartın iki koşulu da kendi eşiğiyle
+    birlikte göstermesi, "neden bu bant" sorusunun cevabı.
+    """
+    results = [
+        EstimationResult(
+            spec_id="anlamli_1",
+            estimator="OLS",
+            coefficient=0.4,
+            ci_low=0.2,
+            ci_high=0.6,
+            p_value=0.01,
+            n_obs=10,
+        ),
+        EstimationResult(
+            spec_id="anlamli_2",
+            estimator="OLS",
+            coefficient=0.3,
+            ci_low=0.1,
+            ci_high=0.5,
+            p_value=0.02,
+            n_obs=10,
+        ),
+        EstimationResult(
+            spec_id="anlamsiz",
+            estimator="OLS",
+            coefficient=0.2,
+            ci_low=-0.1,
+            ci_high=0.5,
+            p_value=0.4,
+            n_obs=10,
+        ),
+    ]
+
+    app = AppTest.from_file(PAGE_PATH, default_timeout=10)
+    _load_variance_panel(app, _write_results(tmp_path, results))
+    body = _verdict_html(app)
+
+    # İşaret-uyumu %100 (üçü de pozitif), anlamlılık %67 — yani biri tutuyor, biri tutmuyor.
+    assert "KARIŞIK" in body and "mixed" in body
+    assert "<b>%100</b>" in body
+    assert "<b>%67</b>" in body
+
+    # Çentikler `variance.py`deki eşik sabitlerinden gelmeli; ekrana elle yazılmış bir eşik,
+    # kural yeniden kalibre edildiğinde sessizce yanlış yeri göstermeye başlar.
+    assert f"left:{SIGN_FRAGILE * 100:.4g}%" in body
+    assert f"left:{SIGN_ROBUST * 100:.4g}%" in body
+    assert f"left:{SIG_ROBUST * 100:.4g}%" in body
+
+    # Tutmayan koşul sönük dolguyla ayrılıyor: iki çubuğu aynı renkte göstermek
+    # "ikisi de tamam" der ve kuralı yanlış anlatır.
+    assert "rgba(250, 250, 250, 0.35)" in body
+
+
+def test_verdict_reports_zero_significance_rate_as_zero_not_as_missing(tmp_path: Path) -> None:
+    """%0 anlamlılık panelin verebileceği en alarm verici sonuç, "veri yok" değil.
+
+    Eski gösterim doğruluk sınıyordu (`if rate`), bu yüzden gerçek bir %0 ekranda "—"
+    olarak, yani ölçülememiş gibi görünüyordu.
+    """
+    results = [
+        EstimationResult(
+            spec_id=f"s{i}",
+            estimator="OLS",
+            coefficient=0.2,
+            ci_low=-0.1,
+            ci_high=0.5,
+            p_value=0.4,
+            n_obs=10,
+        )
+        for i in range(2)
+    ]
+
+    app = AppTest.from_file(PAGE_PATH, default_timeout=10)
+    _load_variance_panel(app, _write_results(tmp_path, results))
+
+    assert "<b>%0</b>" in _verdict_html(app)
+
+
+def test_spec_curve_legend_names_only_the_colors_actually_plotted(tmp_path: Path) -> None:
+    """Lejant grafikteki renkleri açıklar, olası tüm renkleri değil.
+
+    Plotly nokta başına renk verilen tek izde lejant çizemiyor, bu yüzden lejant elle
+    kuruluyor. Sabit dört girdi yazılırsa tek yönlü bir eğride "ters yön de var"
+    izlenimi doğar; kullanıcı olmayan bir kova arar.
+    """
+    results = [
+        EstimationResult(
+            spec_id=f"s{i}",
+            estimator="OLS",
+            coefficient=0.4,
+            ci_low=0.2,
+            ci_high=0.6,
+            p_value=0.01,
+            n_obs=10,
+        )
+        for i in range(2)
+    ]
+
+    app = AppTest.from_file(PAGE_PATH, default_timeout=10)
+    _load_variance_panel(app, _write_results(tmp_path, results))
+    legend = next(
+        element.proto.body for element in app.get("html") if "pa-vp-legend" in element.proto.body
+    )
+
+    assert "anlamlı, pozitif" in legend
+    assert "anlamlı, negatif" not in legend
+
+
+def test_evidence_grid_layout_renders_every_panel_exactly_once(tmp_path: Path) -> None:
+    """Izgara düzeni sekmelerin yerine geçer, üstüne gelmez.
+
+    Bloklar iki düzende de bir kez çiziliyor; ikinci kez çizilseler Streamlit yinelenen
+    widget key hatası verir ve sayfa komple düşer. Testin koruduğu şey bu: düzen anahtarı
+    kabı değiştirir, içeriği çoğaltmaz.
+    """
+    app = AppTest.from_file(PAGE_PATH, default_timeout=10)
+    app.session_state["clean_df"] = _panel_missing_cohort_columns()
+    app.session_state["frozen_estimand"] = _frozen_estimand()
+    _load_variance_panel(app, _results_file(tmp_path))
+
+    assert [tab.label for tab in app.tabs] == ["Eksen atfı", "Ön-trend", "Efektif N", "Makbuzlar"]
+
+    # Sidebar'da gizlilik modu da bir segmented_control: sırayla değil etiketle seçiliyor.
+    layout_switch = next(
+        control for control in app.segmented_control if control.label == "Kanıt düzeni"
+    )
+    layout_switch.set_value("Izgara")
+    app.run()
+
+    assert not app.exception
+    assert not app.tabs
+    bodies = [element.proto.body for element in app.get("html")]
+    for label in ("Eksen atfı", "Ön-trend", "Efektif N", "Makbuzlar"):
+        assert sum(label in body for body in bodies) == 1, label
+    # Efektif N + makbuzlar tabloları; specs.json olmadığı için eksen atfı tablo çizmiyor.
+    assert len(app.dataframe) == 2
+
+
+def test_receipts_table_hides_nested_fields_and_says_that_it_did(tmp_path: Path) -> None:
+    """Makbuz tablosu okunabilir kalmalı, ama sakladığını saklamamalı.
+
+    `event_study` ve `group_time_atts` hücreye sığmayan iç içe yapılar; tabloda kaldıklarında
+    katsayı/CI/hata sütunlarını eziyorlar. Gizlenmeleri bir bilgi kaybı olduğu için sessiz
+    olamaz: makbuzun iddiası eksiksizlik.
+    """
+    results = [
+        EstimationResult(
+            spec_id="s1",
+            estimator="OLS",
+            coefficient=0.4,
+            ci_low=0.2,
+            ci_high=0.6,
+            p_value=0.01,
+            n_obs=10,
+            event_study={"t_minus_1": 0.0, "t_0": 0.4},
+        )
+    ]
+
+    app = AppTest.from_file(PAGE_PATH, default_timeout=10)
+    _load_variance_panel(app, _write_results(tmp_path, results))
+
+    receipts = app.dataframe[-1]
+    shown = list(receipts.proto.column_order)
+    assert "event_study" not in shown and "group_time_atts" not in shown
+    # Makbuzun asıl taşıdığı alanlar tabloda kalmalı; filtre genişlerse tablo boşalır.
+    for column in ("spec_id", "estimator", "coefficient", "ci_low", "ci_high", "status", "error"):
+        assert column in shown, column
+    assert any("event_study" in caption.value for caption in app.caption)
+
+
 def test_spec_curve_colors_points_by_significance_and_direction(tmp_path: Path) -> None:
     """Spec-curve'ün tek okunur sinyali renk: gri anlamsız, yeşil/kırmızı anlamlı yön.
 
@@ -407,6 +600,16 @@ def test_spec_curve_colors_points_by_significance_and_direction(tmp_path: Path) 
     # Eğri katsayıya göre sıralı çizilir; renk ile spec_id aynı noktayı göstermeli.
     colors_by_spec = dict(zip(trace["text"], trace["marker"]["color"], strict=True))
 
-    assert colors_by_spec["anlamli_negatif"] == "indianred"
-    assert colors_by_spec["anlamli_pozitif"] == "seagreen"
-    assert colors_by_spec["anlamsiz"] == "gray"
+    # Ekrana çizilen kopya koyu tema paletinde (`_for_dark_ui`): uygulama teması koyuya
+    # sabit, beyaz zemine göre seçilmiş `seagreen`/`indianred` orada okunmuyordu.
+    assert colors_by_spec["anlamli_negatif"] == "#f87171"
+    assert colors_by_spec["anlamli_pozitif"] == "#4ade80"
+    assert colors_by_spec["anlamsiz"] == "#9ca3af"
+    # Üç kova birbirinden ayrı kalmalı; eşleme tablosu çökerse renk sinyali de çöker.
+    assert len(set(colors_by_spec.values())) == 3
+
+    # Hata çubukları güven aralığını taşıyor. Renk verilmezse Plotly marker rengini miras
+    # almaya çalışır; marker rengi nokta başına bir dizi olduğu için bu başarısız olup
+    # varsayılan koyu griye (#444) düşüyor ve koyu zeminde çubuklar gözden kayboluyor —
+    # nokta hâlâ görünür ama belirsizliği okunamaz hale gelir.
+    assert trace["error_y"]["color"] == "rgba(250, 250, 250, 0.55)"

@@ -19,6 +19,7 @@ from .config import (
     resolve_setting,
 )
 from .llm.providers import (
+    JUDGE_DEMO_SONNET_5_SLOT,
     JUDGE_PRIVATE_SLOT,
     JUDGE_SLOT,
     ModelOption,
@@ -112,7 +113,7 @@ _MODE_HIGHLIGHT_HTML = r"""
    koyuyor — koyu temada okunaksız beyaza dönüşüyor (Streamlit tema renklerini CSS custom
    property olarak dışa açmıyor, Emotion render-time'da hesaplıyor). Transparent = sidebar'ın
    kendi arka planı her zaman aynen görünür, hangi tema olursa olsun. */
-.st-key-privacy_mode button[kind="segmented_controlActive"] {
+.st-key-privacy_mode_control button[kind="segmented_controlActive"] {
     border-color: rgba(49, 51, 63, 0.2) !important;
     background-color: transparent !important;
     transition: border-color 300ms ease, background-color 300ms ease;
@@ -120,17 +121,17 @@ _MODE_HIGHLIGHT_HTML = r"""
 /* Native köşe yuvarlama yalnız "seçili" butonda uygulanıyor — seçili olmayan uç buton
    (grubun sol/sağ kenarındaki) her zaman border-radius:0 alıyor, pill şeklini bozuyor.
    Pozisyon sabit (public=ilk, private=son) olduğu için kenar yuvarlamayı burada zorluyoruz. */
-.st-key-privacy_mode [data-baseweb="button-group"] button:first-of-type {
+.st-key-privacy_mode_control [data-baseweb="button-group"] button:first-of-type {
     border-radius: 8px 0 0 8px !important;
 }
-.st-key-privacy_mode [data-baseweb="button-group"] button:last-of-type {
+.st-key-privacy_mode_control [data-baseweb="button-group"] button:last-of-type {
     border-radius: 0 8px 8px 0 !important;
 }
 </style>
 <script>
 (function() {
     function findGroup() {
-        return document.querySelector('.st-key-privacy_mode [data-baseweb="button-group"]');
+        return document.querySelector('.st-key-privacy_mode_control [data-baseweb="button-group"]');
     }
 
     function parseRgb(str) {
@@ -258,9 +259,8 @@ _MODE_HIGHLIGHT_HTML = r"""
 # animasyonunun kendisi zaten Streamlit'in `tab-highlight` mekanizmasında var, yalnız
 # yeniden renklendiriyoruz.
 # `key="main_tab"` sayesinde `.st-key-main_tab` ile scope ediliyor, başka st.tabs'e sızmıyor.
-# Metin rengi açık/koyu temaya göre değişiyor (logo SVG'deki `prefers-color-scheme` deseniyle
-# aynı) — tema TABANI config.toml'da sabitlenmiyor, istemcinin OS/tarayıcı tercihi takip
-# ediliyor; sabit "neredeyse beyaz" bir renk açık temada görünmez olurdu.
+# Metin renkleri koyu tema için sabit: tema tabanı config.toml'da `base = "dark"` ile
+# sabitlendiği için açık tema dallanmasına gerek yok.
 #
 # Sayfanın varsayılan üst boşluğu (`.block-container`'da 96px) eskiden H1'in altına yer
 # açıyordu; title kaldırılınca ölü boşluk olarak kaldı. `stHeader` üstte `position:absolute`,
@@ -281,14 +281,14 @@ _MAIN_NAV_HTML = """
     padding: 8px 2px;
     font-size: 1.05rem;
     font-weight: 500;
-    color: rgba(49, 51, 63, 0.55);
+    color: rgba(250, 250, 250, 0.55);
     transition: color 200ms ease;
 }
 .st-key-main_tab button[data-baseweb="tab"]:hover {
-    color: rgba(49, 51, 63, 0.85);
+    color: rgba(250, 250, 250, 0.85);
 }
 .st-key-main_tab button[aria-selected="true"] {
-    color: #31333f;
+    color: #fafafa;
     font-weight: 600;
 }
 .st-key-main_tab [data-baseweb="tab-highlight"] {
@@ -298,21 +298,7 @@ _MAIN_NAV_HTML = """
     box-shadow: 0 0 10px rgba(129, 140, 248, 0.45);
 }
 .st-key-main_tab [data-baseweb="tab-border"] {
-    background-color: rgba(49, 51, 63, 0.1);
-}
-@media (prefers-color-scheme: dark) {
-    .st-key-main_tab button[data-baseweb="tab"] {
-        color: rgba(250, 250, 250, 0.55);
-    }
-    .st-key-main_tab button[data-baseweb="tab"]:hover {
-        color: rgba(250, 250, 250, 0.85);
-    }
-    .st-key-main_tab button[aria-selected="true"] {
-        color: #fafafa;
-    }
-    .st-key-main_tab [data-baseweb="tab-border"] {
-        background-color: rgba(250, 250, 250, 0.06);
-    }
+    background-color: rgba(250, 250, 250, 0.06);
 }
 </style>
 """
@@ -336,7 +322,7 @@ _PAGE_TITLE_KEY_PREFIX = "pa_page_title"
 # yani H1'in cap-height'ı. 1.5px kontur, 700 ağırlıklı metnin yanında aynı optik ağırlıkta.
 #
 # NEDEN elle renk: SVG `currentColor` kullanıyor, ama miras aldığı renk gövde metni rengi;
-# başlıkla eşleşmesi için burada sabitleniyor, koyu tema kuralı da bu yüzden gerekiyor.
+# başlıkla eşleşmesi için burada koyu temanın başlık rengine sabitleniyor.
 #
 # NEDEN `class*=` seçici: container key'i ikon adıyla tekilleştiriliyor (aynı sayfada iki
 # başlık olursa Streamlit yinelenen key hatası veriyor), bu yüzden tam eşleşme kullanılamaz.
@@ -350,12 +336,7 @@ _PAGE_TITLE_HTML = """
     display: block;
     width: 38px;
     height: 38px;
-    color: #31333f;
-}
-@media (prefers-color-scheme: dark) {
-    [class*="st-key-pa_page_title"] svg {
-        color: #fafafa;
-    }
+    color: #fafafa;
 }
 </style>
 """
@@ -443,11 +424,18 @@ def _sync_private_cache(privacy: PrivacyMode) -> None:
 
     SINIR: Streamlit'in public bir "oturum bitti" kancası yok, bu yüzden "sekme
     kapandığı anda silinir" garantisi verilemez. Üçüncü ayak süreç kapanışındaki
-    `atexit` (bkz. `pareto/llm/cache.py`). Süpürme ucuz: dizin yoksa hemen döner.
+    `atexit` (bkz. `pareto/llm/cache.py`).
+
+    Süpürme disk taraması (`root.iterdir()` + her dizin için `stat()`) yapıyor; bu
+    oturumun kendi durumuyla ilgisiz, yalnız BAŞKA (bayat) oturumları hedefliyor —
+    her sayfa geçişinde tekrar etmesinin bir faydası yok, yalnız navigasyon
+    gecikmesine ekleniyor. Oturum başına bir kez yeter.
     """
     from .llm.cache import current_session_id, purge_private_cache, sweep_stale_private_cache
 
-    sweep_stale_private_cache()
+    if not st.session_state.get("_private_cache_swept"):
+        sweep_stale_private_cache()
+        st.session_state["_private_cache_swept"] = True
     if privacy is PrivacyMode.PUBLIC and st.session_state.get("_private_cache_used"):
         purge_private_cache(current_session_id())
         st.session_state["_private_cache_used"] = False
@@ -457,6 +445,20 @@ def _sync_private_cache(privacy: PrivacyMode) -> None:
         st.session_state["_private_cache_used"] = True
 
 
+def _sync_privacy_mode() -> None:
+    """`privacy_mode_control` widget değerini kalıcı `privacy_mode`a kopyalar.
+
+    `st.navigation`/`st.Page` (bkz. `app/main.py`) her sayfaya ayrı bir
+    `active_script_hash` atıyor ve Streamlit bunu, açıkça verilen `key=` aynı string
+    olsa bile widget'ın iç element ID'sine karıştırıyor — yani `render_compact_sidebar`
+    her sayfada çalışsa bile widget'ın KENDİ key'i sayfa değişince "stale" sayılıp
+    siliniyor, sonra `default="public"`e sıfırlanıyor. `judge_provider_choice` ile aynı
+    çözüm (bkz. `_sync_judge_provider_choice`): widget'ın key'i tek kullanımlık, kalıcı
+    değer hiçbir widget'a bağlı olmayan düz `privacy_mode` girdisinde durur.
+    """
+    st.session_state["privacy_mode"] = st.session_state["privacy_mode_control"]
+
+
 def render_compact_sidebar() -> str:
     """Her sayfada: marka (logo, sayfa navigasyonunun üstünde) + gizlilik modu + oturum özeti."""
     st.logo(str(_LOGO_PATH), size="medium")
@@ -464,11 +466,12 @@ def render_compact_sidebar() -> str:
     mode = st.segmented_control(
         "Gizlilik modu",
         options=["public", "private"],
-        default="public",
+        default=str(st.session_state.get("privacy_mode", PrivacyMode.PUBLIC.value)),
         required=True,
-        key="privacy_mode",
+        key="privacy_mode_control",
         format_func=lambda v: _MODE_LABELS.get(v, v),
         help="public = free model + canned demo. private = yalnız no-train uçlar.",
+        on_change=_sync_privacy_mode,
     )
     st.html(_MODE_HIGHLIGHT_HTML, unsafe_allow_javascript=True)
 
@@ -516,11 +519,22 @@ def render_settings_panel() -> None:
     _render_route_strip(privacy, provider, slots_by_provider[provider])
     _render_privacy_note(privacy)
 
+    # Demo (Sonnet 5) BYOK ile ayarlanabilir bir sağlayıcı değil — yerel `claude` CLI
+    # oturumuna bağlı, yalnız Genel Bakış sekmesindeki "Demo moduna gir" butonuyla
+    # etkinleştiriliyor (bkz. app/home.py:108-117). Rail'de seçilebilir görünmesin diye
+    # yalnız bu görüntüleme listesinden çıkarılıyor; `slots_by_provider` (clamp, route
+    # şeridi, anahtar/model bölümü) değişmeden kalıyor, yani demo seçiliyken rota
+    # çözümlemesi bozulmuyor.
+    visible_slots_by_provider = {
+        name: slot
+        for name, slot in slots_by_provider.items()
+        if name != JUDGE_DEMO_SONNET_5_SLOT.provider
+    }
     col_rail, col_detail = st.columns([1, 1.9], gap="medium")
     with col_rail:
         _rail_label("Sağlayıcı", kind="pa-eyebrow")
         with st.container(border=True):
-            provider = _render_provider_rail(slots_by_provider, default_provider)
+            provider = _render_provider_rail(visible_slots_by_provider, default_provider)
 
     slot = slots_by_provider[provider]
     _restore_hidden_byok_toggles(slot.api_key_env)
@@ -844,6 +858,27 @@ def _resolved_thinking(slot: ModelSlot) -> str:
     return stored if stored in slot.thinking_options else slot.default_thinking
 
 
+def _sync_model_choice(slot_key: str) -> None:
+    """`model_choice_radio_{slot_key}` widget değerini kalıcı `model_choice_{slot_key}`ya kopyalar.
+
+    `_render_model_choice` yalnız Ayarlar panelinde (ana sayfa) render oluyor;
+    Temizleme/Analiz/Varyans sayfalarında hiç çizilmiyor. `judge_provider_choice` ile
+    aynı sebep-sonuç (bkz. `_sync_judge_provider_choice`): widget'ın key'i o sayfalarda
+    "stale" sayılıp silinir, bu yüzden widget'ın key'i tek kullanımlık, kalıcı değer
+    hiçbir widget'a bağlı olmayan düz `model_choice_{slot_key}` girdisinde durur.
+    """
+    st.session_state[f"model_choice_{slot_key}"] = st.session_state[
+        f"model_choice_radio_{slot_key}"
+    ]
+
+
+def _sync_thinking_choice(slot_key: str) -> None:
+    """`_sync_model_choice` ile aynı desen, `thinking_choice_{slot_key}` için."""
+    st.session_state[f"thinking_choice_{slot_key}"] = st.session_state[
+        f"thinking_choice_radio_{slot_key}"
+    ]
+
+
 def _render_model_choice(slot: ModelSlot, privacy: PrivacyMode, provider: str) -> None:
     """Seçili slotun küratörlü model + düşünme derinliği seçimi.
 
@@ -867,13 +902,17 @@ def _render_model_choice(slot: ModelSlot, privacy: PrivacyMode, provider: str) -
         opt = next(o for o in options if o.model_id == model_id)
         return f"{model_id} · {opt.performance_note}" if opt.performance_note else model_id
 
+    persisted_model = str(st.session_state.get(f"model_choice_{slot.key}", "")).strip()
+    initial_model = persisted_model if persisted_model in ids else pinned
     st.selectbox(
         "Model",
         options=ids,
-        index=ids.index(pinned),
-        key=f"model_choice_{slot.key}",
+        index=ids.index(initial_model),
+        key=f"model_choice_radio_{slot.key}",
         format_func=_label,
         filter_mode=None,
+        on_change=_sync_model_choice,
+        args=(slot.key,),
         help=f"Kalıcı pin `{slot.model_env}` (.env). Buradaki seçim yalnız oturumda geçerli.",
     )
 
@@ -881,13 +920,19 @@ def _render_model_choice(slot: ModelSlot, privacy: PrivacyMode, provider: str) -
         thinking_ids = list(slot.thinking_options)
         if str(st.session_state.get(f"thinking_choice_{slot.key}", "")) not in thinking_ids:
             st.session_state.pop(f"thinking_choice_{slot.key}", None)
+        persisted_thinking = str(st.session_state.get(f"thinking_choice_{slot.key}", "")).strip()
+        initial_thinking = (
+            persisted_thinking if persisted_thinking in thinking_ids else slot.default_thinking
+        )
         st.segmented_control(
             "Düşünme derinliği",
             options=thinking_ids,
-            default=slot.default_thinking,
+            default=initial_thinking,
             required=True,
-            key=f"thinking_choice_{slot.key}",
+            key=f"thinking_choice_radio_{slot.key}",
             format_func=lambda v: _THINKING_LABELS.get(v, v),
+            on_change=_sync_thinking_choice,
+            args=(slot.key,),
             help="Yanıt vermeden önce ne kadar düşünsün. Arttıkça gecikme ve maliyet artar.",
         )
 
@@ -937,16 +982,16 @@ _SETTINGS_STYLE_HTML = """
     gap: 10px;
     margin: 0 0 22px;
     padding: 12px 16px;
-    border: 1px solid rgba(129, 140, 248, 0.28);
+    border: 1px solid rgba(129, 140, 248, 0.32);
     border-radius: 10px;
-    background: rgba(129, 140, 248, 0.06);
+    background: rgba(129, 140, 248, 0.09);
     font-size: 0.84rem;
     line-height: 1.25;
 }
-.pa-route-val { color: #31333f; font-weight: 500; }
-.pa-route-arrow { color: rgba(49, 51, 63, 0.3); }
-.pa-mode-public { color: #15803d; font-weight: 600; }
-.pa-mode-private { color: #b45309; font-weight: 600; }
+.pa-route-val { color: #fafafa; font-weight: 500; }
+.pa-route-arrow { color: rgba(250, 250, 250, 0.32); }
+.pa-mode-public { color: #4ade80; font-weight: 600; }
+.pa-mode-private { color: #fbbf24; font-weight: 600; }
 /* Model ID'si bir makine adı, prose değil — tanımlayıcılar mono okunsun. */
 .pa-mono {
     font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
@@ -957,7 +1002,7 @@ _SETTINGS_STYLE_HTML = """
     font-weight: 700;
     letter-spacing: 0.11em;
     text-transform: uppercase;
-    color: rgba(49, 51, 63, 0.45);
+    color: rgba(250, 250, 250, 0.45);
 }
 .pa-route-eyebrow { margin-right: 4px; }
 /* Kategori etiketi (sol) ile seçili üyenin adı (sağ) aynı satırda ama farklı şeyler:
@@ -971,7 +1016,7 @@ _SETTINGS_STYLE_HTML = """
 .pa-detail-name {
     font-size: 0.82rem;
     font-weight: 600;
-    color: #31333f;
+    color: #fafafa;
 }
 
 /* --- Sağlayıcı rayı: radio -> tıklanabilir satır listesi --- */
@@ -1037,7 +1082,7 @@ div[class*="st-key-thinking_choice_"] button[kind="segmented_controlActive"] {
 }
 div[class*="st-key-thinking_choice_"] button[kind="segmented_controlActive"],
 div[class*="st-key-thinking_choice_"] button[kind="segmented_controlActive"] span {
-    color: #4f46e5 !important;
+    color: #c7d2fe !important;
 }
 div[class*="st-key-thinking_choice_"] button { cursor: pointer; }
 
@@ -1046,37 +1091,13 @@ div[class*="st-key-thinking_choice_"] button { cursor: pointer; }
    sürdürüyoruz. Scope BYOK formunun submit butonu — uygulamanın geri kalanındaki primary
    butonlara dokunulmuyor. --- */
 div[class*="st-key-FormSubmitter-byok_form_"] button[kind="primaryFormSubmit"] {
-    background-color: #4f46e5;
-    border-color: #4f46e5;
+    background-color: #6366f1;
+    border-color: #6366f1;
     color: #ffffff;
 }
 div[class*="st-key-FormSubmitter-byok_form_"] button[kind="primaryFormSubmit"]:hover {
-    background-color: #4338ca;
-    border-color: #4338ca;
-}
-
-@media (prefers-color-scheme: dark) {
-    .pa-route {
-        border-color: rgba(129, 140, 248, 0.32);
-        background: rgba(129, 140, 248, 0.09);
-    }
-    .pa-route-val, .pa-detail-name { color: #fafafa; }
-    .pa-route-arrow { color: rgba(250, 250, 250, 0.32); }
-    .pa-route-eyebrow, .pa-eyebrow { color: rgba(250, 250, 250, 0.45); }
-    .pa-mode-public { color: #4ade80; }
-    .pa-mode-private { color: #fbbf24; }
-    div[class*="st-key-thinking_choice_"] button[kind="segmented_controlActive"],
-    div[class*="st-key-thinking_choice_"] button[kind="segmented_controlActive"] span {
-        color: #c7d2fe !important;
-    }
-    div[class*="st-key-FormSubmitter-byok_form_"] button[kind="primaryFormSubmit"] {
-        background-color: #6366f1;
-        border-color: #6366f1;
-    }
-    div[class*="st-key-FormSubmitter-byok_form_"] button[kind="primaryFormSubmit"]:hover {
-        background-color: #818cf8;
-        border-color: #818cf8;
-    }
+    background-color: #818cf8;
+    border-color: #818cf8;
 }
 </style>
 """
